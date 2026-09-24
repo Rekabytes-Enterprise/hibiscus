@@ -1,3 +1,4 @@
+mod clipboard;
 pub(crate) mod markdown;
 pub(crate) mod picker;
 pub(crate) mod screen;

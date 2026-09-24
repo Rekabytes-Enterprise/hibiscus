@@ -27,12 +27,16 @@ pub(crate) enum Navigation {
     Down,
     Home,
     End,
+    Newline,
+    PasteImage,
+    MouseScroll(i32, usize),
     Other,
 }
 
 pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
     match events.recv_timeout(std::time::Duration::from_millis(25)) {
         Ok(b'[') => {}
+        Ok(b'v') => return Navigation::PasteImage, // legacy Alt+V (Pi's WSL default)
         Ok(next) => return Navigation::EscapeWith(next),
         Err(_) => return Navigation::Escape,
     }
@@ -44,14 +48,24 @@ pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
         }
     }
     match sequence.as_str() {
+        "118;3u" | "118;5u" | "27;3;118~" | "27;5;118~" | "118;3:1u" | "118;5:1u" | "118;3:2u"
+        | "118;5:2u" => Navigation::PasteImage,
+        "13;2u" | "27;2;13~" | "13;2~" | "13;5u" | "27;5;13~" | "13;5~" => Navigation::Newline,
         "5~" => Navigation::ScrollPage(1),
         "6~" => Navigation::ScrollPage(-1),
         "A" => Navigation::Up,
         "B" => Navigation::Down,
         "H" | "1~" => Navigation::Home,
         "F" | "4~" => Navigation::End,
-        seq if seq.starts_with("<64;") && seq.ends_with('M') => Navigation::ScrollLines(3),
-        seq if seq.starts_with("<65;") && seq.ends_with('M') => Navigation::ScrollLines(-3),
+        seq if (seq.starts_with("<64;") || seq.starts_with("<65;")) && seq.ends_with('M') => {
+            let row = seq
+                .trim_end_matches('M')
+                .rsplit(';')
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            Navigation::MouseScroll(if seq.starts_with("<64;") { 3 } else { -3 }, row)
+        }
         _ => Navigation::Other,
     }
 }
@@ -94,6 +108,10 @@ pub(crate) struct Screen {
     color: bool,
     transcript: Vec<u8>,
     draft: String,
+    draft_scroll: usize,
+    images: Vec<Value>,
+    clipboard: Option<super::clipboard::Job>,
+    clipboard_notice: String,
     model: String,
     session: String,
     scroll: usize,
@@ -119,6 +137,10 @@ impl Screen {
             color,
             transcript: Vec::new(),
             draft: String::new(),
+            draft_scroll: 0,
+            images: Vec::new(),
+            clipboard: None,
+            clipboard_notice: String::new(),
             model: "no model".into(),
             session: "new chat".into(),
             scroll: 0,
@@ -176,7 +198,10 @@ impl Screen {
 
     pub(crate) fn suspend(&mut self) -> io::Result<()> {
         if self.full && !self.suspended {
-            write!(self.out, "\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l")?;
+            write!(
+                self.out,
+                "\x1b[<u\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l"
+            )?;
             self.suspended = true;
             self.out.flush()?;
         }
@@ -187,7 +212,7 @@ impl Screen {
         if self.full && self.suspended {
             write!(
                 self.out,
-                "\x1b[?1049h\x1b[2J\x1b[?1000h\x1b[?1006h\x1b[?25l"
+                "\x1b[?1049h\x1b[>1u\x1b[2J\x1b[?1000h\x1b[?1006h\x1b[?25l"
             )?;
             self.suspended = false;
             self.render()?;
@@ -219,7 +244,15 @@ impl Screen {
     pub(crate) fn user(&mut self, text: &str) -> io::Result<()> {
         self.draft.clear();
         self.suggestions = None;
-        writeln!(self, "\nyou › {text}")?;
+        if self.full {
+            while self.transcript.last() == Some(&b'\n') {
+                self.transcript.pop();
+            }
+            self.transcript
+                .extend_from_slice(format!("\n\nyou › {text}\n").as_bytes());
+        } else {
+            writeln!(self, "\nyou › {text}")?;
+        }
         self.scroll = 0;
         self.render()
     }
@@ -274,6 +307,10 @@ impl Screen {
                     b'k' => Navigation::Up,
                     _ => Navigation::Other,
                 };
+                let movement = match movement {
+                    Navigation::MouseScroll(lines, _) => Navigation::ScrollLines(lines),
+                    key => key,
+                };
                 if let Some(picker) = self.picker.as_mut() {
                     match movement {
                         Navigation::Up | Navigation::ScrollLines(3) => picker.move_by(-1, rows),
@@ -293,8 +330,58 @@ impl Screen {
         result
     }
 
+    pub(crate) fn take_images(&mut self) -> Vec<Value> {
+        self.clipboard_notice.clear();
+        std::mem::take(&mut self.images)
+    }
+
+    fn paste_image(&mut self) -> io::Result<()> {
+        if self.clipboard.is_some() {
+            return Ok(());
+        }
+        if self.images.len() >= 4 {
+            self.clipboard_notice = "Maximum 4 images · Ctrl+X remove".into();
+        } else {
+            self.clipboard = Some(super::clipboard::Job::start());
+            self.clipboard_notice = "Reading clipboard…".into();
+        }
+        self.render()
+    }
+
+    fn poll_clipboard(&mut self) -> io::Result<()> {
+        let Some(receiver) = &self.clipboard else {
+            return Ok(());
+        };
+        let result = match receiver.receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(_) => Err("Clipboard helper stopped".into()),
+        };
+        self.clipboard = None;
+        match result {
+            Ok(image) => {
+                self.images.push(image);
+                self.clipboard_notice.clear();
+                self.suggestions = None;
+            }
+            Err(message) => self.clipboard_notice = message,
+        }
+        self.render()
+    }
+
+    fn clear_images(&mut self) {
+        self.images.clear();
+        self.clipboard = None;
+        self.clipboard_notice.clear();
+    }
+
     fn refresh_suggestions(&mut self) {
-        let options = commands::matches(&self.draft);
+        self.draft_scroll = 0;
+        let options = if self.draft.contains('\n') || !self.images.is_empty() {
+            Vec::new()
+        } else {
+            commands::matches(&self.draft)
+        };
         self.suggestions = if self.suggestions_dismissed || options.is_empty() {
             None
         } else {
@@ -308,6 +395,40 @@ impl Screen {
     }
 
     fn input_navigation(&mut self, key: Navigation) -> io::Result<()> {
+        if key == Navigation::PasteImage {
+            return self.paste_image();
+        }
+        if key == Navigation::Newline {
+            self.draft.push('\n');
+            self.refresh_suggestions();
+            return self.render();
+        }
+        let (columns, height) = self.size();
+        let layout = draft_lines(
+            &self.draft,
+            columns.saturating_sub(4).clamp(1, 100).saturating_sub(5),
+        );
+        let visible = layout.len().min(5);
+        let key = match key {
+            Navigation::MouseScroll(lines, row)
+                if self.suggestions.is_none()
+                    && row >= height.saturating_sub(visible + 2)
+                    && row <= height.saturating_sub(3) =>
+            {
+                self.scroll_draft(lines, layout.len());
+                return self.render();
+            }
+            Navigation::MouseScroll(lines, _) => Navigation::ScrollLines(lines),
+            Navigation::Up if self.suggestions.is_none() => {
+                self.scroll_draft(1, layout.len());
+                return self.render();
+            }
+            Navigation::Down if self.suggestions.is_none() => {
+                self.scroll_draft(-1, layout.len());
+                return self.render();
+            }
+            key => key,
+        };
         let rows = self.size().1.saturating_sub(12).clamp(1, 5);
         if let Some(picker) = self.suggestions.as_mut() {
             match key {
@@ -326,6 +447,16 @@ impl Screen {
         } else {
             self.scroll(key)
         }
+    }
+
+    fn scroll_draft(&mut self, lines: i32, total: usize) {
+        self.draft_scroll = if lines > 0 {
+            self.draft_scroll.saturating_add(lines as usize)
+        } else {
+            self.draft_scroll
+                .saturating_sub(lines.unsigned_abs() as usize)
+        }
+        .min(total.saturating_sub(5));
     }
 
     /// Read an OAuth answer without adding it to the transcript. The callback
@@ -400,9 +531,15 @@ impl Screen {
         let mut pending = Vec::new();
         let mut queued = self.pending_input.take();
         loop {
+            self.poll_clipboard()?;
             // A delayed network check can interrupt idle input, never a draft
             // already being typed. No update result ever blocks terminal input.
-            if self.draft.is_empty() && pending.is_empty() && queued.is_none() {
+            if self.draft.is_empty()
+                && self.images.is_empty()
+                && self.clipboard.is_none()
+                && pending.is_empty()
+                && queued.is_none()
+            {
                 // Give already queued typing priority over an update notice.
                 queued = events.try_recv().ok();
                 if queued.is_none() {
@@ -420,7 +557,7 @@ impl Screen {
             let byte = match queued.take() {
                 Some(byte) => byte,
                 None => {
-                    if updates.is_none() {
+                    if updates.is_none() && self.clipboard.is_none() {
                         match events.recv() {
                             Ok(byte) => byte,
                             Err(_) => return Ok(PromptAction::Text(None)),
@@ -437,7 +574,19 @@ impl Screen {
                 }
             };
             match byte {
-                b'\r' | b'\n' => {
+                b'\n' => self.input_navigation(Navigation::Newline)?,
+                b'\r' => {
+                    if self.clipboard.is_some() {
+                        self.clipboard_notice = "Reading clipboard… press Enter when ready".into();
+                        self.render()?;
+                        continue;
+                    }
+                    if !self.images.is_empty() && self.draft.trim_start().starts_with('/') {
+                        self.clipboard_notice =
+                            "Ctrl+X: remove images before running a command".into();
+                        self.render()?;
+                        continue;
+                    }
                     let completed = self.suggestions.as_ref().and_then(|picker| {
                         commands::matches(&self.draft)
                             .get(picker.selected)
@@ -449,9 +598,23 @@ impl Screen {
                     self.render()?;
                     return Ok(PromptAction::Text(Some(message)));
                 }
-                3 | 4 if self.draft.is_empty() => return Ok(PromptAction::Text(None)),
+                22 => self.paste_image()?, // Ctrl+V: explicit image clipboard access
+                24 => {
+                    // Ctrl+X: remove pending attachments without changing text
+                    self.clear_images();
+                    self.refresh_suggestions();
+                    self.render()?;
+                }
+                3 | 4
+                    if self.draft.is_empty()
+                        && self.images.is_empty()
+                        && self.clipboard.is_none() =>
+                {
+                    return Ok(PromptAction::Text(None))
+                }
                 3 => {
                     self.draft.clear();
+                    self.clear_images();
                     pending.clear();
                     self.suggestions_dismissed = false;
                     self.refresh_suggestions();
@@ -586,6 +749,35 @@ impl Screen {
         out
     }
 
+    fn transcript_line(
+        &self,
+        row: &markdown::Row,
+        width: usize,
+        columns: usize,
+        left: &str,
+    ) -> String {
+        let marker = match row.cells.first().map(|cell| cell.tone) {
+            Some(Tone::DiffAdded) => self.accent("38;2;169;224;184", "┃"),
+            Some(Tone::DiffRemoved) => self.accent("38;2;255;134;153", "┃"),
+            _ if row.role == Role::User => self.accent("1;38;2;236;74;125", "┃"),
+            _ => self.accent("2;38;2;184;57;101", "│"),
+        };
+        let text = format!(
+            "{left}{marker}  {}",
+            self.styled_line(row, width.saturating_sub(3).max(1))
+        );
+        if self.color && row.role == Role::User {
+            // Reapply the tint after foreground/style resets, and paint the
+            // margins and unused columns too. Reset before the next row.
+            let background = "\x1b[48;2;57;30;46m";
+            let text = text.replace("\x1b[0m", &format!("\x1b[0m{background}"));
+            let padding = columns.saturating_sub(left.len() + 3 + row.cells.len());
+            format!("{background}{text}{}\x1b[0m", " ".repeat(padding))
+        } else {
+            text
+        }
+    }
+
     fn picker_rows(&self, width: usize, height: usize, left: &str) -> Option<(usize, Vec<String>)> {
         let picker = self.picker.as_ref().or(self.suggestions.as_ref())?;
         let panel_width = width;
@@ -673,7 +865,22 @@ impl Screen {
         let header = clip(&metadata, width);
         let text = strip_ansi(&String::from_utf8_lossy(&self.transcript));
         let lines = markdown::format(&text, width.saturating_sub(3).max(1));
-        let available = rows.saturating_sub(9);
+        let draft_width = width.saturating_sub(5).max(1);
+        let draft_rows = if self.secret_input {
+            vec![clip_tail(
+                &"•".repeat(self.draft.chars().count()),
+                draft_width,
+            )]
+        } else {
+            draft_lines(&self.draft, draft_width)
+        };
+        let draft_height = draft_rows.len().min(5);
+        self.draft_scroll = self
+            .draft_scroll
+            .min(draft_rows.len().saturating_sub(draft_height));
+        let draft_end = draft_rows.len() - self.draft_scroll;
+        let draft_start = draft_end - draft_height;
+        let available = rows.saturating_sub(8 + draft_height);
         let modal = self.picker_rows(width, available, &left);
         let transcript_rows = modal.as_ref().map_or(available, |(top, _)| *top);
         let viewport = transcript_viewport(lines.len(), transcript_rows, self.scroll);
@@ -695,15 +902,9 @@ impl Screen {
                 }
             }
             if let Some(line) = lines.get(start + row).filter(|_| start + row < end) {
-                let marker = match line.cells.first().map(|cell| cell.tone) {
-                    Some(Tone::DiffAdded) => self.accent("38;2;169;224;184", "┃"),
-                    Some(Tone::DiffRemoved) => self.accent("38;2;255;134;153", "┃"),
-                    _ if line.role == Role::User => self.accent("1;38;2;236;74;125", "┃"),
-                    _ => self.accent("2;38;2;184;57;101", "│"),
-                };
                 frame.push_str(&format!(
-                    "{left}{marker}  {}\x1b[K\r\n",
-                    self.styled_line(line, width.saturating_sub(3).max(1))
+                    "{}\x1b[K\r\n",
+                    self.transcript_line(line, width, columns, &left)
                 ));
             } else {
                 frame.push_str("\x1b[K\r\n");
@@ -711,25 +912,48 @@ impl Screen {
         }
         frame.push_str("\x1b[K\r\n");
         let border = format!("╭{}╮", "─".repeat(width.saturating_sub(2)));
-        frame.push_str(&format!(
-            "{left}{}\x1b[K\r\n",
-            self.accent("38;2;184;57;101", &border)
-        ));
-        let draft_width = width.saturating_sub(5);
-        let visible_draft = if self.secret_input {
-            "•".repeat(self.draft.chars().count())
+        let attachment = if !self.clipboard_notice.is_empty() {
+            self.clipboard_notice.clone()
+        } else if !self.images.is_empty() {
+            format!("{} image(s) attached · Ctrl+X remove", self.images.len())
         } else {
-            self.draft.clone()
+            String::new()
         };
-        let draft = clip_tail(&visible_draft, draft_width);
-        let input = format!(
-            "│ ❯ {draft}{}│",
-            " ".repeat(draft_width.saturating_sub(draft.chars().count()))
-        );
+        let top = if attachment.is_empty() {
+            border.clone()
+        } else {
+            let label = clip(&attachment, width.saturating_sub(6));
+            format!(
+                "╭─ {label} {}╮",
+                "─".repeat(width.saturating_sub(label.chars().count() + 5))
+            )
+        };
         frame.push_str(&format!(
             "{left}{}\x1b[K\r\n",
-            self.accent("38;2;255;155;187", &input)
+            self.accent("38;2;184;57;101", &top)
         ));
+        for (offset, draft) in draft_rows[draft_start..draft_end].iter().enumerate() {
+            let marker = if draft_start + offset == 0 {
+                "❯"
+            } else {
+                " "
+            };
+            let edge = if offset == 0 && draft_start > 0 {
+                "↑"
+            } else if offset + 1 == draft_height && draft_end < draft_rows.len() {
+                "↓"
+            } else {
+                "│"
+            };
+            let input = format!(
+                "│ {marker} {draft}{}{edge}",
+                " ".repeat(draft_width.saturating_sub(draft.chars().count()))
+            );
+            frame.push_str(&format!(
+                "{left}{}\x1b[K\r\n",
+                self.accent("38;2;255;155;187", &input)
+            ));
+        }
         frame.push_str(&format!(
             "{left}{}\x1b[K\r\n",
             self.accent(
@@ -762,7 +986,10 @@ impl Screen {
                 self.scroll
             )
         } else {
-            "Enter send  ·  Wheel / PgUp/PgDn scroll  ·  Esc stop  ·  /help".into()
+            format!(
+                "Enter send · Ctrl+Enter newline · {} image · ↑↓ input · /help",
+                super::clipboard::paste_key()
+            )
         };
         let hint = clip(&hint, width);
         frame.push_str(&format!(
@@ -771,8 +998,8 @@ impl Screen {
         ));
         // Place the cursor after the visible draft inside the composer.
         let cursor_row = rows.saturating_sub(3).max(1);
-        let cursor_col = left.len() + 5 + draft.chars().count();
-        if self.picker.is_none() {
+        let cursor_col = left.len() + 5 + draft_rows.last().map_or(0, |line| line.chars().count());
+        if self.picker.is_none() && self.draft_scroll == 0 {
             frame.push_str(&format!(
                 "\x1b[{cursor_row};{}H\x1b[?25h",
                 cursor_col.min(columns)
@@ -790,7 +1017,7 @@ impl ScrollDisplay for Screen {
         let step = self.size().1.saturating_sub(10).max(1);
         let offset = match navigation {
             Navigation::ScrollPage(direction) => direction * step as i32,
-            Navigation::ScrollLines(lines) => lines,
+            Navigation::ScrollLines(lines) | Navigation::MouseScroll(lines, _) => lines,
             _ => 0,
         };
         if offset > 0 {
@@ -949,7 +1176,7 @@ fn transcript_viewport(total: usize, visible: usize, requested_scroll: usize) ->
     }
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(super) fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for part in bytes.chunks(3) {
@@ -1010,9 +1237,141 @@ fn strip_ansi(text: &str) -> String {
     result
 }
 
+/// Visual input rows, preserving explicit newlines and the insertion row at
+/// an exact wrap boundary. Draft bytes sent to Pi are never reflowed.
+fn draft_lines(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = vec![String::new()];
+    let mut column = 0;
+    for ch in text.chars() {
+        if ch == '\n' {
+            rows.push(String::new());
+            column = 0;
+        } else {
+            rows.last_mut().unwrap().push(ch);
+            column += 1;
+            if column == width {
+                rows.push(String::new());
+                column = 0;
+            }
+        }
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn image_paste_recognizes_alt_and_ctrl_terminal_encodings() {
+        for sequence in [
+            b"v".as_slice(),
+            b"[118;3u",
+            b"[118;5u",
+            b"[27;3;118~",
+            b"[27;5;118~",
+            b"[118;3:1u",
+        ] {
+            let (send, recv) = std::sync::mpsc::channel();
+            for byte in sequence {
+                send.send(*byte).unwrap();
+            }
+            assert_eq!(escape_key(&recv), Navigation::PasteImage);
+        }
+        let (send, recv) = std::sync::mpsc::channel();
+        for byte in b"[118;3:3u" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(escape_key(&recv), Navigation::Other); // key release must not paste again
+    }
+
+    #[test]
+    fn multiline_input_preserves_newlines_and_backspace() {
+        for newline in [
+            b"\x1b[13;2u".as_slice(),
+            b"\x1b[27;2;13~",
+            b"\x1b[13;5u",
+            b"\x1b[27;5;13~",
+            b"\n",
+        ] {
+            let (send, recv) = std::sync::mpsc::channel();
+            for byte in b"first".iter().chain(newline).chain(b"second\x7f!\r") {
+                send.send(*byte).unwrap();
+            }
+            let mut screen = Screen::new(false).unwrap();
+            assert_eq!(
+                screen.prompt(&recv).unwrap().as_deref(),
+                Some("first\nsecon!")
+            );
+        }
+    }
+
+    #[test]
+    fn attachment_cancellation_limits_and_command_guard_preserve_drafts() {
+        let mut screen = Screen::new(false).unwrap();
+        let image = serde_json::json!({"type":"image","mimeType":"image/png","data":"test"});
+        screen.images = vec![image.clone(); 4];
+        screen.paste_image().unwrap();
+        assert!(screen.clipboard.is_none());
+        assert!(screen.clipboard_notice.contains("Maximum 4"));
+        screen.clear_images();
+        screen.poll_clipboard().unwrap();
+        assert!(screen.images.is_empty());
+
+        screen.images.push(image.clone());
+        let (send, recv) = std::sync::mpsc::channel();
+        for byte in b"/new\r\x18\r" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(screen.prompt(&recv).unwrap().as_deref(), Some("/new"));
+        assert!(screen.images.is_empty());
+
+        screen.images.push(image);
+        let (send, recv) = std::sync::mpsc::channel();
+        for byte in b"\x03kept\r" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(screen.prompt(&recv).unwrap().as_deref(), Some("kept"));
+        assert!(screen.images.is_empty());
+    }
+
+    #[test]
+    fn composer_wraps_grows_to_five_rows_and_scrolls_independently() {
+        assert_eq!(draft_lines("abc\ndef", 4), ["abc", "def"]);
+        assert_eq!(draft_lines("abcdef", 3), ["abc", "def", ""]);
+        let mut screen = Screen::new(false).unwrap();
+        screen.draft = "1\n2\n3\n4\n5\n6\n7".into();
+        screen.input_navigation(Navigation::Up).unwrap();
+        assert_eq!(screen.draft_scroll, 1);
+        screen
+            .input_navigation(Navigation::MouseScroll(3, 19))
+            .unwrap();
+        assert_eq!(screen.draft_scroll, 2);
+        assert_eq!(screen.scroll, 0);
+        screen
+            .input_navigation(Navigation::MouseScroll(3, 5))
+            .unwrap();
+        assert_eq!(screen.scroll, 3);
+        screen.input_navigation(Navigation::Down).unwrap();
+        assert_eq!(screen.draft_scroll, 1);
+        screen.input_navigation(Navigation::Newline).unwrap();
+        assert_eq!(screen.draft_scroll, 0);
+        assert!(screen.draft.ends_with('\n'));
+    }
+
+    #[test]
+    fn next_user_turn_has_exactly_one_blank_separator() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.full = true;
+        screen.suspended = true;
+        screen.transcript = "hibi › answer\n\n\n".as_bytes().to_vec();
+        screen.user("next").unwrap();
+        assert_eq!(
+            String::from_utf8(screen.transcript.clone()).unwrap(),
+            "hibi › answer\n\nyou › next\n"
+        );
+    }
+
     #[test]
     fn transcript_scroll_stops_at_a_full_page() {
         assert_eq!(
@@ -1184,7 +1543,7 @@ mod tests {
             .transcript
             .windows(b"state=test".len())
             .any(|part| part == b"state=test"));
-        let unrelated = &markdown::format("hibiscus › Open Codex sign-in ↗", 80)[0];
+        let unrelated = &markdown::format("hibi › Open Codex sign-in ↗", 80)[1];
         assert!(!screen.styled_line(unrelated, 80).contains("\x1b]8;;"));
         screen.clear_auth_url().unwrap();
         assert!(!screen.styled_line(line, 80).contains("\x1b]8;;"));
@@ -1231,8 +1590,34 @@ mod tests {
     }
 
     #[test]
+    fn user_tint_covers_wrapped_rows_and_margins_without_leaking() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.color = true;
+        let rows = markdown::format(
+            "you › a long user message\nsecond line\nhibi › **reply**",
+            10,
+        );
+        for row in rows.iter().filter(|row| row.role == Role::User) {
+            let rendered = screen.transcript_line(row, 13, 19, "   ");
+            assert!(rendered.starts_with("\x1b[48;2;57;30;46m   "));
+            assert!(rendered.ends_with("\x1b[0m"));
+            assert_eq!(strip_ansi(&rendered).chars().count(), 19);
+        }
+        for row in rows.iter().filter(|row| row.role == Role::Assistant) {
+            assert!(!screen.transcript_line(row, 13, 19, "   ").contains("48;2"));
+        }
+        assert!(rows
+            .iter()
+            .any(|row| screen.styled_line(row, 10).contains("hibi")));
+        screen.color = false;
+        assert!(!screen
+            .transcript_line(&rows[0], 13, 19, "   ")
+            .contains('\x1b'));
+    }
+
+    #[test]
     fn pink_highlights_markdown_but_no_color_keeps_clean_text() {
-        let line = &markdown::format("hibiscus › **pink** `code`", 80)[0];
+        let line = &markdown::format("hibi › **pink** `code`", 80)[1];
         let mut screen = Screen::new(false).unwrap();
         assert_eq!(screen.styled_line(line, 80), "pink code");
         screen.color = true;

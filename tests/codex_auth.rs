@@ -164,7 +164,7 @@ export class ModelRuntime {
     if !matches!(method, "empty" | "logged_out") {
         tty.send(b"hello\r");
         tty.wait_text("MOCK_REPLY_HELLO");
-        tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+        tty.wait_text("Enter send · Ctrl+Enter");
     }
     tty.send(b"/login\r");
     tty.wait_text("Sign in to");
@@ -199,7 +199,7 @@ export class ModelRuntime {
     tty.wait_text("Codex sign-in completed. Reconnected Pi to this chat.");
     tty.send(b"after\r");
     tty.wait_text("MOCK_REPLY_AFTER");
-    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+    tty.wait_text("Enter send · Ctrl+Enter");
     tty.send(b"/quit\r");
     let shown = tty.finish();
     let expected = if method == "device" {

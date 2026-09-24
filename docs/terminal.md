@@ -7,6 +7,10 @@ Start `hibiscus` in a terminal for an interactive chat. Hibiscus starts Pi with 
 | Action | Key |
 |---|---|
 | Send a message | Enter |
+| Insert a newline | Ctrl+Enter (Ctrl+J fallback) |
+| Attach an image from the clipboard | Alt+V on WSL; Ctrl+V elsewhere |
+| Remove staged images | Ctrl+X |
+| Scroll a long draft | Up/Down, or mouse wheel over the input rows |
 | Delete a character | Backspace |
 | Stop a running Pi response | Esc |
 | Exit from an empty composer | Ctrl+D (or `/quit`) |
@@ -17,7 +21,9 @@ Start `hibiscus` in a terminal for an interactive chat. Hibiscus starts Pi with 
 
 Type `/` to see only Hibiscus's supported commands; a prefix such as `/m` filters the suggestions. Up/Down or the wheel changes the highlighted suggestion. **Tab** completes without running it, **Enter** runs it, and **Esc** dismisses the list without erasing the text. Type `/help` to see chat commands.
 
-The composer currently supports only **single-line, end-of-line editing**. Full-screen menus are unavailable in line mode, where numbered selection remains available. Hibiscus chat input is text-only; images should be attached in Pi's own TUI instead.
+The full-screen composer grows with explicit newlines and wrapped text to **five visible rows**, then scrolls internally. Up/Down or the wheel over the input rows reviews a long draft; typing returns to its end. Editing is still end-of-draft only. Ctrl+Enter requires a terminal that sends a newline or distinct modified Enter sequence (Kitty/CSI-u or modifyOtherKeys); use Ctrl+J if your terminal sends it as ordinary Enter. Shift+Enter sequences are also accepted where the terminal distinguishes them, but some terminals send Shift+Enter as ordinary Enter. Full-screen menus are unavailable in line mode, where numbered selection remains available. For clipboard images, press **Alt+V on WSL** or **Ctrl+V elsewhere**, matching Pi's platform defaults. Hibiscus accepts both shortcuts, including CSI-u/modifyOtherKeys encodings. The border shows the attachment count (not an inline image preview). Add optional text and press Enter to send, or Ctrl+X to remove all staged images. Image-only prompts work too. Ctrl+C clears both text and attachments. Remove attachments before running slash commands.
+
+Clipboard image paste supports macOS via AppKit/`osascript`, WSL via Windows `powershell.exe`, Wayland via `wl-paste` (`wl-clipboard`), and X11 via `xclip`. It reads the clipboard on the machine running Hibiscus, not an SSH client's clipboard. Windows Terminal can intercept Ctrl+V for terminal paste, which is why WSL uses Alt+V instead. The chosen shortcut must reach Hibiscus. Normal terminal text paste is separate from image paste. Up to four PNG/JPEG/GIF/WebP images, at most 10 MiB each, can be staged; macOS and WSL screenshots are converted to PNG in memory. Clipboard reads are asynchronous and bounded; failures leave the text draft intact. Images are sent as Pi RPC `images` content blocks, without temporary image files or base64 in the visible transcript. Pi owns persisted session content and provider handling; use an image-capable model.
 
 ## Status and transcript
 
