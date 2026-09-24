@@ -18,7 +18,7 @@ Or run it directly:
 curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/main/install.sh | sh
 ```
 
-The default destination is `~/.local/bin/hibiscus`. The installer does not use `sudo`; set a different writable directory when needed:
+The default destination is `~/.local/bin/hibiscus`. If Pi is absent, Hibiscus installs the official Pi npm package into `~/.local` when compatible Node.js/npm are already present; otherwise it fetches and runs Pi's official installer from `https://pi.dev/install.sh` so Pi can bootstrap Node.js/npm. That installer may ask for Node.js installation (and possibly request `sudo`); neither path changes Pi credentials or signs you in. Hibiscus itself installs without `sudo`. If Pi is already on `PATH`, in the installation directory, or under Pi's managed agent directory, it is reused. For a custom Pi executable, set `HIBISCUS_PI` before installing and running Hibiscus. Set a different writable Hibiscus directory when needed:
 
 ```sh
 HIBISCUS_INSTALL_DIR="$HOME/bin" sh install.sh
@@ -44,7 +44,7 @@ hibiscus --version
 
 To update a prebuilt installation later, run `hibiscus update`. This fetches the latest public GitHub release, verifies its SHA-256 checksum, and atomically replaces the installed binary without `sudo` or running a downloaded script. Restart Hibiscus afterward. The updater supports the default `~/.local/bin/hibiscus` install; if you installed elsewhere, set `HIBISCUS_INSTALL_DIR` to its directory. It will not replace a symlink or a source/Cargo build; use Cargo to update those. It needs `curl`, `tar`, `install`, and `sha256sum` or `shasum`, plus internet access. Offline failures leave the installed binary untouched. Full-screen chat checks at most once per day and offers Later / Update now; set `HIBISCUS_NO_UPDATE_CHECK=1` to opt out of automatic checks. The manual command still works. A new push alone isn't an update: publish a version-matching GitHub Release.
 
-Prebuilt Hibiscus does not require Rust or a C compiler. Pi remains a runtime dependency and must be available as `pi` on `PATH` (or through `HIBISCUS_PI`). Node.js 22.19+ is required for inline Codex authentication; without it, Hibiscus offers Pi's authentication TUI fallback.
+Prebuilt Hibiscus does not require Rust or a C compiler. Pi is a runtime dependency; the prebuilt installer installs it when missing and links Pi's managed launcher alongside Hibiscus when needed. Pi requires Node.js 22.19+; when Node.js/npm are absent or too old, Pi's installer may prompt to bootstrap them. If the official Pi installer fails or a non-interactive shell cannot supply missing Node, installation stops instead of claiming Hibiscus is ready. Hibiscus can find Pi's standalone Node.js even if the calling shell has not loaded its new PATH. Source/Cargo installs still require you to install Pi separately. `HIBISCUS_PI` can select a custom existing Pi.
 
 ## Build from source
 

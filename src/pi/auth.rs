@@ -58,10 +58,18 @@ fn sdk_entry() -> Option<PathBuf> {
     let agent = env::var_os("PI_CODING_AGENT_DIR")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".pi/agent")))?;
-    if !pi.starts_with(agent.join("bin")) {
+    if !is_managed_pi(&pi, &agent) {
         return None;
     }
     managed_entry(&agent)
+}
+
+fn is_managed_pi(pi: &Path, agent: &Path) -> bool {
+    pi.starts_with(agent.join("bin"))
+        || matches!(
+            (pi.canonicalize(), agent.join("bin/pi").canonicalize()),
+            (Ok(path), Ok(launcher)) if path == launcher
+        )
 }
 
 fn managed_entry(agent: &Path) -> Option<PathBuf> {
@@ -296,6 +304,22 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn managed_pi_launcher_linked_into_local_bin_keeps_sdk_auth_available() {
+        let root = env::temp_dir().join(format!("hibiscus-pi-link-test-{}", std::process::id()));
+        let agent = root.join(".pi/agent");
+        let local = root.join(".local/bin");
+        std::fs::create_dir_all(agent.join("bin")).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        let launcher = agent.join("bin/pi");
+        std::fs::write(&launcher, "#!/bin/sh\n").unwrap();
+        let link = local.join("pi");
+        std::os::unix::fs::symlink(&launcher, &link).unwrap();
+        assert!(is_managed_pi(&link, &agent));
+        assert!(!is_managed_pi(&root.join("other/pi"), &agent));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn managed_pi_sdk_resolution_rejects_traversal() {
         let root = env::temp_dir().join(format!("hibiscus-sdk-test-{}", std::process::id()));
