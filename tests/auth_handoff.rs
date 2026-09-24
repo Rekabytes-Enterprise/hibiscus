@@ -44,7 +44,16 @@ if [ "$1" = "--mode" ]; then
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
    *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s"}}\n' "$id" "$HIBISCUS_TEST_SESSION" ;;
-   *'"type":"prompt"'*) printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_REPLY_COMPLETE"}}\n{"type":"agent_settled"}\n' "$id" ;;
+   *'"type":"prompt"'*)
+    case "$line" in
+     *'"message":"hello"'*) reply=MOCK_REPLY_HELLO ;;
+     *'"message":"after"'*) reply=MOCK_REPLY_AFTER ;;
+     *) exit 14 ;;
+    esac
+    printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"%s"}}\n' "$id" "$reply"
+    # Deliberately separate visible text from settlement to expose early input.
+    sleep 0.2
+    printf '{"type":"agent_settled"}\n' ;;
    *) exit 13 ;;
   esac
  done
@@ -77,7 +86,8 @@ fi
     tty.wait_text("hibiscus");
     if saved {
         tty.send(b"hello\r");
-        tty.wait_text("MOCK_REPLY_COMPLETE");
+        tty.wait_text("MOCK_REPLY_HELLO");
+        tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
     }
     tty.send(b"/login\r");
     tty.wait_text("Sign in to");
@@ -90,7 +100,8 @@ fi
     tty.send(b"pi-only-input\r");
     tty.wait_text("Returned from Pi.");
     tty.send(b"after\r");
-    tty.wait_text("MOCK_REPLY_COMPLETE");
+    tty.wait_text("MOCK_REPLY_AFTER");
+    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
     tty.send(b"/quit\r");
     tty.finish();
     assert_eq!(fs::read_to_string(log).unwrap(), "pi-only-input");

@@ -69,7 +69,15 @@ while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
   *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s","model":{"provider":"%s","id":"gpt-test"}}}\n' "$id" "$HIBISCUS_TEST_SESSION" "$HIBISCUS_TEST_PROVIDER" ;;
-  *'"type":"prompt"'*) printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_REPLY_COMPLETE"}}\n{"type":"agent_settled"}\n' "$id" ;;
+  *'"type":"prompt"'*)
+   case "$line" in
+    *'"message":"hello"'*) reply=MOCK_REPLY_HELLO ;;
+    *'"message":"after"'*) reply=MOCK_REPLY_AFTER ;;
+    *) exit 14 ;;
+   esac
+   printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"%s"}}\n' "$id" "$reply"
+   sleep 0.2
+   printf '{"type":"agent_settled"}\n' ;;
   *) exit 13 ;;
  esac
 done
@@ -145,7 +153,8 @@ export class ModelRuntime {
     tty.wait_text("hibiscus");
     if !matches!(method, "empty" | "logged_out") {
         tty.send(b"hello\r");
-        tty.wait_text("MOCK_REPLY_COMPLETE");
+        tty.wait_text("MOCK_REPLY_HELLO");
+        tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
     }
     tty.send(b"/login\r");
     tty.wait_text("Sign in to");
@@ -175,7 +184,8 @@ export class ModelRuntime {
     }
     tty.wait_text("Codex sign-in completed. Reconnected Pi to this chat.");
     tty.send(b"after\r");
-    tty.wait_text("MOCK_REPLY_COMPLETE");
+    tty.wait_text("MOCK_REPLY_AFTER");
+    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
     tty.send(b"/quit\r");
     let shown = tty.finish();
     let expected = if method == "device" {
