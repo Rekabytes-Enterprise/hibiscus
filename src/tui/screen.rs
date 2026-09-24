@@ -740,7 +740,11 @@ impl Screen {
         let hint = if self.suggestions.is_some() {
             "↑↓ choose  ·  Tab complete  ·  Enter run  ·  Esc dismiss".into()
         } else if self.auth_url.is_some() {
-            "Ctrl+click Open Codex sign-in ↗  ·  Ctrl+Y copy link  ·  Esc cancel".into()
+            if cfg!(target_os = "macos") {
+                "Browser sign-in  ·  Ctrl+Y copy link  ·  Esc cancel".into()
+            } else {
+                "Open Codex sign-in ↗  ·  Ctrl+Y copy link  ·  Esc cancel".into()
+            }
         } else if let Some(activity) = &self.activity {
             let scrolled = if self.scroll > 0 {
                 format!("  ·  ↑ {} lines", self.scroll)

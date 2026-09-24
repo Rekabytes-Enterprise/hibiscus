@@ -95,6 +95,31 @@ fn send(writer: &mut ChildStdin, message: Value) -> io::Result<()> {
     writer.flush()
 }
 
+/// macOS terminals need not support OSC 8 hyperlinks or OSC 52 clipboard.
+/// Open the validated sign-in URL after the user chose browser login, without
+/// shell interpolation or including it in the transcript. Tests use a mock
+/// opener so CI never launches a real browser.
+fn open_auth_url(url: &str) -> Option<bool> {
+    let program = env::var_os("HIBISCUS_BROWSER_OPEN").or({
+        #[cfg(target_os = "macos")]
+        {
+            Some("/usr/bin/open".into())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    })?;
+    let opened = Command::new(program)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    Some(opened)
+}
+
 fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
     let safe = |field: &str| {
         record[field].as_str().map(|text| {
@@ -111,11 +136,12 @@ fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
                 None => false,
             };
             if link_ready {
-                writeln!(
-                    output,
-                    "  · Open Codex sign-in ↗ (Ctrl+click; Ctrl+Y to copy link)"
-                )?;
-                writeln!(output, "  · If the WSL callback fails, paste the redirect URL into the masked composer.")?;
+                match record["url"].as_str().and_then(open_auth_url) {
+                    Some(true) => writeln!(output, "  · Open Codex sign-in ↗ (opened in browser; Ctrl+Y to copy link)")?,
+                    Some(false) => writeln!(output, "  · Open Codex sign-in ↗ (browser did not open; Ctrl+Y to copy link or retry with device code)")?,
+                    None => writeln!(output, "  · Open Codex sign-in ↗ (terminal link if supported; Ctrl+Y to copy link)")?,
+                }
+                writeln!(output, "  · If the browser callback fails, paste the redirect URL into the masked composer.")?;
             } else {
                 writeln!(
                     output,

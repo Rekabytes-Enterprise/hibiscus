@@ -15,6 +15,11 @@ fn browser_callback_finishes_without_waiting_for_manual_code() {
 }
 
 #[test]
+fn failed_browser_open_keeps_login_and_device_code_fallback_available() {
+    run("open_failure");
+}
+
+#[test]
 fn completed_login_reconnects_without_waiting_for_browser_connection_to_close() {
     run("open_connection");
 }
@@ -52,6 +57,18 @@ fn run(method: &str) {
     }
     let pi_log = root.join("pi-args");
     let auth_log = root.join("auth-result");
+    let browser_log = root.join("opened-url");
+    let browser_opener = root.join("open-browser");
+    fs::write(
+        &browser_opener,
+        if method == "open_failure" {
+            "#!/bin/sh\nexit 1\n"
+        } else {
+            "#!/bin/sh\nprintf '%s' \"$1\" > \"$HIBISCUS_TEST_BROWSER_LOG\"\n"
+        },
+    )
+    .unwrap();
+    fs::set_permissions(&browser_opener, fs::Permissions::from_mode(0o755)).unwrap();
     let pi = root.join("pi");
     fs::write(&pi, r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HIBISCUS_TEST_PI_LOG"
@@ -128,6 +145,8 @@ export class ModelRuntime {
     command
         .env("HIBISCUS_PI", &pi)
         .env("HIBISCUS_AUTH_SDK", &sdk)
+        .env("HIBISCUS_BROWSER_OPEN", &browser_opener)
+        .env("HIBISCUS_TEST_BROWSER_LOG", &browser_log)
         .env("HIBISCUS_TEST_SESSION", &session)
         .env("HIBISCUS_TEST_PI_LOG", &pi_log)
         .env("HIBISCUS_TEST_AUTH_LOG", &auth_log)
@@ -157,6 +176,7 @@ export class ModelRuntime {
         tty.send(b"/quit\r");
         tty.finish();
         assert!(!auth_log.exists());
+        assert!(!browser_log.exists());
         assert_eq!(
             fs::read_to_string(pi_log).unwrap().trim(),
             "--mode rpc --no-extensions --tools read,bash,edit,write"
@@ -197,7 +217,24 @@ export class ModelRuntime {
     );
     if method == "device" {
         assert!(shown.contains("Enter device code: FAKE-CODE"), "{shown}");
+        assert!(!browser_log.exists());
     } else {
+        if method == "open_failure" {
+            assert!(
+                shown.contains("browser did not open; Ctrl+Y to copy link or")
+                    && shown.contains("retry with device code"),
+                "{shown}"
+            );
+            assert!(!browser_log.exists());
+        } else {
+            assert!(
+                shown.contains("opened in browser; Ctrl+Y to copy link"),
+                "{shown}"
+            );
+            assert!(fs::read_to_string(&browser_log)
+                .unwrap()
+                .starts_with("https://auth.openai.com/oauth/authorize?response_type=code"));
+        }
         assert!(shown.contains("Open Codex sign-in ↗"), "{shown}");
         assert!(
             shown.contains("\x1b]8;;https://auth.openai.com/oauth/authorize?response_type=code"),
