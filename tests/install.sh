@@ -58,5 +58,5 @@ run_case() {
 }
 
 run_case Linux x86_64 x86_64-unknown-linux-musl latest
-run_case Darwin arm64 aarch64-apple-darwin 0.1.0
+run_case Darwin arm64 aarch64-apple-darwin 0.1.1
 printf 'installer tests passed\n'
