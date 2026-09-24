@@ -2,7 +2,8 @@ use std::fs;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn login_handoff_does_not_steal_pi_keys_and_returns_to_chat() {
@@ -95,35 +96,46 @@ fi
         .pre_exec_set_tty()
         .spawn()
         .unwrap();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let reader_output = Arc::clone(&captured);
     let reader = std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
-        while unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+        loop {
+            let count = unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) };
+            if count <= 0 {
+                break;
+            }
+            reader_output
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buf[..count as usize]);
+        }
     });
-    std::thread::sleep(Duration::from_millis(250));
+    wait_for_text(&captured, "hibiscus");
     if saved {
         send(master, b"hello\r");
-        std::thread::sleep(Duration::from_millis(250));
+        wait_for_text(&captured, "ok");
     }
     send(master, b"/login\r");
-    std::thread::sleep(Duration::from_millis(250));
+    wait_for_text(&captured, "Sign in to");
     if other_provider {
         send(master, b"\x1b[B\r");
-    }
-    // choose Pi TUI provider
-    else {
+    } else {
         send(master, b"\r");
     } // Codex choice; SDK unavailable in this mock
-    std::thread::sleep(Duration::from_millis(250));
+    wait_for_text(&captured, "Hand off to Pi for /login?");
     send(master, b"y\r");
-    std::thread::sleep(Duration::from_millis(250));
+    wait_for_path(&args);
     send(master, b"pi-only-input\r");
-    std::thread::sleep(Duration::from_millis(250));
+    wait_for_path(&log);
+    wait_for_text(&captured, "Returned from Pi.");
     send(master, b"after\r");
-    std::thread::sleep(Duration::from_millis(250));
+    wait_for_text(&captured, "after");
     send(master, b"/quit\r");
     let status = child.wait().unwrap();
     reader.join().unwrap();
-    assert!(status.success(), "{status}");
+    let display = String::from_utf8_lossy(&captured.lock().unwrap()).into_owned();
+    assert!(status.success(), "{status}: {display}");
     assert_eq!(fs::read_to_string(log).unwrap(), "pi-only-input");
     assert!(
         !sdk_marker.exists(),
@@ -139,6 +151,29 @@ fi
         libc::close(master);
     }
     fs::remove_dir_all(root).unwrap();
+}
+
+fn wait_for_text(output: &Arc<Mutex<Vec<u8>>>, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if String::from_utf8_lossy(&output.lock().unwrap()).contains(expected) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let shown = String::from_utf8_lossy(&output.lock().unwrap()).into_owned();
+    panic!("timed out waiting for {expected:?}: {shown}");
+}
+
+fn wait_for_path(path: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("timed out waiting for {}", path.display());
 }
 
 fn send(fd: i32, bytes: &[u8]) {
