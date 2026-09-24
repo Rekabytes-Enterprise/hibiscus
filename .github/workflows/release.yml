@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   verify:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +20,12 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: sh -n install.sh && sh tests/install.sh
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - run: cargo test --locked
+        timeout-minutes: 5
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Check release tag matches Cargo version
         if: github.event_name == 'push'

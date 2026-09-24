@@ -1,20 +1,18 @@
+mod support;
 use std::fs;
-use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+use support::Pty;
 
 #[test]
 fn login_handoff_does_not_steal_pi_keys_and_returns_to_chat() {
     run(true, false);
 }
-
 #[test]
 fn login_handoff_without_saved_chat_uses_an_ephemeral_pi_session() {
     run(false, false);
 }
-
 #[test]
 fn other_provider_choice_uses_pi_tui_even_when_codex_sdk_is_available() {
     run(false, true);
@@ -46,45 +44,22 @@ if [ "$1" = "--mode" ]; then
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
    *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s"}}\n' "$id" "$HIBISCUS_TEST_SESSION" ;;
-   *'"type":"prompt"'*) printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}\n{"type":"agent_settled"}\n' "$id" ;;
+   *'"type":"prompt"'*) printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"MOCK_REPLY_COMPLETE"}}\n{"type":"agent_settled"}\n' "$id" ;;
    *) exit 13 ;;
   esac
  done
 else
  printf '%s' "$*" > "$HIBISCUS_TEST_ARGS"
  stty -echo
+ printf 'MOCK_TUI_READY\n'
  IFS= read -r value
  stty echo
  printf '%s' "$value" > "$HIBISCUS_TEST_LOG"
 fi
 "#).unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let mut master = 0;
-    let mut slave = 0;
-    let mut size = libc::winsize {
-        ws_row: 24,
-        ws_col: 80,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    assert_eq!(
-        unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::addr_of_mut!(size),
-            )
-        },
-        0
-    );
-    let stdin = unsafe { std::fs::File::from_raw_fd(slave) };
-    let stdout = stdin.try_clone().unwrap();
-    let stderr = stdin.try_clone().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hibiscus"))
-        // Test full-screen behavior even when CI inherits TERM=dumb or no TERM.
-        .env("TERM", "xterm-256color")
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hibiscus"));
+    command
         .env("HIBISCUS_PI", &script)
         .env("HIBISCUS_TEST_SESSION", &session)
         .env("HIBISCUS_TEST_LOG", &log)
@@ -97,53 +72,27 @@ fi
             } else {
                 std::ffi::OsStr::new("")
             },
-        )
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .pre_exec_set_tty()
-        .spawn()
-        .unwrap();
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let reader_output = Arc::clone(&captured);
-    let reader = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            let count = unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) };
-            if count <= 0 {
-                break;
-            }
-            reader_output
-                .lock()
-                .unwrap()
-                .extend_from_slice(&buf[..count as usize]);
-        }
-    });
-    wait_for_text(&captured, "hibiscus");
+        );
+    let mut tty = Pty::spawn(&mut command);
+    tty.wait_text("hibiscus");
     if saved {
-        send(master, b"hello\r");
-        wait_for_text(&captured, "ok");
+        tty.send(b"hello\r");
+        tty.wait_text("MOCK_REPLY_COMPLETE");
     }
-    send(master, b"/login\r");
-    wait_for_text(&captured, "Sign in to");
-    if other_provider {
-        send(master, b"\x1b[B\r");
-    } else {
-        send(master, b"\r");
-    } // Codex choice; SDK unavailable in this mock
-    wait_for_text(&captured, "Hand off to Pi for /login?");
-    send(master, b"y\r");
-    wait_for_path(&args);
-    send(master, b"pi-only-input\r");
-    wait_for_path(&log);
-    wait_for_text(&captured, "Returned from Pi.");
-    send(master, b"after\r");
-    wait_for_text(&captured, "after");
-    send(master, b"/quit\r");
-    let status = child.wait().unwrap();
-    reader.join().unwrap();
-    let display = String::from_utf8_lossy(&captured.lock().unwrap()).into_owned();
-    assert!(status.success(), "{status}: {display}");
+    tty.send(b"/login\r");
+    tty.wait_text("Sign in to");
+    tty.send(if other_provider { b"\x1b[B\r" } else { b"\r" });
+    tty.wait_text("Hand off to Pi for /login?");
+    tty.send(b"y\r");
+    // This marker is emitted only after the old reader is joined and Pi owns
+    // the tty. No input is needed to unblock the reader being stopped.
+    tty.wait_text("MOCK_TUI_READY");
+    tty.send(b"pi-only-input\r");
+    tty.wait_text("Returned from Pi.");
+    tty.send(b"after\r");
+    tty.wait_text("MOCK_REPLY_COMPLETE");
+    tty.send(b"/quit\r");
+    tty.finish();
     assert_eq!(fs::read_to_string(log).unwrap(), "pi-only-input");
     assert!(
         !sdk_marker.exists(),
@@ -155,54 +104,6 @@ fi
     } else {
         assert_eq!(handed_off, "--no-session");
     }
-    unsafe {
-        libc::close(master);
-    }
+    drop(tty);
     fs::remove_dir_all(root).unwrap();
-}
-
-fn wait_for_text(output: &Arc<Mutex<Vec<u8>>>, expected: &str) {
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < deadline {
-        if String::from_utf8_lossy(&output.lock().unwrap()).contains(expected) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let shown = String::from_utf8_lossy(&output.lock().unwrap()).into_owned();
-    panic!("timed out waiting for {expected:?}: {shown}");
-}
-
-fn wait_for_path(path: &std::path::Path) {
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < deadline {
-        if path.exists() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    panic!("timed out waiting for {}", path.display());
-}
-
-fn send(fd: i32, bytes: &[u8]) {
-    assert_eq!(
-        unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) },
-        bytes.len() as isize
-    );
-}
-trait ControllingTty {
-    fn pre_exec_set_tty(&mut self) -> &mut Self;
-}
-impl ControllingTty for Command {
-    fn pre_exec_set_tty(&mut self) -> &mut Self {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            self.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            })
-        }
-    }
 }

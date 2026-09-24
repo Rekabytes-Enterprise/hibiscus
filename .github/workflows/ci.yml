@@ -20,11 +20,13 @@ jobs:
   lint:
     name: Format, Clippy, and installer
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --check
       - name: Run Clippy
@@ -41,10 +43,16 @@ jobs:
           - ubuntu-latest
           - macos-14
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Run Rust tests
+        timeout-minutes: 5
         # PTY fixtures must configure their own terminal, not inherit the runner's.
         env:
           TERM: dumb
