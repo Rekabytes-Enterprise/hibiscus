@@ -34,17 +34,17 @@ else
     base="https://github.com/$REPOSITORY/releases/download/$tag"
 fi
 
-tmp=${TMPDIR:-/tmp}/hibiscus-install-$$
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-mkdir -p "$tmp"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/hibiscus-install.XXXXXXXX")
+staged=
+trap 'rm -rf "$tmp"; [ -z "$staged" ] || rm -f "$staged"' EXIT HUP INT TERM
 
 download() {
     url=$1
     destination=$2
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "$url" -o "$destination"
+        curl -fsSL --connect-timeout 5 --max-time 180 -H "Authorization: Bearer $GITHUB_TOKEN" "$url" -o "$destination"
     else
-        curl -fsSL "$url" -o "$destination"
+        curl -fsSL --connect-timeout 5 --max-time 180 "$url" -o "$destination"
     fi
 }
 
@@ -62,10 +62,13 @@ else
 fi
 [ "$actual" = "$expected" ] || fail "checksum verification failed"
 
-tar -xzf "$tmp/$archive" -C "$tmp"
-[ -f "$tmp/hibiscus" ] || fail "release archive does not contain hibiscus"
+# Extract only the expected file; never let paths in the archive choose where to write.
+tar -xOzf "$tmp/$archive" hibiscus >"$tmp/hibiscus" || fail "release archive does not contain hibiscus"
 mkdir -p "$INSTALL_DIR"
-install -m 755 "$tmp/hibiscus" "$INSTALL_DIR/hibiscus"
+# Never truncate a running executable. Stage beside it, then atomically replace it.
+staged=$(mktemp "$INSTALL_DIR/.hibiscus-install.XXXXXXXX")
+install -m 755 "$tmp/hibiscus" "$staged"
+mv -f "$staged" "$INSTALL_DIR/hibiscus"
 
 printf 'Installed hibiscus %s to %s/hibiscus\n' "$VERSION" "$INSTALL_DIR"
 case ":$PATH:" in

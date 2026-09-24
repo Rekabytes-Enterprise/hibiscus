@@ -166,7 +166,10 @@ export class ModelRuntime {
         tty.send(b"/quit\r");
         tty.finish();
         assert!(!auth_log.exists());
-        assert_eq!(fs::read_to_string(pi_log).unwrap().lines().count(), 1);
+        assert_eq!(
+            fs::read_to_string(pi_log).unwrap().trim(),
+            "--mode rpc --no-extensions --tools read,bash,edit,write"
+        );
         drop(tty);
         fs::remove_dir_all(root).unwrap();
         return;
@@ -231,6 +234,8 @@ export class ModelRuntime {
     assert!(!shown.contains("pi-only-input"), "{shown}");
     let log = fs::read_to_string(pi_log).unwrap();
     assert_eq!(log.lines().count(), 2, "{log}");
+    let base = "--mode rpc --no-extensions --tools read,bash,edit,write";
+    assert_eq!(log.lines().next().unwrap(), base, "{log}");
     if method == "logged_out" {
         assert!(shown.contains("Sign in to"), "{shown}");
         assert!(
@@ -240,13 +245,10 @@ export class ModelRuntime {
         assert!(!shown.contains("Hand off to Pi"), "{shown}");
     }
     if matches!(method, "empty" | "logged_out") {
-        assert_eq!(log.lines().nth(1).unwrap(), "--mode rpc", "{log}");
+        assert_eq!(log.lines().nth(1).unwrap(), base, "{log}");
     } else {
         assert!(
-            log.lines()
-                .nth(1)
-                .unwrap()
-                .contains(&format!("--session {}", session.display())),
+            log.lines().nth(1).unwrap() == format!("{base} --session {}", session.display()),
             "{log}"
         );
     }

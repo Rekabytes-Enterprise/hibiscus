@@ -65,7 +65,7 @@ done
     );
     assert_eq!(
         fs::read_to_string(log).unwrap().trim(),
-        "--mode rpc --continue"
+        "--mode rpc --no-extensions --tools read,bash,edit,write --continue"
     );
     fs::remove_dir_all(directory).unwrap();
 }

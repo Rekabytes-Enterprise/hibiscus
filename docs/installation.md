@@ -42,6 +42,8 @@ Verify the result with:
 hibiscus --version
 ```
 
+To update a prebuilt installation later, run `hibiscus update`. This fetches the latest public GitHub release, verifies its SHA-256 checksum, and atomically replaces the installed binary without `sudo` or running a downloaded script. Restart Hibiscus afterward. The updater supports the default `~/.local/bin/hibiscus` install; if you installed elsewhere, set `HIBISCUS_INSTALL_DIR` to its directory. It will not replace a symlink or a source/Cargo build; use Cargo to update those. It needs `curl`, `tar`, `install`, and `sha256sum` or `shasum`, plus internet access. Offline failures leave the installed binary untouched. Full-screen chat checks at most once per day and offers Later / Update now; set `HIBISCUS_NO_UPDATE_CHECK=1` to opt out of automatic checks. The manual command still works. A new push alone isn't an update: publish a version-matching GitHub Release.
+
 Prebuilt Hibiscus does not require Rust or a C compiler. Pi remains a runtime dependency and must be available as `pi` on `PATH` (or through `HIBISCUS_PI`). Node.js 22.19+ is required for inline Codex authentication; without it, Hibiscus offers Pi's authentication TUI fallback.
 
 ## Build from source
