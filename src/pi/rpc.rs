@@ -1,5 +1,5 @@
 use crate::{
-    pi::dialog::Dialogs,
+    pi::{configure_builtin_tools, dialog::Dialogs},
     tui::{
         screen::{escape_key, Navigation, ScrollDisplay},
         terminal::RawMode,
@@ -36,6 +36,7 @@ impl Rpc {
         let pi = env::var("HIBISCUS_PI").unwrap_or_else(|_| "pi".to_owned());
         let mut command = Command::new(&pi);
         command.args(["--mode", "rpc"]);
+        configure_builtin_tools(&mut command);
         match start {
             SessionStart::Latest => {
                 command.arg("--continue");

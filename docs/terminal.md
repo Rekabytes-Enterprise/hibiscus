@@ -1,6 +1,6 @@
 # Terminal UI
 
-Start `hibiscus` in a terminal for an interactive chat. `hibiscus --continue` resumes the latest Pi session for this directory; `hibiscus --sessions` opens the startup numbered picker. Inside the full-screen chat, `/sessions` and `/models` use docked pickers above the composer.
+Start `hibiscus` in a terminal for an interactive chat. Hibiscus starts Pi with extensions disabled and only its built-in `read`, `bash`, `edit`, and `write` tools active, so Pi-installed MCP extensions do not start (also during auth handoffs). Running Pi directly still uses your normal configuration. `hibiscus --continue` resumes the latest Pi session for this directory; `hibiscus --sessions` opens the startup numbered picker. Inside the full-screen chat, `/sessions` and `/models` use docked pickers above the composer.
 
 ## Input and navigation
 
@@ -26,6 +26,10 @@ The header shows the workspace, model, and session. While a prompt is active, th
 The transcript renders common Markdown for readability without changing saved Pi messages. It shows concise tool start/finish events with read/write/edit file paths and success or failure. Raw thinking text and full tool results are not displayed. For a successful Pi `edit`, Hibiscus can show up to 40 lines of Pi's returned diff (context, additions, deletions); an unsuccessful edit or missing diff does not get a preview. The preview is not a replacement for reviewing `git diff`.
 
 Scrolling stops at the oldest complete viewport instead of leaving most of the screen empty. When new output arrives while you are scrolled up, the view remains anchored until you scroll back to the bottom.
+
+## Updates
+
+Prebuilt installs in full-screen mode check for a newer public GitHub release in the background at most once per day. When idle, the picker offers **Later** (the safe default) or **Update now**. A check never interrupts a draft in progress, and offline failures do not block chat. To check or update on demand, exit and run `hibiscus update`; see [Installation and releases](installation.md). Set `HIBISCUS_NO_UPDATE_CHECK=1` to disable automatic checks.
 
 ## Authentication handoff
 

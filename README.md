@@ -10,7 +10,7 @@ Hibiscus is a small Rust terminal client for the [Pi](https://pi.dev) agent. It 
 - Node.js 22.19+ for the inline Codex sign-in flow (without Node, Hibiscus falls back to Pi's TUI)
 - Rust, Cargo, and a C linker only when building from source (Ubuntu/WSL: `sudo apt update && sudo apt install -y build-essential`)
 
-Set `HIBISCUS_PI` if Pi is installed under a different executable name or path.
+Set `HIBISCUS_PI` if Pi is installed under a different executable name or path. Hibiscus launches Pi with `--no-extensions --tools read,bash,edit,write` (including auth handoffs): your personal Pi extensions, such as an MCP bridge, do not run in Hibiscus, while the four built-in coding tools remain available. Running `pi` directly is unaffected. Pi still owns models, authentication, and sessions.
 
 ## Install
 
@@ -38,6 +38,7 @@ hibiscus                                  # start a new chat
 hibiscus --continue                       # resume the latest session here
 hibiscus --sessions                       # choose a saved session
 hibiscus --version                        # print installed version
+hibiscus update                           # update a prebuilt install from GitHub Releases
 hibiscus "Explain this repository"        # one-shot prompt
 printf 'Hello\nFollow up\n' | hibiscus   # piped multi-turn chat
 ```
@@ -52,6 +53,8 @@ Interactive chat commands:
 - `/logout` — hand the terminal to Pi for native logout
 - `/help`
 - `/quit` or `/exit`
+
+Prebuilt installs in `~/.local/bin` can update themselves with `hibiscus update`; for a custom directory, set `HIBISCUS_INSTALL_DIR` to that directory. Interactive full-screen chat checks for a newer public release at most once a day and offers **Later / Update now** without blocking chat if offline. Updates download the version-pinned archive and checksums, verify SHA-256, atomically replace the executable, and take effect after restarting Hibiscus. Source/Cargo installs are not replaced; reinstall those with Cargo. Set `HIBISCUS_NO_UPDATE_CHECK=1` to disable automatic checks (manual updates still work).
 
 One-shot prompts are saved as their own Pi sessions. Hibiscus does not maintain a separate conversation database. Session lists are read from Pi's JSONL files and filtered to the current working directory. Pi's session directory settings are respected, including `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR`, and `sessionDir` in Pi settings.
 
@@ -74,7 +77,7 @@ Interactive terminals use an alternate-screen interface with:
 
 `NO_COLOR=1` disables colors. `TERM=dumb`, small terminals, and piped input use line-mode output instead. Piped mode writes assistant text to stdout and Pi tools/diagnostics to stderr. Full-screen picker navigation is unavailable in line mode, where `/models` and `/sessions` use numbered input instead.
 
-Pi extension UI requests for `confirm`, `select`, `input`, and `editor` are handled in an interactive terminal. Confirmations require explicit `y` or `yes`, and selections require a valid number. Dialogs are cancelled in non-interactive mode. Terminal editing remains intentionally basic: single-line input with end-of-line editing.
+Hibiscus can handle Pi extension UI requests for `confirm`, `select`, `input`, and `editor` in an interactive terminal, though Pi extensions are disabled for Hibiscus runs by default. Confirmations require explicit `y` or `yes`, and selections require a valid number. Dialogs are cancelled in non-interactive mode. Terminal editing remains intentionally basic: single-line input with end-of-line editing.
 
 In a full-screen terminal, `/login` first lets you choose **OpenAI Codex** or **another provider**. This is independent of the currently selected model: Pi may have no selected Codex model after logout. For Codex, Hibiscus launches a small Node helper using the installed **Pi SDK's** OAuth implementation. Hibiscus shows a short, clickable browser sign-in label (Ctrl+click) instead of a broken multi-line URL. Ctrl+Y asks compatible terminals to copy the complete URL via OSC 52; if hyperlinks/clipboard controls are unavailable, try the device-code option. Hibiscus accepts a manually pasted redirect URL without echoing it, then waits for Pi SDK login/storage completion, forcibly cleans up the dedicated helper (without waiting for the browser tab or callback socket to close), and reconnects the idle RPC child on the same saved session. You can sign in before sending a chat message. Esc cancels the flow; the helper's explicit completion event ends login, so a still-open browser success tab cannot keep Hibiscus waiting. Pi owns the credential file and refresh; Hibiscus does not copy OAuth tokens into its session or logs. **Do not share screenshots of authorization URLs or device codes.** If Node or the matching Pi SDK is unavailable, Codex login offers Pi's TUI fallback. `/logout` and login for other providers also use that TUI handoff. No prior chat message is needed: Hibiscus closes its RPC child before opening Pi on the saved session if one exists, or with `--no-session` otherwise. Run the auth command in Pi, then `/quit` to return; Hibiscus reopens its RPC child afterward.
 

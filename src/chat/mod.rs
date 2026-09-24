@@ -6,22 +6,23 @@ use self::models::choose_model;
 use crate::{
     pi::{
         auth::{codex_sign_in, AuthOutcome},
+        configure_builtin_tools,
         dialog::Dialogs,
         rpc::{Rpc, SessionStart},
     },
     tui::{
-        screen::Screen,
+        screen::{PromptAction, Screen},
         terminal::{self, RawMode, Terminal, TerminalEvents},
         ui::Ui,
     },
-    Result,
+    update, Result,
 };
 use serde_json::json;
 use std::env;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver};
 
 pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
     let show_history = !matches!(session, SessionStart::New);
@@ -38,6 +39,18 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
     let mut raw = tty.as_ref().map(Terminal::raw).transpose()?;
     let mut events = tty.as_ref().map(Terminal::events).transpose()?;
     let mut screen = Screen::new(stdin.is_terminal() && tty.is_some())?;
+    let update_notice = if screen.is_full()
+        && env::var_os("HIBISCUS_NO_UPDATE_CHECK").is_none()
+        && update::installed_prebuilt()
+    {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(update::check_startup());
+        });
+        Some(receiver)
+    } else {
+        None
+    };
     let outcome = (|| {
         let mut dialogs = Dialogs;
         if !screen.is_full() {
@@ -76,6 +89,7 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
             &mut raw,
             tty.as_ref(),
             &ui,
+            update_notice.as_ref(),
         )
     })();
     // Turn off mouse reporting before restoring canonical mode; otherwise a
@@ -142,6 +156,25 @@ fn show_history_for<R: BufRead, W: Write>(
     sessions::show_recent_with(messages, output, ui)
 }
 
+fn offer_update(output: &mut Screen, keys: &Receiver<u8>, tag: &str) -> Result<()> {
+    if output.select(
+        &format!("Hibiscus {tag} is available"),
+        &["Later".into(), "Update now".into()],
+        None,
+        keys,
+    )? == Some(1)
+    {
+        output.suspend()?;
+        let result = update::install(tag);
+        output.resume()?;
+        match result {
+            Ok(()) => writeln!(output, "Updated to {tag}. Restart Hibiscus to use it.")?,
+            Err(error) => writeln!(output, "Update failed: {error}")?,
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn chat<R: BufRead>(
     rpc: &mut Rpc,
@@ -153,6 +186,7 @@ fn chat<R: BufRead>(
     raw: &mut Option<RawMode>,
     tty: Option<&Terminal>,
     ui: &Ui,
+    update_notice: Option<&Receiver<Option<String>>>,
 ) -> Result<()> {
     let mut line = String::new();
     loop {
@@ -161,11 +195,18 @@ fn chat<R: BufRead>(
         }
         line.clear();
         if let (Some(events), Some(raw)) = (events.as_ref(), raw.as_mut()) {
-            let Some(text) = (if output.is_full() {
-                output.prompt(&events.receiver)?
+            let text = if output.is_full() {
+                match output.prompt_with_update(&events.receiver, update_notice)? {
+                    PromptAction::Text(text) => text,
+                    PromptAction::Update(tag) => {
+                        offer_update(output, &events.receiver, &tag)?;
+                        continue;
+                    }
+                }
             } else {
                 terminal::read_line(&events.receiver, raw)?
-            }) else {
+            };
+            let Some(text) = text else {
                 return Ok(());
             };
             line.push_str(&text);
@@ -468,6 +509,7 @@ fn auth_handoff<R: BufRead>(
         "In Pi, type {action} then /quit to return to Hibiscus."
     )?;
     let mut command = Command::new(&pi);
+    configure_builtin_tools(&mut command);
     if let Some(path) = &session {
         command.arg("--session").arg(path);
     } else {

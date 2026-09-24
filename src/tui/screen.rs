@@ -12,6 +12,12 @@ use super::{
 use crate::{chat::commands, Result};
 
 #[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PromptAction {
+    Text(Option<String>),
+    Update(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Navigation {
     Escape,
     EscapeWith(u8),
@@ -218,12 +224,24 @@ impl Screen {
         self.render()
     }
 
+    #[cfg(test)]
     pub(crate) fn prompt(&mut self, events: &Receiver<u8>) -> Result<Option<String>> {
+        match self.prompt_with_update(events, None)? {
+            PromptAction::Text(text) => Ok(text),
+            PromptAction::Update(_) => unreachable!(),
+        }
+    }
+
+    pub(crate) fn prompt_with_update(
+        &mut self,
+        events: &Receiver<u8>,
+        updates: Option<&Receiver<Option<String>>>,
+    ) -> Result<PromptAction> {
         self.draft.clear();
         self.suggestions = None;
         self.suggestions_dismissed = false;
         self.render()?;
-        self.read_prompt(events)
+        self.read_prompt(events, updates)
     }
 
     pub(crate) fn select(
@@ -374,10 +392,50 @@ impl Screen {
         result
     }
 
-    fn read_prompt(&mut self, events: &Receiver<u8>) -> Result<Option<String>> {
+    fn read_prompt(
+        &mut self,
+        events: &Receiver<u8>,
+        mut updates: Option<&Receiver<Option<String>>>,
+    ) -> Result<PromptAction> {
         let mut pending = Vec::new();
         let mut queued = self.pending_input.take();
-        while let Some(byte) = queued.take().or_else(|| events.recv().ok()) {
+        loop {
+            // A delayed network check can interrupt idle input, never a draft
+            // already being typed. No update result ever blocks terminal input.
+            if self.draft.is_empty() && pending.is_empty() && queued.is_none() {
+                // Give already queued typing priority over an update notice.
+                queued = events.try_recv().ok();
+                if queued.is_none() {
+                    if let Some(receiver) = updates {
+                        match receiver.try_recv() {
+                            Ok(Some(version)) => return Ok(PromptAction::Update(version)),
+                            Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                updates = None
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                        }
+                    }
+                }
+            }
+            let byte = match queued.take() {
+                Some(byte) => byte,
+                None => {
+                    if updates.is_none() {
+                        match events.recv() {
+                            Ok(byte) => byte,
+                            Err(_) => return Ok(PromptAction::Text(None)),
+                        }
+                    } else {
+                        match events.recv_timeout(Duration::from_millis(100)) {
+                            Ok(byte) => byte,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                return Ok(PromptAction::Text(None));
+                            }
+                        }
+                    }
+                }
+            };
             match byte {
                 b'\r' | b'\n' => {
                     let completed = self.suggestions.as_ref().and_then(|picker| {
@@ -389,9 +447,9 @@ impl Screen {
                     self.draft.clear();
                     self.suggestions = None;
                     self.render()?;
-                    return Ok(Some(message));
+                    return Ok(PromptAction::Text(Some(message)));
                 }
-                3 | 4 if self.draft.is_empty() => return Ok(None),
+                3 | 4 if self.draft.is_empty() => return Ok(PromptAction::Text(None)),
                 3 => {
                     self.draft.clear();
                     pending.clear();
@@ -440,7 +498,6 @@ impl Screen {
                 _ => {}
             }
         }
-        Ok(None)
     }
 
     fn size(&self) -> (usize, usize) {
@@ -1073,6 +1130,24 @@ mod tests {
         });
         let mut screen = Screen::new(false).unwrap();
         assert_eq!(screen.prompt(&recv).unwrap().as_deref(), Some("/m"));
+    }
+
+    #[test]
+    fn update_notice_waits_for_a_started_draft_to_finish() {
+        let (keys, events) = std::sync::mpsc::channel();
+        let (notify, updates) = std::sync::mpsc::channel();
+        let mut screen = Screen::new(false).unwrap();
+        screen.draft = "half-written".into();
+        notify.send(Some("v0.2.0".into())).unwrap();
+        keys.send(b'\r').unwrap();
+        assert_eq!(
+            screen.read_prompt(&events, Some(&updates)).unwrap(),
+            PromptAction::Text(Some("half-written".into()))
+        );
+        assert_eq!(
+            screen.prompt_with_update(&events, Some(&updates)).unwrap(),
+            PromptAction::Update("v0.2.0".into())
+        );
     }
 
     #[test]

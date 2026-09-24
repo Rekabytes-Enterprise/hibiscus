@@ -34,12 +34,14 @@ fn run(saved: bool, other_provider: bool) {
     }
     let log = root.join("pi-keys");
     let args = root.join("pi-args");
+    let rpc_args = root.join("rpc-args");
     let sdk = root.join("sdk.mjs");
     let sdk_marker = root.join("sdk-loaded");
     fs::write(&sdk, "import { writeFileSync } from 'node:fs'; writeFileSync(process.env.HIBISCUS_TEST_SDK_MARKER, 'loaded'); throw new Error('should not load');").unwrap();
     let script = root.join("pi");
     fs::write(&script, r#"#!/bin/sh
 if [ "$1" = "--mode" ]; then
+ printf '%s\n' "$*" >> "$HIBISCUS_TEST_RPC_ARGS"
  while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
@@ -73,6 +75,7 @@ fi
         .env("HIBISCUS_TEST_SESSION", &session)
         .env("HIBISCUS_TEST_LOG", &log)
         .env("HIBISCUS_TEST_ARGS", &args)
+        .env("HIBISCUS_TEST_RPC_ARGS", &rpc_args)
         .env("HIBISCUS_TEST_SDK_MARKER", &sdk_marker)
         .env(
             "HIBISCUS_AUTH_SDK",
@@ -110,11 +113,30 @@ fi
         "SDK must not run for an explicitly chosen other provider"
     );
     let handed_off = fs::read_to_string(args).unwrap();
+    let rpc_launches = fs::read_to_string(rpc_args).unwrap();
+    let mut launches = rpc_launches.lines();
+    let base = "--mode rpc --no-extensions --tools read,bash,edit,write";
+    assert_eq!(launches.next(), Some(base));
     if saved {
-        assert_eq!(handed_off, format!("--session {}", session.display()));
+        assert_eq!(
+            launches.next(),
+            Some(format!("{base} --session {}", session.display()).as_str())
+        );
+        assert_eq!(
+            handed_off,
+            format!(
+                "--no-extensions --tools read,bash,edit,write --session {}",
+                session.display()
+            )
+        );
     } else {
-        assert_eq!(handed_off, "--no-session");
+        assert_eq!(launches.next(), Some(base));
+        assert_eq!(
+            handed_off,
+            "--no-extensions --tools read,bash,edit,write --no-session"
+        );
     }
+    assert_eq!(launches.next(), None);
     drop(tty);
     fs::remove_dir_all(root).unwrap();
 }
