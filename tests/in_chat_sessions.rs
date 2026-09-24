@@ -16,7 +16,11 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
+        Self::in_dir(&std::env::temp_dir())
+    }
+
+    fn in_dir(parent: &Path) -> Self {
+        let root = parent.join(format!(
             "hibiscus-switch-test-{}-{}",
             std::process::id(),
             SystemTime::now()
@@ -24,6 +28,10 @@ impl Fixture {
                 .unwrap()
                 .as_nanos()
         ));
+        fs::create_dir_all(&root).unwrap();
+        // temp_dir may contain aliases (macOS /var vs /private/var). Match the
+        // physical cwd returned by getcwd in the Hibiscus subprocess.
+        let root = root.canonicalize().unwrap();
         let cwd = root.join("project");
         let dir = root.join("sessions");
         fs::create_dir_all(&cwd).unwrap();
@@ -115,6 +123,33 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn sessions_work_when_fixture_parent_is_a_symlink() {
+    let parent = Fixture::new();
+    let alias = parent.root.join("alias");
+    std::os::unix::fs::symlink(&parent.cwd, &alias).unwrap();
+    let fixture = Fixture::in_dir(&alias);
+    assert!(fixture.root.starts_with(&parent.cwd));
+    let output = fixture.run("/continue\n/sessions\n2\n/quit\n", &fixture.older);
+    assert!(
+        output.contains("you> latest\nassistant> latest answer\n"),
+        "{output}"
+    );
+    assert!(output.contains("Sessions for this directory"), "{output}");
+    assert!(
+        output.contains("you> older\nassistant> older answer\n"),
+        "{output}"
+    );
+    let switched = fs::read_to_string(&fixture.log).unwrap();
+    assert_eq!(
+        switched.lines().collect::<Vec<_>>(),
+        vec![
+            fixture.latest.to_str().unwrap(),
+            fixture.older.to_str().unwrap()
+        ]
+    );
 }
 
 #[test]

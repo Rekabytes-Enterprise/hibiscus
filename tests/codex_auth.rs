@@ -1,8 +1,9 @@
+mod support;
 use std::fs;
-use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+use support::Pty;
 
 #[test]
 fn codex_login_uses_pi_sdk_and_reconnects_same_session_without_pi_tui() {
@@ -39,6 +40,11 @@ fn cancelling_codex_login_does_not_reconnect_or_write_credentials() {
     run("cancel");
 }
 
+#[test]
+fn delayed_sdk_startup_does_not_consume_keys_for_the_wrong_prompt() {
+    run("slow");
+}
+
 fn run(method: &str) {
     let root = std::env::temp_dir().join(format!(
         "hibiscus-auth-sdk-{}-{}",
@@ -63,7 +69,15 @@ while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
   *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s","model":{"provider":"%s","id":"gpt-test"}}}\n' "$id" "$HIBISCUS_TEST_SESSION" "$HIBISCUS_TEST_PROVIDER" ;;
-  *'"type":"prompt"'*) printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}\n{"type":"agent_settled"}\n' "$id" ;;
+  *'"type":"prompt"'*)
+   case "$line" in
+    *'"message":"hello"'*) reply=MOCK_REPLY_HELLO ;;
+    *'"message":"after"'*) reply=MOCK_REPLY_AFTER ;;
+    *) exit 14 ;;
+   esac
+   printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"%s"}}\n' "$id" "$reply"
+   sleep 0.2
+   printf '{"type":"agent_settled"}\n' ;;
   *) exit 13 ;;
  esac
 done
@@ -73,6 +87,9 @@ done
     fs::write(&sdk, r#"import { writeFileSync } from 'node:fs';
 export class ModelRuntime {
   static async create() {
+    if (process.env.HIBISCUS_TEST_AUTH_METHOD === 'slow') {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
     return { async login(provider, type, interaction) {
       const method = await interaction.prompt({type:'select',message:'Choose method', options:[
         {id:'browser',label:'Browser login'}, {id:'device_code',label:'Device code login'}]});
@@ -116,24 +133,8 @@ export class ModelRuntime {
 }
 "#).unwrap();
 
-    let mut master = 0;
-    let mut slave = 0;
-    assert_eq!(
-        unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
-            )
-        },
-        0
-    );
-    let stdin = unsafe { fs::File::from_raw_fd(slave) };
-    let stdout = stdin.try_clone().unwrap();
-    let stderr = stdin.try_clone().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hibiscus"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hibiscus"));
+    command
         .env("HIBISCUS_PI", &pi)
         .env("HIBISCUS_AUTH_SDK", &sdk)
         .env("HIBISCUS_TEST_SESSION", &session)
@@ -147,69 +148,46 @@ export class ModelRuntime {
             } else {
                 "openai-codex"
             },
-        )
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .pre_exec_set_tty()
-        .spawn()
-        .unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut all = Vec::new();
-        let mut buf = [0u8; 4096];
-        loop {
-            let n = unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
-                break;
-            };
-            all.extend_from_slice(&buf[..n as usize]);
-        }
-        all
-    });
-    std::thread::sleep(Duration::from_millis(230));
+        );
+    let mut tty = Pty::spawn(&mut command);
+    tty.wait_text("hibiscus");
     if !matches!(method, "empty" | "logged_out") {
-        send(master, b"hello\r");
-        std::thread::sleep(Duration::from_millis(170));
+        tty.send(b"hello\r");
+        tty.wait_text("MOCK_REPLY_HELLO");
+        tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
     }
-    send(master, b"/login\r");
-    std::thread::sleep(Duration::from_millis(300));
-    send(master, b"\r"); // choose Codex provider, regardless of selected model
-    std::thread::sleep(Duration::from_millis(250));
+    tty.send(b"/login\r");
+    tty.wait_text("Sign in to");
+    tty.send(b"\r");
+    tty.wait_text("Browser login");
     if method == "cancel" {
-        send(master, b"\x1b");
-        std::thread::sleep(Duration::from_millis(170));
-        send(master, b"/quit\r");
-        let status = child.wait().unwrap();
-        let bytes = reader.join().unwrap();
-        let shown = String::from_utf8_lossy(&bytes);
-        assert!(status.success(), "{status}: {shown}");
-        assert!(shown.contains("Codex sign-in cancelled."), "{shown}");
+        tty.send(b"\x1b");
+        tty.wait_text("Codex sign-in cancelled.");
+        tty.send(b"/quit\r");
+        tty.finish();
         assert!(!auth_log.exists());
         assert_eq!(fs::read_to_string(pi_log).unwrap().lines().count(), 1);
-        unsafe {
-            libc::close(master);
-        }
+        drop(tty);
         fs::remove_dir_all(root).unwrap();
         return;
     }
-    if method == "device" {
-        send(master, b"\x1b[B");
-    }
-    send(master, b"\r");
+    tty.send(if method == "device" {
+        b"\x1b[B\r"
+    } else {
+        b"\r"
+    });
     if method == "manual" {
-        std::thread::sleep(Duration::from_millis(300));
-        send(master, b"\x19"); // Ctrl+Y asks the terminal to copy the full URL
-        send(master, b"FAKE-SECRET-CODE\r");
+        tty.wait_text("Paste redirect URL:");
+        tty.send(b"\x19");
+        tty.wait_text("Sent sign-in URL to terminal clipboard");
+        tty.send(b"FAKE-SECRET-CODE\r");
     }
-    std::thread::sleep(Duration::from_millis(700));
-    send(master, b"after\r");
-    std::thread::sleep(Duration::from_millis(160));
-    send(master, b"/quit\r");
-    let status = child.wait().unwrap();
-    let bytes = reader.join().unwrap();
-    let shown = String::from_utf8_lossy(&bytes);
-    assert!(status.success(), "{status}: {shown}");
+    tty.wait_text("Codex sign-in completed. Reconnected Pi to this chat.");
+    tty.send(b"after\r");
+    tty.wait_text("MOCK_REPLY_AFTER");
+    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+    tty.send(b"/quit\r");
+    let shown = tty.finish();
     let expected = if method == "device" {
         "device_code"
     } else {
@@ -272,32 +250,6 @@ export class ModelRuntime {
             "{log}"
         );
     }
-    unsafe {
-        libc::close(master);
-    }
+    drop(tty);
     fs::remove_dir_all(root).unwrap();
-}
-
-fn send(fd: i32, bytes: &[u8]) {
-    assert_eq!(
-        unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) },
-        bytes.len() as isize
-    );
-}
-
-trait ControllingTty {
-    fn pre_exec_set_tty(&mut self) -> &mut Self;
-}
-impl ControllingTty for Command {
-    fn pre_exec_set_tty(&mut self) -> &mut Self {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            self.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            })
-        }
-    }
 }

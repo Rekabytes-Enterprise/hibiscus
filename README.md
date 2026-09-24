@@ -1,17 +1,28 @@
 # hibiscus
 
+[![CI](https://github.com/Rekabytes-Enterprise/hibiscus/actions/workflows/ci.yml/badge.svg)](https://github.com/Rekabytes-Enterprise/hibiscus/actions/workflows/ci.yml)
+
 Hibiscus is a small Rust terminal client for the [Pi](https://pi.dev) agent. It talks to Pi through its JSONL RPC interface: Pi owns models, authentication, tools, agent runs, and persisted sessions; Hibiscus provides the CLI and terminal UI.
 
 ## Requirements
 
-- Rust and Cargo
-- A C linker (Ubuntu/WSL: `sudo apt update && sudo apt install -y build-essential`)
 - Pi installed, configured, and available as `pi` on `PATH`
 - Node.js 22.19+ for the inline Codex sign-in flow (without Node, Hibiscus falls back to Pi's TUI)
+- Rust, Cargo, and a C linker only when building from source (Ubuntu/WSL: `sudo apt update && sudo apt install -y build-essential`)
 
 Set `HIBISCUS_PI` if Pi is installed under a different executable name or path.
 
-## Build and test
+## Install
+
+Prebuilt releases support Linux and macOS on x86-64 and ARM64:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/main/install.sh | sh
+```
+
+The installer verifies the release checksum and writes to `~/.local/bin` without `sudo`. Review-first installation, private-repository authentication, version pinning, and release details are covered in [Installation and releases](docs/installation.md).
+
+To build from source:
 
 ```sh
 cargo test
@@ -26,6 +37,7 @@ Run `cargo install --path .` again after changing the source.
 hibiscus                                  # start a new chat
 hibiscus --continue                       # resume the latest session here
 hibiscus --sessions                       # choose a saved session
+hibiscus --version                        # print installed version
 hibiscus "Explain this repository"        # one-shot prompt
 printf 'Hello\nFollow up\n' | hibiscus   # piped multi-turn chat
 ```

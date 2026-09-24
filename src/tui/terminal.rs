@@ -2,11 +2,12 @@ use crate::Result;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 /// Owns a terminal in raw mode, independent of piped chat input/output.
-/// The reader thread exits at process shutdown; do not join it while blocked on input.
+/// The independently opened, nonblocking reader can be stopped before handoff.
 pub(crate) struct Terminal {
     tty: File,
     original: libc::termios,
@@ -30,10 +31,25 @@ impl Terminal {
     }
 
     pub(crate) fn events(&self) -> io::Result<TerminalEvents> {
-        let tty = self.tty.try_clone()?;
+        // Do not set O_NONBLOCK on a clone: clones share file status flags with
+        // the output handle. A separate open keeps terminal writes blocking.
+        let tty = File::options()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open("/dev/tty")?;
+        Self::events_from(tty)
+    }
+
+    // The caller supplies an independently opened nonblocking tty.
+    fn events_from(tty: File) -> io::Result<TerminalEvents> {
         let fd = tty.as_raw_fd();
-        // A short poll timeout lets a handoff stop and join this reader without
-        // injecting a byte into the terminal or waiting for a keypress.
+        if fd as usize >= libc::FD_SETSIZE {
+            return Err(io::Error::other(
+                "terminal descriptor exceeds select capacity",
+            ));
+        }
+        // select supports Darwin's controlling tty device. Nonblocking reads
+        // also prevent stale readiness from trapping stop()/join().
         let (sender, receiver) = mpsc::channel();
         // Each reader is stopped and joined before handing the tty to Pi. A
         // detached reader could steal Pi's login keystrokes even after raw mode
@@ -44,21 +60,47 @@ impl Terminal {
             let mut tty = tty;
             let mut byte = [0];
             while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
-                let mut poll_fd = libc::pollfd {
-                    fd,
-                    events: libc::POLLIN,
-                    revents: 0,
+                // SAFETY: fd is owned here and checked against FD_SETSIZE.
+                let ready = unsafe {
+                    let mut reads: libc::fd_set = std::mem::zeroed();
+                    libc::FD_ZERO(&mut reads);
+                    libc::FD_SET(fd, &mut reads);
+                    let mut timeout = libc::timeval {
+                        tv_sec: 0,
+                        tv_usec: 50_000,
+                    };
+                    libc::select(
+                        fd + 1,
+                        &mut reads,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        &mut timeout,
+                    )
                 };
-                // SAFETY: fd is owned by the reader thread for the whole poll.
-                match unsafe { libc::poll(&mut poll_fd, 1, 50) } {
-                    0 => continue,
-                    n if n < 0 => break,
-                    _ => {}
+                if ready == 0 {
+                    continue;
+                }
+                if ready < 0 {
+                    if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    break;
+                }
+                if stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
                 }
                 match tty.read(&mut byte) {
-                    Ok(1) if sender.send(byte[0]).is_err() => break,
-                    Ok(_) => {}
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if sender.send(byte[0]).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                        ) => {}
                     Err(_) => break,
                 }
             }
@@ -169,4 +211,61 @@ pub(crate) fn read_line(events: &Receiver<u8>, raw: &mut RawMode) -> Result<Opti
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::fd::FromRawFd;
+    use std::time::Duration;
+
+    #[test]
+    fn idle_terminal_reader_stops_without_an_extra_keypress() {
+        let mut master = -1;
+        let mut slave = -1;
+        unsafe {
+            assert_eq!(
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut()
+                ),
+                0
+            );
+        }
+        let mut master = unsafe { File::from_raw_fd(master) };
+        let slave = unsafe { File::from_raw_fd(slave) };
+        unsafe {
+            let mut raw: libc::termios = std::mem::zeroed();
+            assert_eq!(libc::tcgetattr(slave.as_raw_fd(), &mut raw), 0);
+            libc::cfmakeraw(&mut raw);
+            assert_eq!(libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &raw), 0);
+            let flags = libc::fcntl(slave.as_raw_fd(), libc::F_GETFL);
+            assert_ne!(flags, -1);
+            assert_ne!(
+                libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK),
+                -1
+            );
+        }
+        let mut events = Terminal::events_from(slave).unwrap();
+        master.write_all(b"x").unwrap();
+        assert_eq!(
+            events
+                .receiver
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap(),
+            b'x'
+        );
+        let (done, stopped) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            events.stop();
+            done.send(()).unwrap();
+        });
+        stopped
+            .recv_timeout(Duration::from_secs(2))
+            .expect("idle reader did not stop");
+        worker.join().unwrap();
+    }
 }

@@ -26,11 +26,18 @@ enum Start {
     Sessions,
     Prompt(String),
     Help,
+    Version,
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Start> {
     match args.next().as_deref() {
         Some("--help" | "-h") => Ok(Start::Help),
+        Some("--version" | "-V") => {
+            if args.next().is_some() {
+                return Err("--version takes no arguments".into());
+            }
+            Ok(Start::Version)
+        }
         Some("--continue" | "-c") => {
             if args.next().is_some() {
                 return Err("--continue takes no prompt; start chat and type your message".into());
@@ -55,8 +62,12 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Start> {
 
 fn run() -> Result<()> {
     match parse_args(env::args().skip(1))? {
+        Start::Version => {
+            println!("hibiscus {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Start::Help => {
-            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --help\n\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /new, /continue, /sessions, /models, /login, /logout, /quit.\n/login uses Pi's Codex SDK flow in the full-screen UI when available; other providers and /logout hand off to Pi. Finish there and type /quit to return.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_PI to override the pi executable.");
+            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus --help\n\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /new, /continue, /sessions, /models, /login, /logout, /quit.\n/login uses Pi's Codex SDK flow in the full-screen UI when available; other providers and /logout hand off to Pi. Finish there and type /quit to return.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_PI to override the pi executable.");
             Ok(())
         }
         Start::Prompt(prompt) => {
@@ -120,5 +131,10 @@ mod tests {
             parse_args(["--sessions".into()].into_iter()).unwrap(),
             Start::Sessions
         ));
+        assert!(matches!(
+            parse_args(["--version".into()].into_iter()).unwrap(),
+            Start::Version
+        ));
+        assert!(parse_args(["-V".into(), "extra".into()].into_iter()).is_err());
     }
 }

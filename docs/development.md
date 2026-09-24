@@ -13,13 +13,19 @@ cargo clippy --all-targets -- -D warnings
 cargo install --path .
 ```
 
-Reinstall after modifying the source before testing the `hibiscus` command on your PATH. `cargo run --` uses the working tree without installing it.
+Reinstall after modifying the source before testing the `hibiscus` command on your PATH. `cargo run --` uses the working tree without installing it. See [Installation and releases](installation.md) for the checksum-verifying prebuilt installer and four-target release workflow.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pushes and pull requests to `dev` only, with manual dispatch available. Direct pushes and pull requests targeting `main` do not trigger this CI workflow. The lint job checks `cargo fmt`, runs Clippy with warnings denied, validates both installer scripts, and executes the mocked installer test. Rust tests run independently on Ubuntu and macOS with parent `TERM=dumb`; full-screen PTY fixtures explicitly set child `TERM=xterm-256color` and an 80×24 window instead of inheriting the runner's terminal capabilities. Jobs use read-only repository permissions and redundant runs on the same ref are cancelled. Rust builds are cached; auth tests use an explicit Node 24 installation. Jobs have a 15-minute limit and the Rust test step has a 5-minute backstop.
+
+Tagged releases use the separate `.github/workflows/release.yml` gate, which repeats the quality checks before building and publishing all supported target archives. A green CI run does not replace real Pi/provider or terminal smoke testing.
 
 ## Test boundaries
 
 - Module unit tests cover framing, prompt settlement, picker bounds, command filtering, Markdown, diffs, and terminal render state.
 - `tests/chat.rs` and `tests/in_chat_sessions.rs` run against mock Pi executables with piped input/output.
-- `tests/tty.rs`, `tests/models_tty.rs`, `tests/dialog_tty.rs`, `tests/auth_handoff.rs`, and `tests/codex_auth.rs` use a controlling PTY to exercise raw input, UI output, interrupts, pickers, and both authentication paths. Codex tests use a fake SDK module with no network or real credentials. `completed_login_reconnects_without_waiting_for_browser_connection_to_close` keeps a local callback-like socket open after SDK completion and verifies that login still returns promptly. A PTY test must **drain its output concurrently**; otherwise full-screen redraws can fill the PTY buffer and hang the child.
+- `tests/tty.rs`, `tests/models_tty.rs`, `tests/dialog_tty.rs`, `tests/auth_handoff.rs`, and `tests/codex_auth.rs` use a controlling PTY to exercise raw input, UI output, interrupts, pickers, and both authentication paths. Codex tests use a fake SDK module with no provider network requests or real credentials (one test uses loopback sockets). `completed_login_reconnects_without_waiting_for_browser_connection_to_close` keeps a local callback-like socket open after SDK completion and verifies that login still returns promptly. PTY output must be drained while the child runs; otherwise redraws can fill its buffer and block progress. The auth suites use `tests/support/mod.rs`: nonblocking PTY I/O, 15-second stage/exit deadlines, a bounded output buffer for diagnostics, and process-group cleanup on drop, including panic paths. Wait for newly emitted prompts or replies rather than fixed delays; the slow-SDK regression injects a 1.5-second startup delay. `tests/pty_harness.rs` tests input/output and early-exit diagnostics. The remaining model/dialog/streaming fixtures still use older reader-thread helpers and are candidates for migration.
 - The mock tests do not verify provider authentication, network APIs, or the appearance in every terminal. Do not claim real-Pi behavior based only on mocks.
 
 When changing JSONL handling, preserve LF-only framing, keep stderr separate, correlate responses by command ID, and wait for `agent_settled` rather than treating prompt acceptance or `agent_end` as completion. Keep regression coverage for aborts and subsequent prompts. When changing terminal input, test Esc against mouse/modified-key sequences and restore raw mode, mouse reporting, and alternate screen on all exit paths.

@@ -1,19 +1,18 @@
+mod support;
 use std::fs;
-use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+use support::Pty;
 
 #[test]
 fn login_handoff_does_not_steal_pi_keys_and_returns_to_chat() {
     run(true, false);
 }
-
 #[test]
 fn login_handoff_without_saved_chat_uses_an_ephemeral_pi_session() {
     run(false, false);
 }
-
 #[test]
 fn other_provider_choice_uses_pi_tui_even_when_codex_sdk_is_available() {
     run(false, true);
@@ -45,37 +44,31 @@ if [ "$1" = "--mode" ]; then
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
    *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s"}}\n' "$id" "$HIBISCUS_TEST_SESSION" ;;
-   *'"type":"prompt"'*) printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}\n{"type":"agent_settled"}\n' "$id" ;;
+   *'"type":"prompt"'*)
+    case "$line" in
+     *'"message":"hello"'*) reply=MOCK_REPLY_HELLO ;;
+     *'"message":"after"'*) reply=MOCK_REPLY_AFTER ;;
+     *) exit 14 ;;
+    esac
+    printf '{"type":"response","id":"%s","success":true}\n{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"%s"}}\n' "$id" "$reply"
+    # Deliberately separate visible text from settlement to expose early input.
+    sleep 0.2
+    printf '{"type":"agent_settled"}\n' ;;
    *) exit 13 ;;
   esac
  done
 else
  printf '%s' "$*" > "$HIBISCUS_TEST_ARGS"
  stty -echo
+ printf 'MOCK_TUI_READY\n'
  IFS= read -r value
  stty echo
  printf '%s' "$value" > "$HIBISCUS_TEST_LOG"
 fi
 "#).unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let mut master = 0;
-    let mut slave = 0;
-    assert_eq!(
-        unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
-            )
-        },
-        0
-    );
-    let stdin = unsafe { std::fs::File::from_raw_fd(slave) };
-    let stdout = stdin.try_clone().unwrap();
-    let stderr = stdin.try_clone().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hibiscus"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hibiscus"));
+    command
         .env("HIBISCUS_PI", &script)
         .env("HIBISCUS_TEST_SESSION", &session)
         .env("HIBISCUS_TEST_LOG", &log)
@@ -88,42 +81,29 @@ fi
             } else {
                 std::ffi::OsStr::new("")
             },
-        )
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .pre_exec_set_tty()
-        .spawn()
-        .unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        while unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
-    });
-    std::thread::sleep(Duration::from_millis(250));
+        );
+    let mut tty = Pty::spawn(&mut command);
+    tty.wait_text("hibiscus");
     if saved {
-        send(master, b"hello\r");
-        std::thread::sleep(Duration::from_millis(250));
+        tty.send(b"hello\r");
+        tty.wait_text("MOCK_REPLY_HELLO");
+        tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
     }
-    send(master, b"/login\r");
-    std::thread::sleep(Duration::from_millis(250));
-    if other_provider {
-        send(master, b"\x1b[B\r");
-    }
-    // choose Pi TUI provider
-    else {
-        send(master, b"\r");
-    } // Codex choice; SDK unavailable in this mock
-    std::thread::sleep(Duration::from_millis(250));
-    send(master, b"y\r");
-    std::thread::sleep(Duration::from_millis(250));
-    send(master, b"pi-only-input\r");
-    std::thread::sleep(Duration::from_millis(250));
-    send(master, b"after\r");
-    std::thread::sleep(Duration::from_millis(250));
-    send(master, b"/quit\r");
-    let status = child.wait().unwrap();
-    reader.join().unwrap();
-    assert!(status.success(), "{status}");
+    tty.send(b"/login\r");
+    tty.wait_text("Sign in to");
+    tty.send(if other_provider { b"\x1b[B\r" } else { b"\r" });
+    tty.wait_text("Hand off to Pi for /login?");
+    tty.send(b"y\r");
+    // This marker is emitted only after the old reader is joined and Pi owns
+    // the tty. No input is needed to unblock the reader being stopped.
+    tty.wait_text("MOCK_TUI_READY");
+    tty.send(b"pi-only-input\r");
+    tty.wait_text("Returned from Pi.");
+    tty.send(b"after\r");
+    tty.wait_text("MOCK_REPLY_AFTER");
+    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+    tty.send(b"/quit\r");
+    tty.finish();
     assert_eq!(fs::read_to_string(log).unwrap(), "pi-only-input");
     assert!(
         !sdk_marker.exists(),
@@ -135,31 +115,6 @@ fi
     } else {
         assert_eq!(handed_off, "--no-session");
     }
-    unsafe {
-        libc::close(master);
-    }
+    drop(tty);
     fs::remove_dir_all(root).unwrap();
-}
-
-fn send(fd: i32, bytes: &[u8]) {
-    assert_eq!(
-        unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) },
-        bytes.len() as isize
-    );
-}
-trait ControllingTty {
-    fn pre_exec_set_tty(&mut self) -> &mut Self;
-}
-impl ControllingTty for Command {
-    fn pre_exec_set_tty(&mut self) -> &mut Self {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            self.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            })
-        }
-    }
 }
