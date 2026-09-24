@@ -138,8 +138,11 @@ fn text(content: &Value) -> Option<String> {
         Value::Array(parts) => {
             let text = parts
                 .iter()
-                .filter(|part| part["type"] == "text")
-                .filter_map(|part| part["text"].as_str())
+                .filter_map(|part| match part["type"].as_str() {
+                    Some("text") => part["text"].as_str(),
+                    Some("image") => Some("[image attached]"),
+                    _ => None,
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
             (!text.is_empty()).then_some(text)
@@ -231,7 +234,7 @@ pub(crate) fn show_recent_with<W: Write>(
         if let Some(content) = text(&message["content"]) {
             if !content.is_empty() {
                 if ui.interactive {
-                    if label == "user" {
+                    if label == "you" {
                         ui.user(output)?;
                     } else {
                         ui.assistant(output)?;
@@ -254,6 +257,30 @@ pub(crate) fn show_recent_with<W: Write>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn history_shows_image_placeholders_without_base64() {
+        let mut output = Vec::new();
+        show_recent(&[json!({"role":"user","content":[{"type":"image","mimeType":"image/png","data":"private-image-bytes"}]})], &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("you> [image attached]"));
+        assert!(!output.contains("private-image-bytes"));
+    }
+
+    #[test]
+    fn interactive_history_preserves_user_and_agent_roles() {
+        let messages = vec![
+            json!({"role":"user","content":"question\ncontinued"}),
+            json!({"role":"assistant","content":"answer"}),
+        ];
+        let mut output = Vec::new();
+        show_recent_with(&messages, &mut output, &Ui::new(true)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("you ›"), "{output}");
+        assert!(output.contains("hibi ›"), "{output}");
+        assert_eq!(output.matches("you ›").count(), 1);
+        assert_eq!(output.matches("hibi ›").count(), 1);
+    }
 
     #[test]
     fn shows_only_last_five_user_turns_and_their_replies() {

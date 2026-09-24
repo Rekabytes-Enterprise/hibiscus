@@ -45,12 +45,12 @@ done
     // The active anthropic/sonnet is second after anthropic/haiku.
     tty.send(b"\x1b[B\r");
     tty.wait_text("Selected openai-codex/gpt.");
-    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+    tty.wait_text("Enter send · Ctrl+Enter");
     tty.send(b"/models\r");
     tty.wait_text("Models · all providers");
     tty.send(b"\r");
     tty.wait_text("Already using openai-codex/gpt.");
-    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+    tty.wait_text("Enter send · Ctrl+Enter");
     tty.send(b"/quit\r");
     let shown = tty.finish();
     assert_eq!(fs::read_to_string(changes).unwrap(), "openai-codex/gpt\n");

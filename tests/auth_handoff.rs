@@ -81,7 +81,7 @@ fi
     if saved {
         tty.send(b"hello\r");
         tty.wait_text("MOCK_REPLY_HELLO");
-        tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+        tty.wait_text("Enter send · Ctrl+Enter");
     }
     tty.send(b"/login\r");
     tty.wait_text("Sign in to");
@@ -95,7 +95,7 @@ fi
     tty.wait_text("Returned from Pi.");
     tty.send(b"after\r");
     tty.wait_text("MOCK_REPLY_AFTER");
-    tty.wait_text("Enter send  ·  Wheel / PgUp/PgDn scroll");
+    tty.wait_text("Enter send · Ctrl+Enter");
     tty.send(b"/quit\r");
     tty.finish();
     assert_eq!(fs::read_to_string(log).unwrap(), "pi-only-input");

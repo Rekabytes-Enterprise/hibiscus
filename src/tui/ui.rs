@@ -67,7 +67,7 @@ impl Ui {
 
     pub(crate) fn assistant(&self, out: &mut impl Write) -> io::Result<()> {
         if self.interactive {
-            write!(out, "{} ", self.style("1;38;2;236;74;125", "hibiscus ›"))?;
+            write!(out, "{} ", self.style("1;38;2;236;74;125", "hibi ›"))?;
             out.flush()?;
         }
         Ok(())

@@ -134,10 +134,16 @@ pub(crate) fn format(text: &str, width: usize) -> Vec<Row> {
             fence = false;
             in_diff = false;
             content
-        } else if let Some(content) = source.strip_prefix("hibiscus › ") {
+        } else if let Some(content) = source
+            .strip_prefix("hibi › ")
+            .or_else(|| source.strip_prefix("hibiscus › "))
+        {
             role = Role::Assistant;
             fence = false;
             in_diff = false;
+            let mut label = Vec::new();
+            push(&mut label, "hibi", Tone::Activity);
+            rows.extend(wrap_cells(label, width, role));
             content
         } else if source.trim_start().starts_with('·') {
             role = Role::Note;
@@ -318,6 +324,7 @@ mod tests {
         assert_eq!(
             rows.iter().map(text).collect::<Vec<_>>(),
             [
+                "hibi",
                 "Overview",
                 "• Bold and code link",
                 "  rust",
@@ -325,9 +332,9 @@ mod tests {
                 ""
             ]
         );
-        assert!(rows[0].cells.iter().all(|cell| cell.tone == Tone::Heading));
-        assert_eq!(rows[1].cells[2].tone, Tone::Strong);
-        assert!(rows[3]
+        assert!(rows[1].cells.iter().all(|cell| cell.tone == Tone::Heading));
+        assert_eq!(rows[2].cells[2].tone, Tone::Strong);
+        assert!(rows[4]
             .cells
             .iter()
             .skip(2)
@@ -355,7 +362,7 @@ mod tests {
         let rows = format("hibiscus › - testing a fairly long line", 15);
         assert_eq!(
             rows.iter().map(text).collect::<Vec<_>>(),
-            ["• testing a", "  fairly long", "  line"]
+            ["hibi", "• testing a", "  fairly long", "  line"]
         );
         assert!(rows.iter().all(|r| r.cells.len() <= 15));
     }
@@ -363,7 +370,7 @@ mod tests {
     #[test]
     fn unmatched_markers_remain_visible() {
         let rows = format("hibiscus › src/my_file_name.rs and **unfinished", 80);
-        assert_eq!(text(&rows[0]), "src/my_file_name.rs and **unfinished");
+        assert_eq!(text(&rows[1]), "src/my_file_name.rs and **unfinished");
     }
 
     #[test]
@@ -398,8 +405,14 @@ mod tests {
         );
         assert_eq!(
             rows.iter().map(text).collect::<Vec<_>>(),
-            ["Name  │  Value", "pink  │  2", "1. first", "────────"]
+            [
+                "hibi",
+                "Name  │  Value",
+                "pink  │  2",
+                "1. first",
+                "────────"
+            ]
         );
-        assert_eq!(rows[0].cells[0].tone, Tone::Strong);
+        assert_eq!(rows[1].cells[0].tone, Tone::Strong);
     }
 }

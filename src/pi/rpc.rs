@@ -708,7 +708,7 @@ mod tests {
         assert!(!active_keys(&rx, &mut display).unwrap());
         assert_eq!(
             display.0,
-            [Navigation::ScrollLines(3), Navigation::ScrollPage(1)]
+            [Navigation::MouseScroll(3, 10), Navigation::ScrollPage(1)]
         );
         tx.send(27).unwrap();
         assert!(active_keys(&rx, &mut display).unwrap());

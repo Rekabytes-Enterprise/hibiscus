@@ -214,11 +214,17 @@ fn chat<R: BufRead>(
             return Ok(());
         }
         let message = line.trim();
-        if output.is_full() && !message.is_empty() {
-            output.user(message)?;
+        let images = output.take_images();
+        if output.is_full() && (!message.is_empty() || !images.is_empty()) {
+            let shown = if images.is_empty() {
+                message.to_owned()
+            } else {
+                format!("{message}\n[{} image(s) attached]", images.len())
+            };
+            output.user(shown.trim_start_matches('\n'))?;
         }
         match message {
-            "" => continue,
+            "" if images.is_empty() => continue,
             "/quit" | "/exit" => return Ok(()),
             "/help" => ui.help(output)?,
             "/new" => {
@@ -352,15 +358,21 @@ fn chat<R: BufRead>(
                     )?;
                 }
             }
-            _ => rpc.prompt(
-                message,
-                output,
-                input,
-                dialogs,
-                events.as_ref().map(|e| &e.receiver),
-                raw,
-                interactive,
-            )?,
+            _ => {
+                let mut command = json!({"type":"prompt", "message":message});
+                if !images.is_empty() {
+                    command["images"] = json!(images);
+                }
+                rpc.command(
+                    command,
+                    output,
+                    input,
+                    dialogs,
+                    events.as_ref().map(|e| &e.receiver),
+                    raw,
+                    interactive,
+                )?;
+            }
         }
     }
 }
