@@ -3,7 +3,20 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
+
+fn fixture_root(parent: &Path, timestamp: u128) -> PathBuf {
+    // macOS clocks can return the same timestamp in parallel test threads.
+    // A unique root also ensures one fixture's Drop cannot delete another's files.
+    parent.join(format!(
+        "hibiscus-switch-test-{}-{timestamp}-{}",
+        std::process::id(),
+        NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+    ))
+}
 
 struct Fixture {
     root: PathBuf,
@@ -20,14 +33,13 @@ impl Fixture {
     }
 
     fn in_dir(parent: &Path) -> Self {
-        let root = parent.join(format!(
-            "hibiscus-switch-test-{}-{}",
-            std::process::id(),
+        let root = fixture_root(
+            parent,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
-        ));
+                .as_nanos(),
+        );
         fs::create_dir_all(&root).unwrap();
         // temp_dir may contain aliases (macOS /var vs /private/var). Match the
         // physical cwd returned by getcwd in the Hibiscus subprocess.
@@ -123,6 +135,19 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn fixtures_with_the_same_clock_tick_have_distinct_roots() {
+    let parent = std::env::temp_dir();
+    let first = fixture_root(&parent, 123);
+    let second = fixture_root(&parent, 123);
+    assert_ne!(first, second);
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    fs::remove_dir(&first).unwrap();
+    assert!(second.is_dir());
+    fs::remove_dir(&second).unwrap();
 }
 
 #[test]
