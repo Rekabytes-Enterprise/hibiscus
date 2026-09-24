@@ -66,8 +66,8 @@ fi
                 &mut master,
                 &mut slave,
                 std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             )
         },
         0
@@ -155,7 +155,7 @@ impl ControllingTty for Command {
         use std::os::unix::process::CommandExt;
         unsafe {
             self.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
