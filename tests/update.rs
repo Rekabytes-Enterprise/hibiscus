@@ -116,6 +116,10 @@ esac
         let mut command = Command::new(&self.binary);
         command
             .env("HIBISCUS_PI", pi)
+            .env(
+                "HIBISCUS_TEST_PI_VERSION_LOG",
+                self.root.join("pi-version-checks"),
+            )
             .env("HIBISCUS_INSTALL_DIR", self.root.join("install"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("HIBISCUS_TEST_ROOT", &self.root)
@@ -216,6 +220,12 @@ fn startup_picker_updates_only_with_explicit_choice_and_keeps_chat_alive() {
     let fixture = Fixture::new();
     let pi = fixture.root.join("mock-pi");
     fs::write(&pi, r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'checked\n' >> "$HIBISCUS_TEST_PI_VERSION_LOG"
+  printf 'pi-mock\n'
+  exit 0
+fi
+[ "$1" = "--mode" ] && [ "$2" = "rpc" ] || exit 12
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
@@ -235,6 +245,7 @@ done
     tty.finish();
     drop(tty);
     assert_eq!(fs::read(&fixture.binary).unwrap(), original);
+    assert!(!fixture.root.join("pi-version-checks").exists());
     // Expire the once-per-day notice to exercise an explicit Update now.
     fs::remove_file(fixture.root.join("cache/hibiscus/update-check")).unwrap();
     let mut command = fixture.chat_command(&pi);
@@ -248,6 +259,10 @@ done
     ));
     tty.send(b"/quit\r");
     tty.finish();
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("pi-version-checks")).unwrap(),
+        "checked\n"
+    );
     assert_eq!(
         fs::read_to_string(&fixture.binary).unwrap(),
         "#!/bin/sh\necho updated-binary\n"
