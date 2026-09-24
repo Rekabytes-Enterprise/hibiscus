@@ -48,7 +48,7 @@ Interactive chat commands:
 - `/new` — start a new Pi session
 - `/continue` — resume the latest saved session
 - `/sessions` — choose and switch to a saved session
-- `/models` — choose an available model for the current provider
+- `/models` — choose an available model across providers, sorted by provider then model ID
 - `/login` — choose OpenAI Codex sign-in in Hibiscus, or open Pi for another provider (independent of the currently selected model)
 - `/logout` — hand the terminal to Pi for native logout
 - `/help`

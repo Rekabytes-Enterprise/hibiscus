@@ -1,6 +1,6 @@
 # Terminal UI
 
-Start `hibiscus` in a terminal for an interactive chat. Hibiscus starts Pi with extensions disabled and only its built-in `read`, `bash`, `edit`, and `write` tools active, so Pi-installed MCP extensions do not start (also during auth handoffs). Running Pi directly still uses your normal configuration. `hibiscus --continue` resumes the latest Pi session for this directory; `hibiscus --sessions` opens the startup numbered picker. Inside the full-screen chat, `/sessions` and `/models` use docked pickers above the composer.
+Start `hibiscus` in a terminal for an interactive chat. Hibiscus starts Pi with extensions disabled and only its built-in `read`, `bash`, `edit`, and `write` tools active, so Pi-installed MCP extensions do not start (also during auth handoffs). Running Pi directly still uses your normal configuration. `hibiscus --continue` resumes the latest Pi session for this directory; `hibiscus --sessions` opens the startup numbered picker. Inside the full-screen chat, `/sessions` and `/models` use docked pickers above the composer. `/models` lists Pi's configured models as `provider/model`, sorted by provider and model ID; selecting one switches providers and models in the current chat without a new login if Pi already has access. Pi remains responsible for credentials and reports any model-access errors.
 
 ## Input and navigation
 
