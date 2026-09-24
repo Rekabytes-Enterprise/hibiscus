@@ -45,4 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run Rust tests
+        # PTY fixtures must configure their own terminal, not inherit the runner's.
+        env:
+          TERM: dumb
         run: cargo test --locked

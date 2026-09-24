@@ -118,6 +118,12 @@ export class ModelRuntime {
 
     let mut master = 0;
     let mut slave = 0;
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
     assert_eq!(
         unsafe {
             libc::openpty(
@@ -125,7 +131,7 @@ export class ModelRuntime {
                 &mut slave,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                std::ptr::addr_of_mut!(size),
             )
         },
         0
@@ -134,6 +140,7 @@ export class ModelRuntime {
     let stdout = stdin.try_clone().unwrap();
     let stderr = stdin.try_clone().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_hibiscus"))
+        .env("TERM", "xterm-256color")
         .env("HIBISCUS_PI", &pi)
         .env("HIBISCUS_AUTH_SDK", &sdk)
         .env("HIBISCUS_TEST_SESSION", &session)
