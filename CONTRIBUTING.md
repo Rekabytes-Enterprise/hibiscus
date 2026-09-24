@@ -18,7 +18,7 @@ Hibiscus owns the Rust CLI, terminal presentation, and Pi RPC integration. Pi ow
    cargo clippy --all-targets -- -D warnings
    ```
 
-4. If behavior depends on Pi or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.
+4. Pushes and pull requests to `dev` must pass `.github/workflows/ci.yml`: formatting, Clippy with warnings denied, installer checks, and Rust tests on Ubuntu and macOS. If behavior depends on Pi or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.
 5. Reconcile `.pi/STATE.md` with current progress. Add to `.pi/MEMORY.md` only when a reusable decision or root cause is confirmed, updating an existing matching entry rather than duplicating it.
 
 ## Safety and privacy

@@ -1,5 +1,6 @@
 # Hibiscus documentation
 
+- [Installation and releases](installation.md) — prebuilt installer, supported platforms, source builds, and publishing.
 - [Architecture](architecture.md) — code layout, Pi RPC boundary, sessions, and lifecycle.
 - [Terminal UI](terminal.md) — shortcuts, scrolling, pickers, progress, and fallbacks.
 - [Development](development.md) — build, tests, manual checks, and project records.

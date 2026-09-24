@@ -13,7 +13,13 @@ cargo clippy --all-targets -- -D warnings
 cargo install --path .
 ```
 
-Reinstall after modifying the source before testing the `hibiscus` command on your PATH. `cargo run --` uses the working tree without installing it.
+Reinstall after modifying the source before testing the `hibiscus` command on your PATH. `cargo run --` uses the working tree without installing it. See [Installation and releases](installation.md) for the checksum-verifying prebuilt installer and four-target release workflow.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pushes and pull requests to `dev` only, with manual dispatch available. Direct pushes and pull requests targeting `main` do not trigger this CI workflow. The lint job checks `cargo fmt`, runs Clippy with warnings denied, validates both installer scripts, and executes the mocked installer test. Rust tests run independently on Ubuntu and macOS. Jobs use read-only repository permissions and redundant runs on the same ref are cancelled.
+
+Tagged releases use the separate `.github/workflows/release.yml` gate, which repeats the quality checks before building and publishing all supported target archives. A green CI run does not replace real Pi/provider or terminal smoke testing.
 
 ## Test boundaries
 
