@@ -3,7 +3,33 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+#[allow(dead_code)] // Each integration-test binary compiles this shared module independently.
+pub fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+    let tick = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    unique_temp_dir_at(prefix, tick)
+}
+
+#[allow(dead_code)]
+pub fn unique_temp_dir_at(prefix: &str, tick: u128) -> std::path::PathBuf {
+    loop {
+        let id = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("{prefix}-{}-{tick}-{id}", std::process::id()));
+        match std::fs::create_dir(&root) {
+            Ok(()) => return root.canonicalize().unwrap(),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("could not create fixture root: {error}"),
+        }
+    }
+}
 
 /// A bounded, single-reader PTY driver. Drop cleans up the isolated process
 /// group even when a test panics; no blocking reader thread needs joining.

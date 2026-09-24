@@ -2,7 +2,7 @@
 
 ## Set up
 
-Install Rust/Cargo, Pi, and a C linker. Inline Codex sign-in also needs Node.js 22.19+ to load the installed Pi SDK; without it Hibiscus falls back to Pi's TUI. On Ubuntu/WSL, install the linker with `sudo apt update && sudo apt install -y build-essential`. Pi must be available as `pi` on `PATH`, or `HIBISCUS_PI` must point to its executable. Hibiscus never installs Pi silently. For a nonstandard Pi install, `HIBISCUS_AUTH_SDK` can point to that trusted Pi package's `dist/index.js` (and `HIBISCUS_NODE` can override the Node executable). The SDK path is executable code; never point it at an untrusted file.
+Install Rust/Cargo, Pi, and a C linker. Inline Codex sign-in also needs Node.js 22.19+ to load the installed Pi SDK; without it Hibiscus falls back to Pi's TUI. On Ubuntu/WSL, install the linker with `sudo apt update && sudo apt install -y build-essential`. Pi must be available as `pi` on `PATH`, or `HIBISCUS_PI` must point to its executable. The prebuilt `install.sh` installs Pi with npm when compatible Node.js/npm exist, or through Pi's official installer when they do not; source/Cargo installation does not install Pi. For a nonstandard Pi install, `HIBISCUS_AUTH_SDK` can point to that trusted Pi package's `dist/index.js` (and `HIBISCUS_NODE` can override the Node executable). The SDK path is executable code; never point it at an untrusted file.
 
 From the repository root:
 

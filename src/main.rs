@@ -69,7 +69,14 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Start> {
 }
 
 fn run() -> Result<()> {
-    match parse_args(env::args().skip(1))? {
+    let start = parse_args(env::args().skip(1))?;
+    if matches!(
+        start,
+        Start::Chat { .. } | Start::Prompt(_) | Start::Sessions
+    ) {
+        pi::ensure_node_path();
+    }
+    match start {
         Start::Update => update::update(),
         Start::Version => {
             println!("hibiscus {}", env!("CARGO_PKG_VERSION"));

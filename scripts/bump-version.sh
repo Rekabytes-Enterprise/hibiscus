@@ -47,7 +47,7 @@ cp "$backup/manifest" Cargo.toml
 cargo update --workspace --offline --quiet
 sed "s/v${old_pattern}/v${next}/g" docs/installation.md > "$backup/docs.tmp"
 cp "$backup/docs.tmp" docs/installation.md
-sed "s/\(run_case Darwin arm64 aarch64-apple-darwin \)${old_pattern}$/\1${next}/" tests/install.sh > "$backup/installer.tmp"
+sed "s/\(run_case Darwin arm64 aarch64-apple-darwin \)${old_pattern}/\1${next}/" tests/install.sh > "$backup/installer.tmp"
 cp "$backup/installer.tmp" tests/install.sh
 
 printf 'Bumped Hibiscus %s -> %s in Cargo.toml, Cargo.lock, docs and installer fixture.\n' "$old" "$next"

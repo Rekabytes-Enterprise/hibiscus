@@ -2,8 +2,7 @@ mod support;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-use support::Pty;
+use support::{unique_temp_dir, Pty};
 
 #[test]
 fn codex_login_uses_pi_sdk_and_reconnects_same_session_without_pi_tui() {
@@ -46,15 +45,7 @@ fn delayed_sdk_startup_does_not_consume_keys_for_the_wrong_prompt() {
 }
 
 fn run(method: &str) {
-    let root = std::env::temp_dir().join(format!(
-        "hibiscus-auth-sdk-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir(&root).unwrap();
+    let root = unique_temp_dir("hibiscus-auth-sdk");
     let session = root.join("chat.jsonl");
     if !matches!(method, "empty" | "logged_out") {
         fs::write(&session, "{\"type\":\"session\",\"id\":\"test\"}\n").unwrap();

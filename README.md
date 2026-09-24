@@ -6,8 +6,8 @@ Hibiscus is a small Rust terminal client for the [Pi](https://pi.dev) agent. It 
 
 ## Requirements
 
-- Pi installed, configured, and available as `pi` on `PATH`
-- Node.js 22.19+ for the inline Codex sign-in flow (without Node, Hibiscus falls back to Pi's TUI)
+- Internet access for the first prebuilt installation (the installer also installs Pi if it is missing)
+- Pi needs Node.js 22.19+; Pi's official installer can help install Node when needed.
 - Rust, Cargo, and a C linker only when building from source (Ubuntu/WSL: `sudo apt update && sudo apt install -y build-essential`)
 
 Set `HIBISCUS_PI` if Pi is installed under a different executable name or path. Hibiscus launches Pi with `--no-extensions --tools read,bash,edit,write` (including auth handoffs): your personal Pi extensions, such as an MCP bridge, do not run in Hibiscus, while the four built-in coding tools remain available. Running `pi` directly is unaffected. Pi still owns models, authentication, and sessions.
@@ -20,7 +20,7 @@ Prebuilt releases support Linux and macOS on x86-64 and ARM64:
 curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/main/install.sh | sh
 ```
 
-The installer verifies the release checksum and writes to `~/.local/bin` without `sudo`. Review-first installation, private-repository authentication, version pinning, and release details are covered in [Installation and releases](docs/installation.md).
+The installer verifies the Hibiscus release checksum and installs Pi if missing: through npm without extra prompts when compatible Node.js/npm are available, or through Pi's official installer (which may ask to bootstrap Node.js). An existing Pi and its configuration are left alone. The Hibiscus binary goes to `~/.local/bin` without `sudo` (Pi's Node bootstrap may require it). Review-first installation, private-repository authentication, version pinning, and release details are covered in [Installation and releases](docs/installation.md).
 
 To build from source:
 
