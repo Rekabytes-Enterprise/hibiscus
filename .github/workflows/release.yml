@@ -19,7 +19,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: sh -n install.sh && sh tests/install.sh
+      - run: sh -n install.sh && sh -n scripts/bump-version.sh && sh tests/install.sh && sh tests/bump-version.sh
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:

@@ -10,6 +10,7 @@ struct Fixture {
     root: PathBuf,
     binary: PathBuf,
     archive: String,
+    latest: String,
 }
 
 impl Fixture {
@@ -65,6 +66,14 @@ impl Fixture {
             format!("{}  {archive}\n", digest.split_whitespace().next().unwrap()),
         )
         .unwrap();
+        // Keep the mocked release newer than Cargo.toml across version bumps.
+        let major: u64 = env!("CARGO_PKG_VERSION")
+            .split('.')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let latest = format!("v{}.0.0", major + 1);
         let curl = root.join("bin/curl");
         fs::write(
             &curl,
@@ -83,8 +92,8 @@ printf '%s\n' "$url" >> "$HIBISCUS_TEST_LOG"
 case "$url" in
  */releases/latest)
   [ -z "$HIBISCUS_TEST_DELAY" ] || sleep 1
-  printf '{"tag_name":"v0.2.0"}\n' ;;
- */releases/download/v0.2.0/*)
+  printf '{"tag_name":"%s"}\n' "$HIBISCUS_TEST_LATEST" ;;
+ */releases/download/"$HIBISCUS_TEST_LATEST"/*)
   case "$url" in
    */SHA256SUMS) cp "$HIBISCUS_TEST_ROOT/SHA256SUMS" "$destination" ;;
    *) cp "$HIBISCUS_TEST_ROOT/${url##*/}" "$destination" ;;
@@ -99,6 +108,7 @@ esac
             root,
             binary,
             archive,
+            latest,
         }
     }
 
@@ -111,6 +121,7 @@ esac
             .env("HIBISCUS_TEST_ROOT", &self.root)
             .env("HIBISCUS_TEST_LOG", self.root.join("downloads"))
             .env("HIBISCUS_TEST_OFFLINE", "")
+            .env("HIBISCUS_TEST_LATEST", &self.latest)
             .env(
                 "PATH",
                 format!(
@@ -129,6 +140,7 @@ esac
             .env("HIBISCUS_TEST_ROOT", &self.root)
             .env("HIBISCUS_TEST_LOG", self.root.join("downloads"))
             .env("HIBISCUS_TEST_OFFLINE", if offline { "1" } else { "" })
+            .env("HIBISCUS_TEST_LATEST", &self.latest)
             .env(
                 "PATH",
                 format!(
@@ -157,15 +169,19 @@ fn update_downloads_pinned_release_and_atomically_replaces_installed_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Restart Hibiscus to use v0.2.0"));
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains(&format!("Restart Hibiscus to use {}", fixture.latest)));
     assert_eq!(
         fs::read_to_string(&fixture.binary).unwrap(),
         "#!/bin/sh\necho updated-binary\n"
     );
     let urls = fs::read_to_string(fixture.root.join("downloads")).unwrap();
     assert!(urls.contains("api.github.com/repos/Rekabytes-Enterprise/hibiscus/releases/latest"));
-    assert!(urls.contains(&format!("/releases/download/v0.2.0/{}", fixture.archive)));
-    assert!(urls.contains("/releases/download/v0.2.0/SHA256SUMS"));
+    assert!(urls.contains(&format!(
+        "/releases/download/{}/{}",
+        fixture.latest, fixture.archive
+    )));
+    assert!(urls.contains(&format!("/releases/download/{}/SHA256SUMS", fixture.latest)));
 }
 
 #[test]
@@ -213,7 +229,7 @@ done
     command.env("HIBISCUS_TEST_DELAY", "1"); // Arrives after the idle composer opens.
     let original = fs::read(&fixture.binary).unwrap();
     let mut tty = Pty::spawn(&mut command);
-    tty.wait_text("Hibiscus v0.2.0 is available");
+    tty.wait_text(&format!("Hibiscus {} is available", fixture.latest));
     tty.send(b"\r"); // Default choice is Later, not a silent install.
     tty.send(b"/quit\r");
     tty.finish();
@@ -224,9 +240,12 @@ done
     let mut command = fixture.chat_command(&pi);
     command.env("HIBISCUS_TEST_DELAY", "1");
     let mut tty = Pty::spawn(&mut command);
-    tty.wait_text("Hibiscus v0.2.0 is available");
+    tty.wait_text(&format!("Hibiscus {} is available", fixture.latest));
     tty.send(b"\x1b[B\r");
-    tty.wait_text("Updated to v0.2.0. Restart Hibiscus to use it.");
+    tty.wait_text(&format!(
+        "Updated to {}. Restart Hibiscus to use it.",
+        fixture.latest
+    ));
     tty.send(b"/quit\r");
     tty.finish();
     assert_eq!(
