@@ -24,7 +24,7 @@ The default destination is `~/.local/bin/hibiscus`. If Pi is absent, Hibiscus in
 HIBISCUS_INSTALL_DIR="$HOME/bin" sh install.sh
 ```
 
-Install a specific release with `HIBISCUS_VERSION=v0.1.2`. For a private GitHub repository, export a token that can read repository releases, and fetch the script through GitHub's authenticated API:
+Install a specific release with `HIBISCUS_VERSION=v0.1.3`. For a private GitHub repository, export a token that can read repository releases, and fetch the script through GitHub's authenticated API:
 
 ```sh
 export GITHUB_TOKEN=YOUR_TOKEN
@@ -62,11 +62,11 @@ sudo apt install -y build-essential
 
 ## Publishing a release
 
-The release version in `Cargo.toml`, `Cargo.lock`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.1.2` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
+The release version in `Cargo.toml`, `Cargo.lock`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.1.3` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
 
 ```sh
-git tag -a v0.1.2 -m "Hibiscus v0.1.2"
-git push origin v0.1.2
+git tag -a v0.1.3 -m "Hibiscus v0.1.3"
+git push origin v0.1.3
 ```
 
 A previously pushed tag keeps pointing at its original commit; later changes to `dev` or `main` do not fix that tag's release run. Do not force-move a public tag without coordinating with users; a new version tag is safer.
