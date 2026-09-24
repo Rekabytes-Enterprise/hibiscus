@@ -116,7 +116,11 @@ done
     assert_eq!(fs::read_to_string(&log).unwrap(), "m7\n");
     assert!(display.contains("\r\n  ╭─ ✿ Commands"), "{display}");
     assert!(display.contains("Choose a model"), "{display}");
-    assert!(display.contains("\r\n  ╭─ ✿ Models · demo"), "{display}");
+    assert!(
+        display.contains("\r\n  ╭─ ✿ Models · all providers"),
+        "{display}"
+    );
+    assert!(display.contains("demo/m7"), "{display}");
     assert!(display.contains("● current"), "{display}");
     assert!(display.contains("7/8"), "{display}");
     assert!(display.contains("█"), "{display}");
