@@ -1,6 +1,18 @@
 mod support;
 use std::process::Command;
-use support::Pty;
+use support::{unique_temp_dir_at, Pty};
+
+#[test]
+fn fixtures_started_on_the_same_clock_tick_have_independent_directories() {
+    let first = std::thread::spawn(|| unique_temp_dir_at("hibiscus-clock-test", 123));
+    let second = std::thread::spawn(|| unique_temp_dir_at("hibiscus-clock-test", 123));
+    let first = first.join().unwrap();
+    let second = second.join().unwrap();
+    assert_ne!(first, second);
+    std::fs::remove_dir(&first).unwrap();
+    assert!(second.is_dir());
+    std::fs::remove_dir(second).unwrap();
+}
 
 #[test]
 fn harness_drives_input_and_waits_for_successful_exit() {

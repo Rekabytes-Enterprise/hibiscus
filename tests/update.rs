@@ -3,8 +3,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
-use support::Pty;
+use support::{unique_temp_dir, Pty};
 
 struct Fixture {
     root: PathBuf,
@@ -15,18 +14,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "hibiscus-update-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = unique_temp_dir("hibiscus-update");
         fs::create_dir_all(root.join("bin")).unwrap();
         fs::create_dir_all(root.join("install")).unwrap();
         fs::create_dir_all(root.join("package")).unwrap();
-        let root = root.canonicalize().unwrap();
         let binary = root.join("install/hibiscus");
         fs::copy(env!("CARGO_BIN_EXE_hibiscus"), &binary).unwrap();
         let archive = format!(

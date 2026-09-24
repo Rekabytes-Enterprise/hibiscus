@@ -2,8 +2,7 @@ mod support;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-use support::Pty;
+use support::{unique_temp_dir, Pty};
 
 #[test]
 fn login_handoff_does_not_steal_pi_keys_and_returns_to_chat() {
@@ -19,15 +18,7 @@ fn other_provider_choice_uses_pi_tui_even_when_codex_sdk_is_available() {
 }
 
 fn run(saved: bool, other_provider: bool) {
-    let root = std::env::temp_dir().join(format!(
-        "hibiscus-auth-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir(&root).unwrap();
+    let root = unique_temp_dir("hibiscus-auth");
     let session = root.join("session.jsonl");
     if saved {
         fs::write(&session, "{\"type\":\"session\",\"id\":\"test\"}\n").unwrap();
