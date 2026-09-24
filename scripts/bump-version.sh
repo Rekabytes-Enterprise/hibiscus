@@ -45,7 +45,9 @@ old_pattern=$(printf '%s' "$old" | sed 's/\./\\./g')
 sed "s/^version = \"${old_pattern}\"$/version = \"$next\"/" Cargo.toml > "$backup/manifest"
 cp "$backup/manifest" Cargo.toml
 cargo update --workspace --offline --quiet
-sed "s/v${old_pattern}/v${next}/g" docs/installation.md > "$backup/docs.tmp"
+sed -e "s/v${old_pattern}/v${next}/g" \
+    -e "s@sh scripts/bump-version.sh ${old_pattern}@sh scripts/bump-version.sh ${next}@g" \
+    docs/installation.md > "$backup/docs.tmp"
 cp "$backup/docs.tmp" docs/installation.md
 sed "s/\(run_case Darwin arm64 aarch64-apple-darwin \)${old_pattern}/\1${next}/" tests/install.sh > "$backup/installer.tmp"
 cp "$backup/installer.tmp" tests/install.sh
