@@ -6,7 +6,10 @@ use super::{
 use crate::{
     pi::{configure_builtin_tools, dialog::Dialogs},
     tui::{
-        screen::{escape_key, ActiveAction, DraftSubmission, Navigation, QueueMode, ScrollDisplay},
+        screen::{
+            escape_key, ActiveAction, DraftSubmission, Navigation, QueueMode, ScrollDisplay,
+            SharedImage,
+        },
         terminal::RawMode,
         ui::Ui,
     },
@@ -100,7 +103,7 @@ impl Rpc {
     pub(crate) fn command<R: BufRead, W: ScrollDisplay>(
         &mut self,
         command: Value,
-        images: &[Value],
+        images: &[SharedImage],
         display: &mut W,
         fallback: &mut R,
         dialogs: &mut Dialogs,
@@ -1045,10 +1048,10 @@ fn service_sending(
 
 /// Serialize borrowed attachments rather than cloning base64 into another
 /// Value. Buffer small JSON fragments, then flush exactly one LF-framed command.
-fn write_command(input: &mut impl Write, command: &Value, images: &[Value]) -> Result<()> {
+fn write_command(input: &mut impl Write, command: &Value, images: &[SharedImage]) -> Result<()> {
     struct Envelope<'a> {
         command: &'a Value,
-        images: &'a [Value],
+        images: &'a [SharedImage],
     }
     impl serde::Serialize for Envelope<'_> {
         fn serialize<S: serde::Serializer>(
@@ -1151,7 +1154,7 @@ mod tests {
                 format!("hibiscus-1-queued-{n}"),
                 DraftSubmission {
                     text: format!("draft {n}"),
-                    images: vec![json!({"type":"image","data":"synthetic"})],
+                    images: vec![json!({"type":"image","data":"synthetic"}).into()],
                     mode: QueueMode::Steer,
                 },
             );
@@ -1166,9 +1169,12 @@ mod tests {
     #[test]
     fn borrowed_images_serialize_as_one_jsonl_record_and_preserve_originals() {
         let command = json!({"id":"request","type":"prompt","message":"line one\nline two"});
-        let images =
-            vec![json!({"type":"image","mimeType":"image/png","data":"a".repeat(1024 * 1024)})];
+        let images: Vec<SharedImage> = vec![
+            json!({"type":"image","mimeType":"image/png","data":"a".repeat(1024 * 1024)}).into(),
+        ];
         let pointer = images[0]["data"].as_str().unwrap().as_ptr();
+        let recovery = images.clone();
+        assert!(std::sync::Arc::ptr_eq(&images[0], &recovery[0]));
         let mut wire = Vec::new();
         write_command(&mut wire, &command, &images).unwrap();
         assert_eq!(wire.iter().filter(|&&byte| byte == b'\n').count(), 1);

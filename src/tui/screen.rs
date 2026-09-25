@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsRawFd;
-use std::sync::mpsc::Receiver;
+use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
 
 use super::{
@@ -26,9 +26,13 @@ pub(crate) enum QueueMode {
     FollowUp,
 }
 
+/// A staged attachment can be owned by both the composer and the explicit
+/// recovery slot without copying its base64 payload. Pi wire shape is unchanged.
+pub(crate) type SharedImage = Arc<Value>;
+
 pub(crate) struct DraftSubmission {
     pub(crate) text: String,
-    pub(crate) images: Vec<Value>,
+    pub(crate) images: Vec<SharedImage>,
     pub(crate) mode: QueueMode,
 }
 
@@ -234,10 +238,10 @@ pub(crate) struct Screen {
     draft: String,
     draft_cursor: usize,
     preferred_column: Option<usize>,
-    restored_draft: Option<(String, Vec<Value>)>,
+    restored_draft: Option<(String, Vec<SharedImage>)>,
     disconnected: bool,
     draft_scroll: usize,
-    images: Vec<Value>,
+    images: Vec<SharedImage>,
     clipboard: Option<super::clipboard::Job>,
     clipboard_notice: String,
     input_notice: Option<String>,
@@ -246,7 +250,7 @@ pub(crate) struct Screen {
     pending_queue: Vec<PendingQueue>,
     delivered_before_ack: Vec<String>,
     initial_user_pending: Option<String>,
-    rejected_queued: Option<(String, Vec<Value>)>,
+    rejected_queued: Option<(String, Vec<SharedImage>)>,
     active_utf8: Vec<u8>,
     model: String,
     session: String,
@@ -483,11 +487,11 @@ impl Screen {
         self.pending_input = Some(byte);
     }
 
-    pub(crate) fn take_rejected_queue(&mut self) -> Option<(String, Vec<Value>)> {
+    pub(crate) fn take_rejected_queue(&mut self) -> Option<(String, Vec<SharedImage>)> {
         self.rejected_queued.take()
     }
 
-    pub(crate) fn restore_draft(&mut self, text: String, images: Vec<Value>) {
+    pub(crate) fn restore_draft(&mut self, text: String, images: Vec<SharedImage>) {
         self.restored_draft = Some((text, images));
     }
 
@@ -733,7 +737,7 @@ impl Screen {
         result
     }
 
-    pub(crate) fn take_images(&mut self) -> Vec<Value> {
+    pub(crate) fn take_images(&mut self) -> Vec<SharedImage> {
         self.clipboard_notice.clear();
         std::mem::take(&mut self.images)
     }
@@ -2376,9 +2380,11 @@ mod tests {
         screen.draft = "old draft".into();
         screen.restore_draft(
             "failed prompt".into(),
-            vec![serde_json::json!({"type":"image"})],
+            vec![Arc::new(serde_json::json!({"type":"image"}))],
         );
-        screen.images.push(serde_json::json!({"type":"image"}));
+        screen
+            .images
+            .push(Arc::new(serde_json::json!({"type":"image"})));
         screen.clipboard_notice = "old clipboard notice".into();
         screen.auth_url = Some("https://example.invalid".into());
         screen.scroll = 20;
@@ -2403,9 +2409,56 @@ mod tests {
     }
 
     #[test]
+    fn rejected_image_is_shared_between_live_draft_and_restore_slot() {
+        let mut screen = Screen::new(false).unwrap();
+        let image: SharedImage = Arc::new(serde_json::json!({
+            "type": "image", "mimeType": "image/png", "data": "x".repeat(1024 * 1024)
+        }));
+        screen
+            .rejected_queue(
+                DraftSubmission {
+                    text: "review".into(),
+                    images: vec![image.clone()],
+                    mode: QueueMode::Steer,
+                },
+                "queue denied",
+            )
+            .unwrap();
+        let (_, saved) = screen.take_rejected_queue().unwrap();
+        assert!(Arc::ptr_eq(&image, &screen.images[0]));
+        assert!(Arc::ptr_eq(&screen.images[0], &saved[0]));
+        // Clearing live input must not discard the recovery copy.
+        screen.clear_images();
+        screen.draft.clear();
+        assert!(screen.images.is_empty());
+        screen.restore_draft("review".into(), saved);
+        let (tx, keys) = std::sync::mpsc::channel();
+        tx.send(b'\r').unwrap();
+        assert_eq!(screen.prompt(&keys).unwrap().as_deref(), Some("review"));
+        assert!(Arc::ptr_eq(&image, &screen.take_images()[0]));
+        // An unrelated draft must not be overwritten by a rejected queue.
+        screen.draft = "newer".into();
+        screen
+            .rejected_queue(
+                DraftSubmission {
+                    text: "old".into(),
+                    images: vec![image.clone()],
+                    mode: QueueMode::FollowUp,
+                },
+                "queue denied",
+            )
+            .unwrap();
+        assert_eq!(screen.draft, "newer");
+        let (_, saved) = screen.take_rejected_queue().unwrap();
+        assert!(Arc::ptr_eq(&image, &saved[0]));
+    }
+
+    #[test]
     fn restored_failed_draft_keeps_images_and_waits_for_explicit_submission() {
         let mut screen = Screen::new(false).unwrap();
-        let images = vec![serde_json::json!({"type":"image","data":"test","mimeType":"image/png"})];
+        let images = vec![Arc::new(
+            serde_json::json!({"type":"image","data":"test","mimeType":"image/png"}),
+        )];
         screen.restore_draft("original\ntext".into(), images.clone());
         let (send, recv) = std::sync::mpsc::channel();
         for byte in b" edited\r" {
@@ -2500,7 +2553,7 @@ mod tests {
         assert!(screen.pending_queue.iter().all(|item| !item.sending));
         let first = DraftSubmission {
             text: "same".into(),
-            images: vec![serde_json::json!({"type":"image"})],
+            images: vec![Arc::new(serde_json::json!({"type":"image"}))],
             mode: QueueMode::Steer,
         };
         screen.queued(&first).unwrap();
@@ -2597,9 +2650,9 @@ mod tests {
         }
         screen.input_navigation(Navigation::Left).unwrap();
         screen.active_key(b'!', &events).unwrap();
-        screen
-            .images
-            .push(serde_json::json!({"type":"image","mimeType":"image/png","data":"test"}));
+        screen.images.push(Arc::new(
+            serde_json::json!({"type":"image","mimeType":"image/png","data":"test"}),
+        ));
         let ActiveAction::Submit(submission) = screen.active_key(17, &events).unwrap() else {
             panic!("Ctrl+Q should queue a follow-up");
         };
@@ -2669,7 +2722,8 @@ mod tests {
     #[test]
     fn attachment_cancellation_limits_and_command_guard_preserve_drafts() {
         let mut screen = Screen::new(false).unwrap();
-        let image = serde_json::json!({"type":"image","mimeType":"image/png","data":"test"});
+        let image =
+            Arc::new(serde_json::json!({"type":"image","mimeType":"image/png","data":"test"}));
         screen.images = vec![image.clone(); 4];
         screen.paste_image().unwrap();
         assert!(screen.clipboard.is_none());

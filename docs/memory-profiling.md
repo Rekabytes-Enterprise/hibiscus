@@ -1,5 +1,19 @@
 # Memory profiling: synthetic Linux results
 
+## Shared-image follow-up (local, unreleased)
+
+Staged attachments now use immutable `Arc<serde_json::Value>` handles across the composer, queued submission, and explicit `/restore` slot. Clipboard encoding wraps each value once; `serde`'s `rc` support serializes the referenced image into Pi's **unchanged JSONL wire format**. This removes the extra base64 allocation when a queued submission is rejected without deleting the recoverable image or overwriting newer typing. Incoming Pi user echoes are still parsed independently and can still cause high transient RSS.
+
+On the same Linux fixture, three fresh runs for each scenario (client observed `VmHWM`, approximate):
+
+| Scenario | Before (median) | Shared images (median) | Scope |
+| --- | ---: | ---: | --- |
+| Rejected queued four × 10 MiB images | 123.24 MiB | 69.64 MiB | The targeted duplicate recovery/composer copy |
+| Rejected initial four × 10 MiB images | 69.75 MiB | 69.74 MiB | No duplicate expected |
+| Successful four × 10 MiB images plus incoming echo | 195.24 MiB | 195.28 MiB | Incoming echo/serialization still dominate |
+
+The isolated allocation benchmark reports **55,926,840 bytes** for cloning four owned image values versus **32 bytes** (one small vector allocation) for cloning four shared handles. These are synthetic measurements, not portable RSS guarantees or proof that real Pi uses the same event cadence. The initial full-matrix baseline below remains labelled with its own binary fingerprint; the follow-up measurements used rebuilt binary SHA-256 `f0fb1cef5720bc9456633679e862516ca49fa2f271bbf08a3bbe3da5162ceb86` and three repeats per listed scenario. Run `cargo build --release --locked`, then `python3 scripts/profile-memory.py --scenario queue-reject --repeats 3 --output /tmp/hibiscus-shared-images.json` to reproduce locally. Real macOS clipboard and provider behavior still need verification.
+
 Measured on the 0.1.7 application source at `dbba12f` (same runtime source as `dc5212c`), using the optimized release binary. No production runtime changes were made in this profiling task.
 
 ## Method and boundaries
@@ -59,12 +73,12 @@ All measured operation results returned tracked live bytes to their pre-operatio
 
 ## Recommended next changes
 
-1. **Share immutable image payloads between recovery/composer owners.** The queued-rejection copy has both source evidence and a measured ~53.34 MiB additional allocation at the supported maximum. Preserve exact image serialization, newer live typing, explicit `/restore`, and the no-auto-replay rule. Do not remove recovery data just to lower RSS.
+1. **Shared immutable image payloads:** implemented in the follow-up above. Preserve exact image serialization, newer live typing, explicit `/restore`, and the no-auto-replay rule during future changes.
 2. **Avoid materializing unused incoming payloads.** The consumer currently parses every raw frame into `serde_json::Value`. Start with ignored tool updates and image bytes needed only for display counts; preserve validation, response IDs, errors, approvals and settlement. Raw frames must still be bounded and accounted for. A wire-byte budget is not a JSON-tree or process-RSS budget.
 3. **Keep the event-loop redesign separate.** These results identify memory costs, not the latency benefit of replacing the 40 ms wait. Measure input wake latency independently before changing scheduling.
 4. **Do not switch allocators or add forced trimming yet.** Obtain heap attribution/longer repeated ownership tests before calling residual RSS a leak or using allocator-specific workarounds.
 
-No image-sharing or selective-decoding optimization was implemented by this profiling task.
+The baseline profiling task did not implement these optimizations. The subsequent shared-image change is described above; selective decoding remains pending.
 
 ## Reproduce
 

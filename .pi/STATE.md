@@ -2,31 +2,31 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — memory profiling dev push verified, 2026-09-25 (UTC)
+## Snapshot — shared image recovery checkpoint, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: `0.1.7`. Pushed profiling commit **`d9fd535`** (based on `dbba12f`; same runtime source as `dc5212c`) to `origin/dev`. GitHub CI run [36171539525](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36171539525) passed Ubuntu tests, macOS 14 tests, and formatting/Clippy/installer checks. This records-only follow-up leaves the tested fingerprint unchanged. No production runtime behavior, dependencies, version or release tag changes are included.
+- Branch: `dev`; manifest version: `0.1.7`; last pushed commit **`4e67a9e`**. The user requested a local commit for staged-image payload sharing (`Arc<Value>` plus serde `rc`), preserving JSONL image format and explicit `/restore`. Consult Git for the new checkpoint hash. **No push, version bump or tag** was requested. Remote CI for this newer source is not yet verified; earlier CI results below apply to older commits.
 - Added optional Linux-only `scripts/profile-memory.py`, six helper tests in `tests/profile_memory.py`, and logical live/peak allocation-byte measurements in `benches/allocations.rs`. The helper launches a synthetic local Pi replacement solely for profiling; normal Hibiscus still launches real Pi. Credentials/Pi settings are isolated, clipboard helpers are mocked, and reports separate client and mock-process memory. No real models, sessions or clipboard contents were used.
 - Completed **33 experiments** (11 scenarios × three fresh processes) against binary SHA-256 `fcf3ff78f7ab317f1d5fe0043091aea2ea208cec4794c3e9752fda3e44122472`, unchanged after verification. `docs/memory-profiling.md` records methodology, all results and caveats. Approximate client VmHWM medians: idle 3.06 MiB; 20 prose turns 9.00 MiB; four maximum images plus incoming echo 195.24 MiB at default limits; rejected queued images 123.24 MiB; ignored 2 MiB array 37.09 MiB versus text 7.15 MiB. Queue bursts hit their 8/32 MiB capacity budgets and explicitly disconnected.
-- Isolated heap benchmark: cloning four maximum-size image values adds **55,926,840 bytes**; parsing a ~2 MiB array-bearing value adds **33,555,741 bytes**, versus 2,098,461 for text. Those operation results release their tracked bytes when dropped; residual process RSS alone does not prove a leak. Runtime image sharing and selective JSON decoding were **not implemented**.
-- Existing performance and bounded RPC-overload protection remain intact; see `docs/performance-review.md` and `docs/rpc-transport.md`. Still deferred: shared immutable image payloads, selective JSON decoding, the 40 ms shared event-loop wake-up redesign and background session scans. Kernel RSS/high-water counters and logical allocation instrumentation were used; call-stack profilers (`heaptrack`, `valgrind`, `perf`) were unavailable. No real-provider or physical-terminal validation was performed.
+- Shared-image evidence: cloning four maximum-size owned image values allocated **55,926,840 bytes** versus **32 bytes** for four shared handles. On the same synthetic Linux queue-rejection fixture (three runs), client observed `VmHWM` median fell from **123.24 MiB** to **69.64 MiB**; initial rejection remained ~69.74 MiB, and successful maximum-image send plus echo remained ~195.28 MiB. The latter path is still dominated by serialization/incoming echo. Baseline ignored-array parsing also cost **33,555,741 bytes** for ~2 MiB wire data; selective decoding is not implemented. Process RSS and these mock fixtures cannot establish real-provider behavior or prove absence of memory leaks. See `docs/memory-profiling.md`.
+- Existing performance and bounded RPC-overload protection remain intact; see `docs/performance-review.md` and `docs/rpc-transport.md`. Still deferred: selective JSON decoding, the 40 ms shared event-loop wake-up redesign and background session scans. Kernel RSS/high-water counters and logical allocation instrumentation were used; call-stack profilers (`heaptrack`, `valgrind`, `perf`) were unavailable. No real-provider or physical-terminal validation was performed.
 - Verified GitHub CI run [36140379851](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36140379851) for `8616a00`: Ubuntu, macOS 14, and lint/installer jobs succeeded. This closes the reported macOS clipboard-fixture CI failure at that commit, not real desktop support. Verified newer CI run [36166061931](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36166061931) for **`dc5212c`**: Ubuntu tests, macOS 14 tests, and formatting/Clippy/installer checks all succeeded. The records-only `dbba12f` run [36166398199](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36166398199) also passed all three jobs. Those earlier runs predate the profiling tools; the profiling commit's CI result is recorded above. The optional Python profiler/helper checks and full measurement matrix were run locally, not by the current CI workflow. Published releases were not verified.
 - The user reports completing the suggested manual checks with everything working. No platform/build-specific reproduction details were supplied, so this is positive user evidence, not closure of every outstanding verification item.
 - Earlier user confirmations: WSL Alt+V image paste and Ctrl+Enter multiline input worked on earlier builds. They do not validate this newer worktree. The user's installed binary was not matched to this source snapshot.
 
 ## Latest automated evidence
 
-The checks below were rerun on Linux after the profiling additions, against the source/test/benchmark fingerprint below. Full release-mode Rust testing was not performed; both targeted release PTY suites and the benchmarks were run.
+The checks below were rerun on Linux after shared-image changes, against the source/test/benchmark fingerprint below. Full release-mode Rust testing was not performed; targeted release PTY suites and the allocation benchmark were run.
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Local pass: 95 unit + 77 integration tests. Remote Ubuntu and macOS test jobs also passed on `dc5212c`. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
+| `cargo test --locked` | Local pass: 96 unit + 77 integration tests. Remote Ubuntu/macOS results listed above apply to older source, not this change. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
-| `cargo build --release --locked` | Pass; binary hash matches the completed 33-experiment profile. |
+| `cargo build --release --locked` | Pass; new binary SHA-256 `f0fb1cef5720bc9456633679e862516ca49fa2f271bbf08a3bbe3da5162ceb86` matches nine fresh shared-image follow-up experiments. |
 | `python3 tests/profile_memory.py` | Pass: six tests for counters, framing, metrics and failed-report handling. |
-| `python3 scripts/profile-memory.py --repeats 3 --output …` | Complete: 33 synthetic experiments; see the memory report, not a real-Pi memory claim. |
-| `cargo bench --locked --bench formatter --bench allocations --bench session_list` | Pass; reports timings/allocation calls, no absolute timing CI gates. |
-| `cargo test --locked --release --test rpc_pressure --test performance_tty` | Pass: four tests for pressure/cancellation and exact pasted text/batched frames. |
+| `python3 scripts/profile-memory.py --scenario {queue-reject,image-reject,image-send-max-default} --repeats 3 --output …` | Complete: nine fresh synthetic experiments; original 33-run baseline remains historical in the memory report. |
+| `cargo bench --locked --bench allocations` | Pass; reports both owned-value and shared-handle cloning. No absolute timing CI gates. |
+| `cargo test --locked --release --test image_paste --test steering_tty --test rpc_pressure --test performance_tty` | Pass: 16 targeted PTY tests for images, queues, pressure/cancellation and rendering. |
 | Transport unit tests | Included in the full Rust run; seven scenarios covering bounds/duplex behavior. Prior opt-in counter output is documented in the RPC review. |
 | `node tests/approval.mjs` | Pass for the fake extension harness's policy/checklist cases, not arbitrary shell safety. |
 | `node --check src/pi/approval.mjs` and `src/pi/logout.mjs` | Pass; syntax only. |
@@ -35,7 +35,7 @@ The checks below were rerun on Linux after the profiling additions, against the 
 
 Environment: Cargo 1.98.1, Node v24.21.0, Python 3.12.3; `pi --version` reports 0.87.1. No local macOS run or real terminal visual check was performed here; the remote macOS CI result is recorded above.
 
-Source/test/benchmark fingerprint: `1f2684ca37f2d098b8c668aa41e8702c010bdd6b612e85a5511c4eddbf219c63`.
+Source/test/benchmark fingerprint: `2078221d2d805bdf7af2ef7586e70ffaf7c10a88622a47d584905521b0aea567`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`, `benches/`. Records/docs and generated Python bytecode (`__pycache__`, `*.pyc`) are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
 
 ## User-reported issues: candidates implemented, real-use closure pending
@@ -65,10 +65,10 @@ Also pending: inline `/logout` against an intentionally selected account, the cu
 
 ## Next actions, in order
 
-1. Based on the memory evidence, prioritize sharing immutable image payloads across recovery/composer owners, then avoiding materialization of unused incoming JSON. Keep recovery contents, strict framing, validation and event ordering unchanged. These optimizations need separate implementation and before/after measurements; this profiling task does not implement them.
+1. Shared images are implemented locally and pass synthetic before/after checks. Retest real provider/clipboard flows and macOS CI for this source before release. Next performance candidate: avoid materializing unused incoming JSON; keep strict framing, validation, IDs, errors, approvals, settlement and event ordering unchanged.
 2. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
 3. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
 4. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.
-5. Before publishing, verify the intended version-matching commit, supported-platform CI and release artifacts. No release tag/version bump is part of the current profiling work.
+5. Before publishing, verify the intended version-matching commit, supported-platform CI and release artifacts. No release tag/version bump is part of this image-sharing task.
 
 Details live in `docs/terminal.md`, `docs/error-handling.md`, `docs/architecture.md`, and the named tests. Those documents describe intended/current implementation; they are not additional proof that a reported bug is resolved.

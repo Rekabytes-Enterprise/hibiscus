@@ -87,8 +87,13 @@ fn main() {
             image
         })
         .collect::<Vec<_>>();
-    measure("four-image-clone", encoded * 4, || {
+    measure("four-image-value-clone-baseline", encoded * 4, || {
         black_box(&images).clone()
+    });
+    let shared: Vec<std::sync::Arc<serde_json::Value>> =
+        images.into_iter().map(std::sync::Arc::new).collect();
+    measure("four-image-shared-clone", encoded * 4, || {
+        black_box(&shared).clone()
     });
 
     // Equivalent ignored payloads: the input buffer is outside the counted

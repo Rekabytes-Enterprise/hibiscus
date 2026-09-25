@@ -12,6 +12,7 @@ All notable changes to Hibiscus are documented here.
 
 ### Changed
 
+- Share staged image values between the composer and recovery slot, avoiding a second base64 allocation on queued rejection while keeping Pi's JSONL wire format and explicit `/restore` behavior.
 - Bound RPC wire-record/backlog memory and record counts with explicit overload failure, nonblocking/deadline-controlled writes, partial-send cancellation and reviewable uncertain queued drafts. Add synthetic duplex/overload regressions and opt-in queue metrics.
 - Cache transcript layout independently of terminal row painting, reuse completed message blocks, and coalesce scrolled row counting.
 - Batch available printable input and read terminal bytes in chunks without changing control-key or UTF-8 handling.
