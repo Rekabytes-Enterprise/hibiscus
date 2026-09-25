@@ -4,6 +4,12 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-25
+
+### Fixed
+
+- Preserve Hibiscus identity guidance when Pi's `before_agent_start` event has no structured prompt sections. Fall back to Pi's existing rendered prompt or append option instead of throwing an extension warning.
+
 ## [0.2.1] - 2026-09-25
 
 ### Fixed
@@ -133,7 +139,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.2
 [0.2.1]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.0
 [0.1.7]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.7

@@ -17,11 +17,29 @@ export function reasonFor(command) {
 }
 
 export default function (pi) {
-  // Brand the assistant presented by this explicit Hibiscus integration without
-  // replacing Pi's own system prompt, tool rules, model, or authentication.
+  const identity = 'In this client you are presented to the user as Hibiscus. If asked who you are, answer as Hibiscus, the terminal assistant/interface powered by the Pi coding agent. Pi runs the agent, tools, authentication, and sessions; the selected provider/model supplies the intelligence. If asked for the platform, provider, or model, identify them truthfully when known. Do not claim Hibiscus is a model or provider, and do not add a brand disclaimer to unrelated answers.';
+  // Keep Pi's prompt/tools intact. Some Pi versions provide prompt options but
+  // no sections object (as reported on macOS). Older hooks may expose only the
+  // rendered prompt; append to that text without dropping its base instructions.
   pi.on('before_agent_start', (event) => {
-    event.systemPromptOptions.sections.hibiscus_identity =
-      'In this client you are presented to the user as Hibiscus. If asked who you are, answer as Hibiscus, the terminal assistant/interface powered by the Pi coding agent. Pi runs the agent, tools, authentication, and sessions; the selected provider/model supplies the intelligence. If asked for the platform, provider, or model, identify them truthfully when known. Do not claim Hibiscus is a model or provider, and do not add a brand disclaimer to unrelated answers.';
+    const options = event?.systemPromptOptions;
+    if (options?.sections && typeof options.sections === 'object' && !Array.isArray(options.sections)) {
+      options.sections.hibiscus_identity = identity;
+      return;
+    }
+    const section = `<hibiscus_identity>\n${identity}\n</hibiscus_identity>`;
+    if (typeof event?.systemPrompt === 'string') {
+      // Older hooks can have prompt options without structured sections. Use
+      // their supported full-prompt result, preserving Pi's original text.
+      return { systemPrompt: event.systemPrompt.includes('<hibiscus_identity>')
+        ? event.systemPrompt : `${event.systemPrompt}\n\n${section}` };
+    }
+    if (options && typeof options === 'object') {
+      // Last-resort options-only shape: preserve any existing appended rules.
+      const existing = typeof options.appendSystemPrompt === 'string' ? options.appendSystemPrompt : '';
+      options.appendSystemPrompt = existing.includes('<hibiscus_identity>')
+        ? existing : `${existing}${existing ? '\n\n' : ''}${section}`;
+    }
   });
   const grants = new Set();
   let steps = [];
