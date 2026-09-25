@@ -43,7 +43,7 @@ The committed session benchmark measured 200 unchanged files at **0.385 ms** on 
 
 The 40 ms RPC polling wait/shared wake-driven event loop, partial JSON decoding, remaining rejected-draft image copies, background session refresh and broader frame-buffer/LTO tuning remain candidates.
 
-A subsequent local RPC phase replaces the unbounded parsed-event channel with a byte/count-bounded raw inbox, consumer-side parsing, explicit overload failure, nonblocking/deadline-controlled writes, and responsive partial-send cancellation. It adds duplex/slow-consumer/modal pressure regressions and opt-in queue high-water metrics. This is fail-fast overload protection, not a blocking bounded channel or a total process-memory cap. See [RPC transport](rpc-transport.md) for configuration, recovery, coverage and limits. Peak-RSS profiling, real-provider load tests and real-terminal presentation verification are still outstanding.
+A subsequent local RPC phase replaces the unbounded parsed-event channel with a byte/count-bounded raw inbox, consumer-side parsing, explicit overload failure, nonblocking/deadline-controlled writes, and responsive partial-send cancellation. It adds duplex/slow-consumer/modal pressure regressions and opt-in queue high-water metrics. This is fail-fast overload protection, not a blocking bounded channel or a total process-memory cap. See [RPC transport](rpc-transport.md) for configuration, recovery, coverage and limits. The follow-up [memory profiling report](memory-profiling.md) adds synthetic per-process RSS sampling and logical heap measurements. Call-stack heap attribution, real-provider load tests and real-terminal presentation verification remain outstanding.
 
 ## Scope and evidence
 

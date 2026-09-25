@@ -8,6 +8,7 @@ All notable changes to Hibiscus are documented here.
 
 - Standard MIT license with Rekabytes Enterprise attribution and a fork/feature-branch contribution guide targeting `dev`.
 - Repeatable formatter, allocation and session-list benchmarks, plus a large-history paste regression and performance review.
+- Optional Linux-only synthetic memory profiler with per-process RSS/high-water counters, isolated mock Pi/clipboard fixtures, and logical live/peak heap-byte benchmarks. No runtime behavior changes are part of this profiling addition.
 
 ### Changed
 
