@@ -2,9 +2,9 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — selective RPC decoder dev push, 2026-09-25 (UTC)
+## Snapshot — selective RPC decoder dev push verified, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: `0.1.7`; previous remote commit **`4e67a9e`**. Shared-image checkpoint **`0799fae`** and the new selective RPC decoder are being pushed to `dev` at the user's request. The decoder validates/omits only the unused `partialResult` subtree of `tool_execution_update`; all other fields/events remain fully decoded. Pi JSONL framing, byte/count limits and error/approval/settlement boundaries are unchanged. No version bump or tag. Consult Git for final commit provenance and CI status.
+- Branch: `dev`; manifest version: `0.1.7`. Pushed shared-image checkpoint **`0799fae`** and selective RPC decoder **`f659cf4`** to `origin/dev`. GitHub CI [36174873637](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36174873637) for `f659cf4` passed Ubuntu tests, macOS 14 tests and formatting/Clippy/installer checks. The decoder validates/omits only the unused `partialResult` subtree of `tool_execution_update`; all other fields/events remain fully decoded. Pi JSONL framing, byte/count limits and error/approval/settlement boundaries are unchanged. No version bump or tag.
 - Added optional Linux-only `scripts/profile-memory.py`, six helper tests in `tests/profile_memory.py`, and logical live/peak allocation-byte measurements in `benches/allocations.rs`. The helper launches a synthetic local Pi replacement solely for profiling; normal Hibiscus still launches real Pi. Credentials/Pi settings are isolated, clipboard helpers are mocked, and reports separate client and mock-process memory. No real models, sessions or clipboard contents were used.
 - Completed **33 experiments** (11 scenarios × three fresh processes) against binary SHA-256 `fcf3ff78f7ab317f1d5fe0043091aea2ea208cec4794c3e9752fda3e44122472`, unchanged after verification. `docs/memory-profiling.md` records methodology, all results and caveats. Approximate client VmHWM medians: idle 3.06 MiB; 20 prose turns 9.00 MiB; four maximum images plus incoming echo 195.24 MiB at default limits; rejected queued images 123.24 MiB; ignored 2 MiB array 37.09 MiB versus text 7.15 MiB. Queue bursts hit their 8/32 MiB capacity budgets and explicitly disconnected.
 - Shared-image evidence: cloning four maximum-size owned image values allocated **55,926,840 bytes** versus **32 bytes** for four shared handles. On the same synthetic Linux queue-rejection fixture (three runs), client observed `VmHWM` median fell from **123.24 MiB** to **69.64 MiB**; initial rejection remained ~69.74 MiB, and successful maximum-image send plus echo remained ~195.28 MiB. The latter path is still dominated by serialization/incoming echo. Baseline ignored-array parsing also cost **33,555,741 bytes** for ~2 MiB wire data. The narrow decoder follow-up reduced synthetic client observed `VmHWM` median for that ignored array from **37.09 MiB** to **7.18 MiB** (three runs); text control remained ~7.22 MiB. Broader selective decoding, including image echoes, is not implemented. Process RSS and these mock fixtures cannot establish real-provider behavior or prove absence of memory leaks. See `docs/memory-profiling.md`.
@@ -19,7 +19,7 @@ The checks below were rerun on Linux after the selective tool-update decoder cha
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Local pass: 99 unit + 77 integration tests. Remote Ubuntu/macOS results listed above apply to older source, not this change. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
+| `cargo test --locked` | Local pass: 99 unit + 77 integration tests. Remote Ubuntu/macOS tests passed for `f659cf4` as recorded above; they remain mock/PTY evidence, not a real-provider acceptance test. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
 | `cargo build --release --locked` | Pass; binary SHA-256 `092e3916f3b4e8d49dc98d7e22e8f42d5656d9034e54cb8938b87ecaed714b7c` matches six fresh decoder follow-up experiments. |
@@ -33,7 +33,7 @@ The checks below were rerun on Linux after the selective tool-update decoder cha
 | `sh tests/install.sh` and `sh tests/bump-version.sh` | Pass with mocked downloads/sandbox fixtures; no real installation or release. |
 | `git diff --check` | Pass for tracked changes; untracked new files were reviewed separately. |
 
-Environment: Cargo 1.98.1, Node v24.21.0, Python 3.12.3; `pi --version` reports 0.87.1. No local macOS run or real terminal visual check was performed here; the remote macOS CI result is recorded above.
+Environment: Cargo 1.98.1, Node v24.21.0, Python 3.12.3; `pi --version` reports 0.87.1. No local macOS run or real terminal visual check was performed here; the remote macOS CI result for this source is recorded above.
 
 Source/test/benchmark fingerprint: `8b55258d9faf030efbd8c7b4b159d28143679f510758358bb376f175f5a94d64`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`, `benches/`. Records/docs and generated Python bytecode (`__pycache__`, `*.pyc`) are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
