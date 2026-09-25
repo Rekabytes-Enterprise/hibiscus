@@ -317,8 +317,9 @@ fn chat<R: BufRead>(
                 }
                 "/continue" => {
                     let cwd = env::current_dir().map_err(local)?;
-                    let list = sessions::list(&cwd).map_err(local)?;
-                    if let Some(latest) = list.first() {
+                    let list =
+                        list_sessions_for_chat(cwd, output, events.as_ref().map(|e| &e.receiver))?;
+                    if let Some(latest) = list.as_ref().and_then(|list| list.first()) {
                         open_session(
                             rpc,
                             &latest.path,
@@ -338,7 +339,7 @@ fn chat<R: BufRead>(
                             events.as_ref().map(|e| &e.receiver),
                             ui,
                         )?;
-                    } else {
+                    } else if list.is_some() {
                         writeln!(output, "No saved sessions for this directory.")?;
                     }
                 }
@@ -379,29 +380,34 @@ fn chat<R: BufRead>(
                 }
                 "/sessions" => {
                     let cwd = env::current_dir().map_err(local)?;
-                    let list = sessions::list(&cwd).map_err(local)?;
-                    let choice = if output.is_full() {
-                        if list.is_empty() {
-                            writeln!(output, "No saved sessions for this directory.")?;
-                            None
-                        } else if let Some(keys) = events.as_ref() {
-                            let labels = list
-                                .iter()
-                                .map(|entry| entry.title.clone())
-                                .collect::<Vec<_>>();
-                            output
-                                .select("Saved sessions", &labels, None, &keys.receiver)?
-                                .map(|index| list[index].path.clone())
+                    let list =
+                        list_sessions_for_chat(cwd, output, events.as_ref().map(|e| &e.receiver))?;
+                    let choice = if let Some(list) = list.as_ref() {
+                        if output.is_full() {
+                            if list.is_empty() {
+                                writeln!(output, "No saved sessions for this directory.")?;
+                                None
+                            } else if let Some(keys) = events.as_ref() {
+                                let labels = list
+                                    .iter()
+                                    .map(|entry| entry.title.clone())
+                                    .collect::<Vec<_>>();
+                                output
+                                    .select("Saved sessions", &labels, None, &keys.receiver)?
+                                    .map(|index| list[index].path.clone())
+                            } else {
+                                None
+                            }
+                        } else if let (Some(keys), Some(raw)) = (events.as_ref(), raw.as_mut()) {
+                            sessions::pick_with(list, output, |_| {
+                                raw.write("Choose a session number (Enter to cancel): ")?;
+                                terminal::read_line(&keys.receiver, raw)
+                            })?
                         } else {
-                            None
+                            sessions::pick(list, input, output, interactive)?
                         }
-                    } else if let (Some(keys), Some(raw)) = (events.as_ref(), raw.as_mut()) {
-                        sessions::pick_with(&list, output, |_| {
-                            raw.write("Choose a session number (Enter to cancel): ")?;
-                            terminal::read_line(&keys.receiver, raw)
-                        })?
                     } else {
-                        sessions::pick(&list, input, output, interactive)?
+                        None
                     };
                     if let Some(path) = choice {
                         open_session(
@@ -479,6 +485,60 @@ fn chat<R: BufRead>(
         }
         output.flush()?;
     }
+}
+
+/// Only full-screen scans run off-thread. Keep Pi's files authoritative and
+/// preserve typing that arrives while a slow first-time scan is running.
+fn list_sessions_for_chat(
+    cwd: PathBuf,
+    output: &mut Screen,
+    keys: Option<&Receiver<u8>>,
+) -> Result<Option<Vec<sessions::SessionInfo>>> {
+    let Some(keys) = keys.filter(|_| output.is_full()) else {
+        return Ok(Some(sessions::list(&cwd).map_err(local)?));
+    };
+    let old_notice = output.start_session_scan()?;
+    let scan = sessions::Scan::start(cwd);
+    let mut buffered = Vec::new();
+    let result: Result<Option<Vec<sessions::SessionInfo>>> =
+        (|| -> Result<Option<Vec<sessions::SessionInfo>>> {
+            loop {
+                // Keys take precedence even if a scan finished at the same instant.
+                for _ in 0..128 {
+                    match keys.try_recv() {
+                        Ok(27) => match crate::tui::screen::escape_key(keys) {
+                            crate::tui::screen::Navigation::Escape => return Ok(None),
+                            crate::tui::screen::Navigation::EscapeWith(byte) => {
+                                buffered.push(byte);
+                                return Ok(None);
+                            }
+                            _ => {}
+                        },
+                        Ok(3 | 4) => return Ok(None),
+                        Ok(b'\r' | b'\n') => {} // Never replay Enter as an unintended prompt.
+                        Ok(byte) => {
+                            if buffered.len() >= 128 * 1024 {
+                                return Ok(None);
+                            }
+                            buffered.push(byte);
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(None),
+                    }
+                }
+                match scan.recv_timeout(std::time::Duration::from_millis(40)) {
+                    Ok(result) => return Ok(Some(result.map_err(local)?)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(local("session scan stopped unexpectedly").into())
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => output.render()?,
+                }
+            }
+        })();
+    drop(scan); // request cancellation without blocking the terminal on Esc
+    output.defer_session_typing(buffered);
+    output.end_session_scan(old_notice)?;
+    result
 }
 
 fn handle_chat_error(

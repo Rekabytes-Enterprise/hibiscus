@@ -9,7 +9,7 @@ Implemented locally (not yet verified in real macOS/Windows Terminal use):
 - Direct character-to-cell insertion, slice-based wrapping, and a failed-link-search sentinel remove the measured allocation/quadratic paths.
 - Transcript layout is cached at explicit role-reset boundaries. Completed blocks reuse rows; unchanged composer/footer frames reuse the whole layout. Scrolled row counting is deferred/coalesced until layout, not repeated per RPC delta. Width/content/timeline changes invalidate relevant state. Workspace text is cached too.
 - Terminal reads use 4 KiB chunks. Printable input is consumed in batches of at most 128 already available bytes, stopping before controls; active input processes at most eight actions before polling Pi again. UTF-8 and existing Enter/Esc semantics remain unchanged.
-- A bounded process-local session metadata cache validates device/inode/size/mtime/ctime, rescans after 30 seconds for coarse timestamps, and invalidates deletions, replacements and workspace changes. At most 1,024 titles of up to 8 KiB are retained. Cold listing remains synchronous.
+- A bounded process-local session metadata cache validates device/inode/size/mtime/ctime, rescans after 30 seconds for coarse timestamps, and invalidates deletions, replacements and workspace changes. At most 1,024 titles of up to 8 KiB are retained. At the original checkpoint, cold listing was synchronous. A later follow-up moves only full-screen `/sessions` and `/continue` scans to a cancellable worker with a loading notice; cold filesystem work is not faster. Line mode and startup `--sessions` remain synchronous.
 - RPC responses move their data instead of cloning it. Ordinary read buffers are reused (oversized buffers are released on the next record). Initial/queued prompt serialization borrows images, buffers small writes, and does not retry failed writes on `BufWriter` drop. Clipboard encoding moves its base64 buffer into JSON rather than copying it again.
 
 ### Repeatable checks
@@ -125,7 +125,7 @@ Active input is checked around an RPC receive timeout of 40 ms (`rpc.rs:411`). A
 
 `src/chat/sessions.rs:91` parses every record in each matching session file whenever listing sessions. This runs synchronously before the picker appears. The warm-cache experiment measured 70 ms for 200 files/33 MiB; repeated scans are avoidable.
 
-Cache display metadata against canonical path and file metadata, invalidate changed/deleted files, and consider background refresh. It must remain a disposable UI cache, not a second session database. Keep Pi authoritative. Do not simply stop at the first user message: later `session_info` records may rename a session, and workspace/header filtering must remain correct. Handle replacements, truncations and timestamp limitations when designing invalidation.
+The bounded cache and full-screen worker are follow-up implementations; neither changes Pi's session authority or makes an uncached scan inherently faster. Future background prefetch must be measured before adding more complexity. It must remain a disposable UI cache, not a second session database. Keep Pi authoritative. Do not simply stop at the first user message: later `session_info` records may rename a session, and workspace/header filtering must remain correct. Handle replacements, truncations and timestamp limitations when designing invalidation.
 
 ### 5. Reduce large JSON/image copies and control backlog
 

@@ -1,9 +1,9 @@
 use serde_json::Value;
-use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsRawFd;
 use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
+use std::{collections::VecDeque, env};
 
 use super::{
     activity::Timeline,
@@ -260,6 +260,7 @@ pub(crate) struct Screen {
     suggestions: Option<Picker>,
     suggestions_dismissed: bool,
     pending_input: Option<u8>,
+    deferred_input: VecDeque<u8>,
     secret_input: bool,
     auth_url: Option<String>,
     activity: Option<Activity>,
@@ -316,6 +317,7 @@ impl Screen {
             suggestions: None,
             suggestions_dismissed: false,
             pending_input: None,
+            deferred_input: VecDeque::new(),
             secret_input: false,
             auth_url: None,
             activity: None,
@@ -478,6 +480,7 @@ impl Screen {
         self.initial_user_pending = None;
         self.rejected_queued = None;
         self.active_utf8.clear();
+        self.deferred_input.clear();
         self.input_notice = None;
         self.session = "new chat".into();
         self.render()
@@ -485,6 +488,27 @@ impl Screen {
 
     pub(crate) fn defer_input(&mut self, byte: u8) {
         self.pending_input = Some(byte);
+    }
+
+    /// Preserve typing collected while an asynchronous session scan completes.
+    /// Enter/Esc are handled during the scan and are never replayed as sends.
+    pub(crate) fn defer_session_typing(&mut self, bytes: impl IntoIterator<Item = u8>) {
+        self.deferred_input.extend(bytes);
+    }
+
+    pub(crate) fn start_session_scan(&mut self) -> io::Result<Option<String>> {
+        let old = self
+            .input_notice
+            .replace("Loading saved sessions… · Esc cancel".into());
+        self.render()?;
+        Ok(old)
+    }
+
+    pub(crate) fn end_session_scan(&mut self, old: Option<String>) -> io::Result<()> {
+        if self.input_notice.as_deref() == Some("Loading saved sessions… · Esc cancel") {
+            self.input_notice = old;
+        }
+        self.render()
     }
 
     pub(crate) fn take_rejected_queue(&mut self) -> Option<(String, Vec<SharedImage>)> {
@@ -809,7 +833,13 @@ impl Screen {
             let byte = if index == 0 {
                 first
             } else {
-                let Ok(byte) = events.try_recv() else { break };
+                let Some(byte) = self
+                    .deferred_input
+                    .pop_front()
+                    .or_else(|| events.try_recv().ok())
+                else {
+                    break;
+                };
                 if !matches!(byte, 32..=126 | 128..=255) {
                     self.pending_input = Some(byte);
                     break;
@@ -1133,6 +1163,7 @@ impl Screen {
                 && self.clipboard.is_none()
                 && pending.is_empty()
                 && queued.is_none()
+                && self.deferred_input.is_empty()
             {
                 // Give already queued typing priority over an update notice.
                 queued = events.try_recv().ok();
@@ -1148,7 +1179,11 @@ impl Screen {
                     }
                 }
             }
-            let byte = match queued.take().or_else(|| self.pending_input.take()) {
+            let byte = match queued
+                .take()
+                .or_else(|| self.pending_input.take())
+                .or_else(|| self.deferred_input.pop_front())
+            {
                 Some(byte) => byte,
                 None => {
                     if !self.full && updates.is_none() && self.clipboard.is_none() {
@@ -2371,6 +2406,21 @@ mod tests {
         assert!(pending.is_empty());
         assert_eq!(screen.pending_input.take(), Some(b'\r'));
         assert_eq!(events.recv().unwrap(), b'M');
+    }
+
+    #[test]
+    fn session_scan_typing_replays_before_new_keys_without_auto_submission() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.defer_session_typing(b"old".iter().copied());
+        let (send, events) = std::sync::mpsc::channel();
+        for byte in b" new\r" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(screen.prompt(&events).unwrap().as_deref(), Some("old new"));
+        assert!(screen.deferred_input.is_empty());
+        screen.defer_session_typing(b"stale".iter().copied());
+        screen.clear_session().unwrap();
+        assert!(screen.deferred_input.is_empty());
     }
 
     #[test]
