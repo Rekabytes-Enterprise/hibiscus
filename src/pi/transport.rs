@@ -2,7 +2,8 @@
 //! blocks on a full mailbox: overload invalidates the connection explicitly.
 use super::error;
 use crate::Result;
-use serde_json::Value;
+use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde_json::{value::RawValue, Value};
 use std::{
     collections::VecDeque,
     io::{self, BufRead, BufReader, Read, Write},
@@ -178,7 +179,7 @@ impl Events for Inbox {
                 drop(state);
                 // Only the consumer builds a JSON tree. Queued frames remain
                 // compact bytes; never print payloads in parse diagnostics.
-                let result = serde_json::from_slice(&frame)
+                let result = decode_record(&frame)
                     .map_err(|_| error::protocol("Invalid Pi RPC JSON record").into());
                 if result.is_err() {
                     self.shared.fail("Invalid Pi RPC JSON record");
@@ -196,6 +197,127 @@ impl Events for Inbox {
         }
     }
 }
+// Unlike IgnoredAny, this walks strings through serde_json's normal escape
+// decoder (including surrogate validation), but never retains array elements.
+struct ValidateValue;
+impl<'de> DeserializeSeed<'de> for ValidateValue {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> std::result::Result<(), D::Error> {
+        struct Walk;
+        impl<'de> Visitor<'de> for Walk {
+            type Value = ();
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("valid JSON")
+            }
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_string<E: serde::de::Error>(self, _: String) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_none<E: serde::de::Error>(self) -> std::result::Result<(), E> {
+                Ok(())
+            }
+            fn visit_some<D: serde::Deserializer<'de>>(
+                self,
+                d: D,
+            ) -> std::result::Result<(), D::Error> {
+                d.deserialize_any(Walk)
+            }
+            fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> std::result::Result<(), S::Error> {
+                while seq.next_element_seed(ValidateValue)?.is_some() {}
+                Ok(())
+            }
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> std::result::Result<(), M::Error> {
+                while map.next_key::<String>()?.is_some() {
+                    map.next_value_seed(ValidateValue)?;
+                }
+                Ok(())
+            }
+        }
+        deserializer.deserialize_any(Walk)
+    }
+}
+
+/// Retain all Pi event fields except the partial result of a tool update:
+/// Hibiscus does not display tool_execution_update, but does consume the
+/// correlated start/end, goal details, errors and settlement separately.
+/// RawValue captures the skipped region; ValidateValue checks its contents
+/// without constructing a potentially huge tree. For
+/// every other event, preserve the exact Value semantics, including unknown
+/// fields/events. Field order is irrelevant, even when type is last.
+fn decode_record(bytes: &[u8]) -> serde_json::Result<Value> {
+    struct Decoded(Value);
+    impl<'de> serde::Deserialize<'de> for Decoded {
+        fn deserialize<D: serde::Deserializer<'de>>(
+            deserializer: D,
+        ) -> std::result::Result<Self, D::Error> {
+            struct RecordVisitor;
+            impl<'de> Visitor<'de> for RecordVisitor {
+                type Value = Decoded;
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("an RPC JSON object")
+                }
+                fn visit_map<M: MapAccess<'de>>(
+                    self,
+                    mut input: M,
+                ) -> std::result::Result<Self::Value, M::Error> {
+                    let mut fields = serde_json::Map::new();
+                    let mut partial = None::<Box<RawValue>>;
+                    while let Some(key) = input.next_key::<String>()? {
+                        if key == "partialResult" {
+                            let raw: Box<RawValue> = input.next_value()?;
+                            // Validate even earlier duplicate fields; the ordinary
+                            // Value decoder validates each occurrence before replacing it.
+                            let mut validator = serde_json::Deserializer::from_str(raw.get());
+                            ValidateValue
+                                .deserialize(&mut validator)
+                                .map_err(serde::de::Error::custom)?;
+                            validator.end().map_err(serde::de::Error::custom)?;
+                            partial = Some(raw);
+                            fields.remove("partialResult");
+                        } else {
+                            fields.insert(key, input.next_value()?);
+                        }
+                    }
+                    if let Some(raw) = partial {
+                        if fields.get("type").and_then(Value::as_str)
+                            != Some("tool_execution_update")
+                        {
+                            fields.insert(
+                                "partialResult".into(),
+                                serde_json::from_str(raw.get())
+                                    .map_err(serde::de::Error::custom)?,
+                            );
+                        }
+                    }
+                    Ok(Decoded(Value::Object(fields)))
+                }
+            }
+            deserializer.deserialize_map(RecordVisitor)
+        }
+    }
+    serde_json::from_slice::<Decoded>(bytes).map(|decoded| decoded.0)
+}
+
 impl Drop for Inbox {
     fn drop(&mut self) {
         let mut state = self.shared.state.lock().unwrap();
@@ -377,6 +499,7 @@ impl<W: WireWrite, F: FnMut() -> io::Result<()>> Write for Checked<'_, W, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::os::unix::net::UnixStream;
     fn wait_closed(inbox: &Inbox) {
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -462,6 +585,73 @@ mod tests {
             assert!(state.peak_records <= limits.records);
             assert_eq!(state.bytes, 0);
             assert!(state.frames.is_empty());
+        }
+    }
+
+    #[test]
+    fn unused_tool_update_is_validated_without_building_partial_result() {
+        for wire in [
+            r#"{"type":"tool_execution_update","toolCallId":"call-1","partialResult":{"content":[{"text":"private"}],"details":[1,2,3]}}"#,
+            r#"{"partialResult":[1,2,3],"toolCallId":"call-1","type":"tool_execution_update"}"#,
+        ] {
+            let record = decode_record(wire.as_bytes()).unwrap();
+            assert_eq!(record["type"], "tool_execution_update");
+            assert_eq!(record["toolCallId"], "call-1");
+            assert!(record.get("partialResult").is_none());
+        }
+        for wire in [
+            r#"{"type":"tool_execution_update","partialResult":{"nested":[true,]}}"#,
+            r#"{"partialResult": [1, 2,], "type":"tool_execution_update"}"#,
+            r#"{"type":"tool_execution_update","partialResult":1} trailing"#,
+            r#"{"type":"tool_execution_update","partialResult":"\ud800"}"#,
+            r#"{"type":"tool_execution_update","partialResult":"\ud800","partialResult":null}"#,
+        ] {
+            assert!(
+                decode_record(wire.as_bytes()).is_err(),
+                "invalid JSON must fail validation: {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn skipped_partial_result_keeps_metadata_and_full_json_validation() {
+        let cases = [
+            json!({"content":[{"type":"text","text":"escaped \\n and unicode 🪻"}],"details":{"nested":[null,true,1,-2,0.25]}}),
+            json!([0, 1, 2, 3, 4]),
+            json!({"image":{"data":"opaque-base64","mimeType":"image/png"}}),
+        ];
+        for partial in cases {
+            let wire = format!("{{\"partialResult\":{partial},\"toolCallId\":\"call-1\",\"type\":\"tool_execution_update\",\"args\":{{\"path\":\"a\"}}}}");
+            let mut expected: Value = serde_json::from_str(&wire).unwrap();
+            expected.as_object_mut().unwrap().remove("partialResult");
+            assert_eq!(decode_record(wire.as_bytes()).unwrap(), expected);
+        }
+        // Invalid values inside ignored content are still protocol failures.
+        for value in [
+            "1e9999",
+            "[1,,2]",
+            "{\"data\":\"\\uD800\"}",
+            "{\"x\":false \"y\":1}",
+        ] {
+            let wire = format!("{{\"partialResult\":{value},\"type\":\"tool_execution_update\"}}");
+            assert!(decode_record(wire.as_bytes()).is_err(), "{wire}");
+        }
+    }
+
+    #[test]
+    fn every_other_record_retains_full_value_and_correlation() {
+        for wire in [
+            r#"{"id":"req-1","type":"response","success":true,"data":{"partialResult":[1,2]}}"#,
+            r#"{"partialResult":[1,2],"type":"future_event","id":"req-2"}"#,
+            r#"{"type":"tool_execution_end","toolCallId":"call-1","toolName":"goal","result":{"details":{"hibiscusGoal":{"completed":1}}}}"#,
+            r#"{"type":"extension_ui_request","id":"approval","method":"select","title":"Confirm","options":["Deny","Allow"]}"#,
+            r#"{"type":"message_start","message":{"role":"user","content":[{"type":"image","data":"test"}]}}"#,
+            r#"{"type":"queue_update","steering":["first"],"followUp":[]}"#,
+            r#"{"type":"agent_settled"}"#,
+            "{\"type\":\"future_event\",\"message\":\"a\u{2028}b\u{2029}c\"}",
+        ] {
+            let expected: Value = serde_json::from_str(wire).unwrap();
+            assert_eq!(decode_record(wire.as_bytes()).unwrap(), expected);
         }
     }
 
