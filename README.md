@@ -1,93 +1,156 @@
-# hibiscus
+<p align="center">
+  <img src="docs/assets/hibiscus.svg" width="112" height="112" alt="Hibiscus flower with a terminal chevron">
+</p>
 
-[![CI](https://github.com/Rekabytes-Enterprise/hibiscus/actions/workflows/ci.yml/badge.svg)](https://github.com/Rekabytes-Enterprise/hibiscus/actions/workflows/ci.yml)
+<h1 align="center">hibiscus</h1>
 
-Hibiscus is a small Rust terminal client for the [Pi](https://pi.dev) agent. It talks to Pi through its JSONL RPC interface: Pi owns models, authentication, tools, agent runs, and persisted sessions; Hibiscus provides the CLI and terminal UI.
+<p align="center">
+  <strong>Your terminal, in bloom.</strong><br>
+  A focused Rust CLI for the <a href="https://pi.dev">Pi</a> coding agent.
+</p>
 
-## Requirements
+<p align="center">
+  <a href="https://github.com/Rekabytes-Enterprise/hibiscus/releases/latest"><img src="https://img.shields.io/github/v/release/Rekabytes-Enterprise/hibiscus?style=flat-square&amp;color=ec4a7d&amp;label=release" alt="Latest release"></a>
+  <a href="https://github.com/Rekabytes-Enterprise/hibiscus/actions/workflows/ci.yml?query=branch%3Adev"><img src="https://img.shields.io/github/actions/workflow/status/Rekabytes-Enterprise/hibiscus/ci.yml?branch=dev&amp;style=flat-square&amp;label=dev%20CI" alt="CI status on dev"></a>
+  <a href="https://github.com/Rekabytes-Enterprise/hibiscus/releases"><img src="https://img.shields.io/github/downloads/Rekabytes-Enterprise/hibiscus/total?style=flat-square&amp;color=ec4a7d&amp;label=release%20downloads" alt="Total GitHub release asset downloads"></a>
+  <a href="docs/installation.md"><img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-63304b?style=flat-square" alt="Platforms: Linux and macOS"></a>
+</p>
 
-- Internet access for the first prebuilt installation (the installer also installs Pi if it is missing)
-- Pi needs Node.js 22.19+; Pi's official installer can help install Node when needed.
-- Rust, Cargo, and a C linker only when building from source (Ubuntu/WSL: `sudo apt update && sudo apt install -y build-essential`)
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#made-for-the-terminal">Features</a> ·
+  <a href="#your-everyday-commands">Commands</a> ·
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-Set `HIBISCUS_PI` if Pi is installed under a different executable name or path. Hibiscus launches Pi with `--no-extensions --tools read,bash,edit,write` (including auth handoffs): your personal Pi extensions, such as an MCP bridge, do not run in Hibiscus, while the four built-in coding tools remain available. Running `pi` directly is unaffected. Pi still owns models, authentication, and sessions.
+<p align="center">
+  <img src="docs/assets/terminal-preview.svg" width="960" alt="Illustrated Hibiscus chat with raspberry accents, tool activity, an edit diff, and a multiline composer">
+  <br><sub>Illustrated preview with sample content. Colors and key hints depend on your terminal.</sub>
+</p>
 
-## Install
+Chat, switch models, pick up an earlier session, and share screenshots—without leaving your terminal. Hibiscus brings a calm, raspberry-pink interface; **Pi handles the intelligence**: models, authentication, tools, agent runs, and saved sessions.
 
-Prebuilt releases support Linux and macOS on x86-64 and ARM64:
+<sub>The download badge updates automatically through Shields.io. It counts GitHub release asset downloads across releases, including checksum files—not unique users, source clones, or Cargo installations. Counts may be cached.</sub>
+
+## Quick start
+
+**Linux, WSL, and macOS · x86-64 and ARM64**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/main/install.sh | sh
 ```
 
-The installer verifies the Hibiscus release checksum and installs Pi if missing: through npm without extra prompts when compatible Node.js/npm are available, or through Pi's official installer (which may ask to bootstrap Node.js). An existing Pi and its configuration are left alone. The Hibiscus binary goes to `~/.local/bin` without `sudo` (Pi's Node bootstrap may require it). Review-first installation, private-repository authentication, version pinning, and release details are covered in [Installation and releases](docs/installation.md).
-
-To build from source:
+Then start a conversation:
 
 ```sh
-cargo test
+hibiscus
+```
+
+Use `/login` if you need to sign in, then `/models` to choose a model available to your Pi configuration.
+
+The installer verifies release checksums and places Hibiscus in `~/.local/bin`. It reuses an existing Pi installation or installs Pi if missing. Pi needs **Node.js 22.19+**; its installer may offer to install Node and may ask for elevated permissions. Hibiscus itself does not require Rust or `sudo` for a prebuilt install.
+
+Prefer to inspect the installer first, choose a version, or use a custom directory? See [installation options](docs/installation.md).
+
+## Made for the terminal
+
+| | What you get |
+| :--- | :--- |
+| **Clear conversations** | Shaded user rows, visible `hibi` reply headings, Markdown, and a scrolling transcript. |
+| **Room to think** | A multiline composer that grows to five rows, then scrolls within the input. |
+| **Show, don't describe** | Paste clipboard images alongside your prompt, with a visible attachment count. |
+| **Models at your fingertips** | A keyboard-and-wheel picker of Pi-configured models, grouped by provider. |
+| **Pick up where you left off** | Resume the latest session or choose another, with recent conversation context shown. |
+| **Know what's happening** | A flower heartbeat, elapsed time, tool status, and bounded previews of successful edits. |
+| **Stay in control** | Common dangerous shell commands ask before running: Deny, Allow once, or Always Allow this exact command in this chat. Esc stops a run. |
+
+### A few keys to remember
+
+| Action | Shortcut |
+| :--- | :--- |
+| Send | **Enter** |
+| Newline | **Ctrl+Enter** · Ctrl+J fallback |
+| Paste an image | **Alt+V on WSL** · **Ctrl+V elsewhere** |
+| Remove staged images | **Ctrl+X** |
+| Scroll a long draft | **↑ / ↓** or wheel over the input |
+| Scroll the conversation | **PgUp / PgDn** or mouse wheel |
+| Stop the current run | **Esc** |
+
+Image paste needs a supported local clipboard backend and an image-capable model. Input editing currently appends or deletes at the end of the draft. See [terminal behavior](docs/terminal.md) for clipboard requirements, limits, and terminal-specific shortcuts.
+
+## Your everyday commands
+
+```sh
+hibiscus                              # open a new chat
+hibiscus --continue                   # resume the latest session here
+hibiscus --sessions                   # choose a saved session
+hibiscus "Explain this repository"     # run a one-shot prompt
+printf 'Hello\nFollow up\n' | hibiscus   # pipe a conversation
+```
+
+Inside a chat:
+
+| Command | What it does |
+| :--- | :--- |
+| `/new` | Open a blank chat while keeping previous sessions saved |
+| `/continue` | Resume the latest saved session in this directory |
+| `/sessions` | Choose and switch sessions |
+| `/models` | Choose a model across Pi-configured providers |
+| `/login` | Sign in with Codex, or hand off to Pi for another provider |
+| `/logout` | Choose a provider and remove its stored credential inside Hibiscus |
+| `/restore` | Restore a failed prompt and images for review, without sending |
+| `/reconnect` | Reconnect a disconnected Pi backend without replaying requests |
+| `/help` | Show available commands |
+| `/quit` or `/exit` | Leave Hibiscus |
+
+Sessions belong to Pi, not a second Hibiscus database. On resume, Hibiscus shows up to the **last five user turns** and their replies; Pi retains the full history. One-shot prompts are saved as separate sessions.
+
+Model errors should not end your chat. Hibiscus keeps the UI open after rate limits, authentication/subscription failures, and rejected commands. Pi manages retries; `/restore` lets you review a failed prompt, while `/reconnect` handles a lost backend without automatically resending anything. [Recovery guide →](docs/error-handling.md)
+
+## Keep it fresh
+
+```sh
+hibiscus update
+hibiscus --version
+```
+
+Prebuilt installs can update from GitHub Releases with checksum verification and atomic replacement. Restart after updating. Full-screen chat also checks for updates at most once a day and offers **Later / Update now**; offline checks don't block chat.
+
+Set `HIBISCUS_NO_UPDATE_CHECK=1` to disable automatic checks. Custom install directories need `HIBISCUS_INSTALL_DIR`; source/Cargo installations should be updated with `cargo install --path .` instead. [More about updates →](docs/installation.md)
+
+## Hibiscus + Pi
+
+**A terminal interface, not another agent.** Hibiscus controls a long-lived `pi --mode rpc` process over JSONL. Pi remains responsible for authentication, model access, tools, agent behavior, and session persistence.
+
+- Hibiscus launches Pi with **installed extensions disabled**, its one explicit approval gate, and the built-in **read, bash, edit, and write** tools enabled. Your normal standalone Pi configuration is unaffected.
+- Codex sign-in and provider logout stay inside full-screen Hibiscus with the Pi SDK available. Logout asks for a provider and confirmation; it removes only that stored credential, not environment/config keys or provider-side access. Other-provider login hands off to Pi's TUI; `/quit` there returns to Hibiscus. [Authentication details →](docs/terminal.md#authentication-handoff)
+- `NO_COLOR=1` disables colors. Small terminals, `TERM=dumb`, and piped input use line mode.
+- Set `HIBISCUS_PI` to select a different Pi executable. Pi's session-directory settings are respected.
+
+## Build & contribute
+
+With [Pi](https://pi.dev), Rust, Cargo, and a C linker installed:
+
+```sh
+git clone https://github.com/Rekabytes-Enterprise/hibiscus.git
+cd hibiscus
+cargo test --locked
 cargo install --path .
 ```
 
-Run `cargo install --path .` again after changing the source.
+On Ubuntu/WSL, the linker prerequisite is `sudo apt install build-essential`. Source builds require Pi separately; the prebuilt installer handles Pi installation for you.
 
-## Usage
+| Explore | |
+| :--- | :--- |
+| [Changelog](CHANGELOG.md) | What's new in each version |
+| [Installation & releases](docs/installation.md) | Platforms, installer options, updates, and publishing |
+| [Terminal guide](docs/terminal.md) | Input, images, sessions, authentication, and compatibility |
+| [Architecture](docs/architecture.md) | The Rust modules and Pi RPC boundary |
+| [Development](docs/development.md) | Tests and manual verification |
+| [Contributing](CONTRIBUTING.md) | Help improve Hibiscus |
 
-```sh
-hibiscus                                  # start a new chat
-hibiscus --continue                       # resume the latest session here
-hibiscus --sessions                       # choose a saved session
-hibiscus --version                        # print installed version
-hibiscus update                           # update a prebuilt install from GitHub Releases
-hibiscus "Explain this repository"        # one-shot prompt
-printf 'Hello\nFollow up\n' | hibiscus   # piped multi-turn chat
-```
-
-Interactive chat commands:
-
-- `/new` — start a new Pi session
-- `/continue` — resume the latest saved session
-- `/sessions` — choose and switch to a saved session
-- `/models` — choose an available model across providers, sorted by provider then model ID
-- `/login` — choose OpenAI Codex sign-in in Hibiscus, or open Pi for another provider (independent of the currently selected model)
-- `/logout` — hand the terminal to Pi for native logout
-- `/help`
-- `/quit` or `/exit`
-
-Prebuilt installs in `~/.local/bin` can update themselves with `hibiscus update`; for a custom directory, set `HIBISCUS_INSTALL_DIR` to that directory. Interactive full-screen chat checks for a newer public release at most once a day and offers **Later / Update now** without blocking chat if offline. Updates download the version-pinned archive and checksums, verify SHA-256, atomically replace the executable, and take effect after restarting Hibiscus. Source/Cargo installs are not replaced; reinstall those with Cargo. Set `HIBISCUS_NO_UPDATE_CHECK=1` to disable automatic checks (manual updates still work).
-
-One-shot prompts are saved as their own Pi sessions. Hibiscus does not maintain a separate conversation database. Session lists are read from Pi's JSONL files and filtered to the current working directory. Pi's session directory settings are respected, including `PI_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_DIR`, and `sessionDir` in Pi settings.
-
-When resuming or switching sessions, Hibiscus displays up to the five most recent user turns and their visible assistant text. Pi retains the complete history.
-
-## Terminal behavior
-
-Interactive terminals use an alternate-screen interface with:
-
-- a multiline composer that grows to five rows, then scrolls internally; Ctrl+Enter (or Ctrl+J) inserts a newline, Enter sends
-- clipboard image attachments using Pi's default shortcut: Alt+V on WSL, Ctrl+V elsewhere; Ctrl+X removes staged images before sending
-- docked five-row `/models` and `/sessions` pickers with active-item markers, arrow/wheel navigation, PageUp/PageDown movement, a scrollbar, Enter selection, and Esc cancellation
-- live `/` command suggestions with prefix filtering; use Up/Down or the wheel to navigate, Tab to complete, Enter to run, and Esc to dismiss
-- raspberry-pink accents and a cycling flower heartbeat while Pi is working, even before it streams text
-- a raspberry-pink footer showing working, thinking, writing, and tool phases with elapsed time
-- themed reasoning and tool start/finish lines, including reasoning duration, read/write/edit paths, and success/failure
-- bounded, color-coded +/- diff previews with context and line numbers after successful Pi `edit` results (when Pi supplies `result.details.diff`); failed edits show no diff. Raw reasoning and full tool output remain hidden
-- lightweight Markdown formatting for assistant output
-- mouse-wheel and PageUp/PageDown transcript scrolling during idle or streaming responses; scrolling stops at the oldest complete page
-- Esc to clear queued Pi messages and abort a running response
-
-`NO_COLOR=1` disables colors. `TERM=dumb`, small terminals, and piped input use line-mode output instead. Piped mode writes assistant text to stdout and Pi tools/diagnostics to stderr. Full-screen picker navigation is unavailable in line mode, where `/models` and `/sessions` use numbered input instead.
-
-Hibiscus can handle Pi extension UI requests for `confirm`, `select`, `input`, and `editor` in an interactive terminal, though Pi extensions are disabled for Hibiscus runs by default. Confirmations require explicit `y` or `yes`, and selections require a valid number. Dialogs are cancelled in non-interactive mode. The full-screen composer supports multiline drafts with end-of-draft editing; Up/Down or the mouse wheel over the input rows scrolls long drafts. Line-mode input and extension dialogs remain single-line.
-
-In a full-screen terminal, `/login` first lets you choose **OpenAI Codex** or **another provider**. This is independent of the currently selected model: Pi may have no selected Codex model after logout. For Codex, Hibiscus launches a small Node helper using the installed **Pi SDK's** OAuth implementation. On macOS, Hibiscus opens the sign-in URL in the default browser, since some terminals do not support clickable OSC 8 links. It also shows a short hyperlink where supported instead of a broken multi-line URL. Ctrl+Y asks compatible terminals to copy the complete URL via OSC 52; if browser opening and terminal links/clipboard controls are unavailable, retry with the device-code option. Hibiscus accepts a manually pasted redirect URL without echoing it, then waits for Pi SDK login/storage completion, forcibly cleans up the dedicated helper (without waiting for the browser tab or callback socket to close), and reconnects the idle RPC child on the same saved session. You can sign in before sending a chat message. Esc cancels the flow; the helper's explicit completion event ends login, so a still-open browser success tab cannot keep Hibiscus waiting. Pi owns the credential file and refresh; Hibiscus does not copy OAuth tokens into its session or logs. **Do not share screenshots of authorization URLs or device codes.** If Node or the matching Pi SDK is unavailable, Codex login offers Pi's TUI fallback. `/logout` and login for other providers also use that TUI handoff. No prior chat message is needed: Hibiscus closes its RPC child before opening Pi on the saved session if one exists, or with `--no-session` otherwise. Run the auth command in Pi, then `/quit` to return; Hibiscus reopens its RPC child afterward.
-
-## Project layout
-
-- `src/main.rs` — CLI arguments and entry point
-- `src/chat/` — chat commands, model selection, session discovery, and auth handoff
-- `src/pi/` — Pi RPC subprocess, protocol events, Codex SDK auth bridge, and extension dialogs
-- `src/tui/` — terminal input, screen rendering, pickers, and Markdown display
-- `tests/` — mock Pi and PTY integration tests
-
-See [docs/](docs/README.md) for architecture, terminal behavior, and development instructions, or [CONTRIBUTING.md](CONTRIBUTING.md) to contribute. `AGENTS.md` contains repository-specific development guidance; `.pi/STATE.md` tracks current work and `.pi/MEMORY.md` stores durable project knowledge.
+<p align="center">
+  <img src="docs/assets/hibiscus.svg" width="32" height="32" alt=""><br>
+  <sub>Built in Rust. Powered by Pi. A little more bloom in your terminal.</sub>
+</p>

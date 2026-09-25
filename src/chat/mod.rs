@@ -8,6 +8,8 @@ use crate::{
         auth::{codex_sign_in, AuthOutcome},
         configure_builtin_tools,
         dialog::Dialogs,
+        error::{local, ChatError, RecoveryAction},
+        logout::{sign_out, LogoutOutcome},
         rpc::{Rpc, SessionStart},
     },
     tui::{
@@ -56,28 +58,34 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
         if !screen.is_full() {
             ui.header(&mut screen)?;
         }
-        if ui.interactive {
-            show_session_status(
-                &mut rpc,
-                &mut stdin.lock(),
-                &mut screen,
-                &mut dialogs,
-                &mut raw,
-                events.as_ref().map(|e| &e.receiver),
-                &ui,
-            )?;
-        }
-        if show_history {
-            show_history_for(
-                &mut rpc,
-                &mut screen,
-                &mut stdin.lock(),
-                &mut dialogs,
-                &mut raw,
-                events.as_ref().map(|e| &e.receiver),
-                stdin.is_terminal(),
-                &ui,
-            )?;
+        let setup: Result<()> = (|| {
+            if ui.interactive {
+                show_session_status(
+                    &mut rpc,
+                    &mut stdin.lock(),
+                    &mut screen,
+                    &mut dialogs,
+                    &mut raw,
+                    events.as_ref().map(|e| &e.receiver),
+                    &ui,
+                )?;
+            }
+            if show_history {
+                show_history_for(
+                    &mut rpc,
+                    &mut screen,
+                    &mut stdin.lock(),
+                    &mut dialogs,
+                    &mut raw,
+                    events.as_ref().map(|e| &e.receiver),
+                    stdin.is_terminal(),
+                    &ui,
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = setup {
+            handle_chat_error(error, &mut rpc, &mut screen, &ui)?;
         }
         chat(
             &mut rpc,
@@ -189,6 +197,7 @@ fn chat<R: BufRead>(
     update_notice: Option<&Receiver<Option<String>>>,
 ) -> Result<()> {
     let mut line = String::new();
+    let mut last_failed = None;
     loop {
         if !output.is_full() {
             ui.prompt(output)?;
@@ -223,129 +232,122 @@ fn chat<R: BufRead>(
             };
             output.user(shown.trim_start_matches('\n'))?;
         }
-        match message {
-            "" if images.is_empty() => continue,
-            "/quit" | "/exit" => return Ok(()),
-            "/help" => ui.help(output)?,
-            "/new" => {
-                rpc.command(
-                    json!({"type": "new_session"}),
-                    output,
-                    input,
-                    dialogs,
-                    events.as_ref().map(|e| &e.receiver),
-                    raw,
-                    interactive,
-                )?;
-                ui.info(output, "Started new session.")?;
-                show_session_status(
-                    rpc,
-                    input,
-                    output,
-                    dialogs,
-                    raw,
-                    events.as_ref().map(|e| &e.receiver),
-                    ui,
-                )?;
-            }
-            "/continue" => {
-                let cwd = env::current_dir()?;
-                let list = sessions::list(&cwd)?;
-                if let Some(latest) = list.first() {
-                    open_session(
-                        rpc,
-                        &latest.path,
-                        output,
-                        input,
-                        dialogs,
-                        raw,
-                        events.as_ref().map(|e| &e.receiver),
-                        interactive,
-                    )?;
-                    show_session_status(
-                        rpc,
-                        input,
-                        output,
-                        dialogs,
-                        raw,
-                        events.as_ref().map(|e| &e.receiver),
-                        ui,
-                    )?;
-                } else {
-                    writeln!(output, "No saved sessions for this directory.")?;
-                }
-            }
-            "/models" => {
-                choose_model(
-                    rpc,
-                    input,
-                    output,
-                    interactive,
-                    events.as_ref().map(|e| &e.receiver),
-                    raw,
-                )?;
-                show_session_status(
-                    rpc,
-                    input,
-                    output,
-                    dialogs,
-                    raw,
-                    events.as_ref().map(|e| &e.receiver),
-                    ui,
-                )?;
-            }
-            "/login" => {
-                codex_login(
-                    rpc,
-                    input,
-                    output,
-                    interactive,
-                    dialogs,
-                    events,
-                    raw,
-                    tty,
-                    ui,
-                )?;
-            }
-            "/logout" => {
-                auth_handoff(message, rpc, input, output, interactive, events, raw, tty)?;
-            }
-            "/sessions" => {
-                let cwd = env::current_dir()?;
-                let list = sessions::list(&cwd)?;
-                let choice = if output.is_full() {
-                    if list.is_empty() {
-                        writeln!(output, "No saved sessions for this directory.")?;
-                        None
-                    } else if let Some(keys) = events.as_ref() {
-                        let labels = list
-                            .iter()
-                            .map(|entry| entry.title.clone())
-                            .collect::<Vec<_>>();
-                        output
-                            .select("Saved sessions", &labels, None, &keys.receiver)?
-                            .map(|index| list[index].path.clone())
+        if message.is_empty() && images.is_empty() {
+            continue;
+        }
+        if matches!(message, "/quit" | "/exit") {
+            return Ok(());
+        }
+        let mut submitted = false;
+        let result: Result<()> = (|| {
+            match message {
+                "/help" => ui.help(output)?,
+                "/restore" => {
+                    if !output.is_full() {
+                        ui.info(
+                            output,
+                            "Draft restoration requires the full-screen composer.",
+                        )?;
+                    } else if let Some((text, images)) = last_failed.take() {
+                        output.restore_draft(text, images);
+                        ui.info(output, "Restored failed prompt. Review it before pressing Enter; tools may already have run.")?;
                     } else {
-                        None
+                        ui.info(output, "No failed prompt to restore.")?;
                     }
-                } else if let (Some(keys), Some(raw)) = (events.as_ref(), raw.as_mut()) {
-                    sessions::pick_with(&list, output, |_| {
-                        raw.write("Choose a session number (Enter to cancel): ")?;
-                        terminal::read_line(&keys.receiver, raw)
-                    })?
-                } else {
-                    sessions::pick(&list, input, output, interactive)?
-                };
-                if let Some(path) = choice {
-                    open_session(
-                        rpc,
-                        &path,
+                }
+                "/reconnect" => {
+                    if rpc.is_connected() {
+                        ui.info(output, "Pi is already connected.")?;
+                    } else {
+                        if !rpc.has_saved_session() {
+                            ui.info(output, "No saved session path was confirmed; reconnecting opens a new Pi session. Existing sessions remain available via /sessions.")?;
+                        }
+                        rpc.recover_connection()?;
+                        if let Err(error) = show_session_status(
+                            rpc,
+                            input,
+                            output,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            ui,
+                        ) {
+                            rpc.disconnect();
+                            return Err(error);
+                        }
+                        output.set_disconnected(false)?;
+                        ui.info(output, "Reconnected to Pi. No prompt was resent.")?;
+                    }
+                }
+                _ if !rpc.is_connected() => {
+                    if !message.starts_with('/') {
+                        last_failed = Some((message.to_owned(), images.clone()));
+                    }
+                    ui.info(output, "Pi is disconnected. Use /reconnect, /restore, /help, or /quit. Nothing was sent.")?;
+                }
+                "/new" => {
+                    rpc.command(
+                        json!({"type": "new_session"}),
                         output,
                         input,
                         dialogs,
+                        events.as_ref().map(|e| &e.receiver),
+                        raw,
+                        interactive,
+                    )?;
+                    // Clear only after Pi confirms creation. A rejected or
+                    // cancelled command must leave the current view intact.
+                    last_failed = None;
+                    if output.is_full() {
+                        output.clear_session()?;
+                    } else {
+                        ui.info(output, "Started new session.")?;
+                    }
+                    show_session_status(
+                        rpc,
+                        input,
+                        output,
+                        dialogs,
                         raw,
                         events.as_ref().map(|e| &e.receiver),
+                        ui,
+                    )?;
+                }
+                "/continue" => {
+                    let cwd = env::current_dir().map_err(local)?;
+                    let list = sessions::list(&cwd).map_err(local)?;
+                    if let Some(latest) = list.first() {
+                        open_session(
+                            rpc,
+                            &latest.path,
+                            output,
+                            input,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            interactive,
+                        )?;
+                        show_session_status(
+                            rpc,
+                            input,
+                            output,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            ui,
+                        )?;
+                    } else {
+                        writeln!(output, "No saved sessions for this directory.")?;
+                    }
+                }
+                "/models" => {
+                    choose_model(
+                        rpc,
+                        input,
+                        output,
                         interactive,
+                        events.as_ref().map(|e| &e.receiver),
+                        raw,
                     )?;
                     show_session_status(
                         rpc,
@@ -357,24 +359,158 @@ fn chat<R: BufRead>(
                         ui,
                     )?;
                 }
-            }
-            _ => {
-                let mut command = json!({"type":"prompt", "message":message});
-                if !images.is_empty() {
-                    command["images"] = json!(images);
+                "/login" => {
+                    codex_login(
+                        rpc,
+                        input,
+                        output,
+                        interactive,
+                        dialogs,
+                        events,
+                        raw,
+                        tty,
+                        ui,
+                    )?;
                 }
-                rpc.command(
-                    command,
-                    output,
-                    input,
-                    dialogs,
-                    events.as_ref().map(|e| &e.receiver),
-                    raw,
-                    interactive,
-                )?;
+                "/logout" => {
+                    inline_logout(rpc, input, output, interactive, dialogs, events, raw, ui)?;
+                }
+                "/sessions" => {
+                    let cwd = env::current_dir().map_err(local)?;
+                    let list = sessions::list(&cwd).map_err(local)?;
+                    let choice = if output.is_full() {
+                        if list.is_empty() {
+                            writeln!(output, "No saved sessions for this directory.")?;
+                            None
+                        } else if let Some(keys) = events.as_ref() {
+                            let labels = list
+                                .iter()
+                                .map(|entry| entry.title.clone())
+                                .collect::<Vec<_>>();
+                            output
+                                .select("Saved sessions", &labels, None, &keys.receiver)?
+                                .map(|index| list[index].path.clone())
+                        } else {
+                            None
+                        }
+                    } else if let (Some(keys), Some(raw)) = (events.as_ref(), raw.as_mut()) {
+                        sessions::pick_with(&list, output, |_| {
+                            raw.write("Choose a session number (Enter to cancel): ")?;
+                            terminal::read_line(&keys.receiver, raw)
+                        })?
+                    } else {
+                        sessions::pick(&list, input, output, interactive)?
+                    };
+                    if let Some(path) = choice {
+                        open_session(
+                            rpc,
+                            &path,
+                            output,
+                            input,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            interactive,
+                        )?;
+                        show_session_status(
+                            rpc,
+                            input,
+                            output,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            ui,
+                        )?;
+                    }
+                }
+                _ => {
+                    submitted = true;
+                    let mut command = json!({"type":"prompt", "message":message});
+                    if !images.is_empty() {
+                        command["images"] = json!(images);
+                    }
+                    rpc.command(
+                        command,
+                        output,
+                        input,
+                        dialogs,
+                        events.as_ref().map(|e| &e.receiver),
+                        raw,
+                        interactive,
+                    )?;
+                }
+            }
+            Ok(())
+        })();
+        let failed = result.is_err();
+        match result {
+            Ok(()) => {
+                if submitted {
+                    last_failed = None;
+                }
+            }
+            Err(error) => {
+                if submitted {
+                    last_failed = Some((message.to_owned(), images));
+                }
+                handle_chat_error(error, rpc, output, ui)?;
+                if submitted && output.is_full() {
+                    ui.info(output, "Use /restore to review the failed prompt and attachments. Nothing is resent automatically.")?;
+                }
             }
         }
+        // Capture the authoritative session path once Pi has settled. A
+        // reconnect never guesses another session from the workspace's latest.
+        if (submitted || failed) && rpc.is_connected() && interactive {
+            if let Err(error) = show_session_status(
+                rpc,
+                input,
+                output,
+                dialogs,
+                raw,
+                events.as_ref().map(|e| &e.receiver),
+                ui,
+            ) {
+                handle_chat_error(error, rpc, output, ui)?;
+            }
+        }
+        output.flush()?;
     }
+}
+
+fn handle_chat_error(
+    error: Box<dyn std::error::Error + Send + Sync>,
+    rpc: &mut Rpc,
+    output: &mut Screen,
+    ui: &Ui,
+) -> Result<()> {
+    // Local terminal/stdin I/O failure cannot safely be turned into chat text.
+    if !ui.interactive || error.is::<io::Error>() {
+        return Err(error);
+    }
+    let error = error
+        .downcast_ref::<ChatError>()
+        .cloned()
+        .unwrap_or_else(|| local(error));
+    if error.recovery() == RecoveryAction::Reconnect || !rpc.is_connected() {
+        rpc.disconnect();
+        output.set_disconnected(true)?;
+    }
+    writeln!(output)?;
+    ui.info(
+        output,
+        &format!("Error ({:?}): {}", error.category, error.message),
+    )?;
+    if rpc.is_connected() {
+        ui.info(output, error.hint())?;
+    } else {
+        ui.info(
+            output,
+            "Pi disconnected. Use /reconnect; nothing is resent automatically.",
+        )?;
+    }
+    output.flush()?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -457,6 +593,67 @@ fn codex_login<R: BufRead>(
             )?;
             return auth_handoff("/login", rpc, input, output, interactive, events, raw, tty);
         }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inline_logout<R: BufRead>(
+    rpc: &mut Rpc,
+    input: &mut R,
+    output: &mut Screen,
+    interactive: bool,
+    dialogs: &mut Dialogs,
+    events: &Option<TerminalEvents>,
+    raw: &mut Option<RawMode>,
+    ui: &Ui,
+) -> Result<()> {
+    let Some(keys) = events.as_ref().filter(|_| interactive && output.is_full()) else {
+        ui.info(output, "Inline /logout requires a full-screen terminal. Run pi and use /logout to manage stored credentials.")?;
+        return Ok(());
+    };
+    let state = rpc.request(
+        json!({"type":"get_state"}),
+        input,
+        output,
+        dialogs,
+        raw,
+        Some(&keys.receiver),
+        interactive,
+    )?;
+    let start = state["sessionFile"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .map(SessionStart::Selected)
+        .unwrap_or(SessionStart::New);
+    let result = sign_out(output, &keys.receiver, || rpc.close());
+    if let Ok(LogoutOutcome::Removed {
+        provider,
+        synchronization_warning,
+    }) = &result
+    {
+        ui.info(
+            output,
+            &format!("Removed stored credentials for {provider}."),
+        )?;
+        if *synchronization_warning {
+            ui.info(output, "Pi removed the credential but could not synchronize its helper state; reopening the chat backend.")?;
+        }
+    }
+    // Once removal was authorized, discard cached credentials even when the
+    // helper fails or times out after a possible storage mutation.
+    if !rpc.is_connected() {
+        rpc.reopen(start)?;
+        show_session_status(rpc, input, output, dialogs, raw, Some(&keys.receiver), ui)?;
+    }
+    match result? {
+        LogoutOutcome::Removed { .. } => {
+            ui.info(output, "Logout complete. Chat is preserved. Environment variables and models.json are unchanged; provider tokens are not revoked.")?;
+        }
+        LogoutOutcome::Cancelled => ui.info(output, "Logout cancelled.")?,
+        LogoutOutcome::Empty => ui.info(output, "No stored credentials to remove. Environment variables and models.json may still provide access.")?,
+        LogoutOutcome::Unavailable => ui.info(output, "Inline logout needs Node and a compatible Pi SDK. No credentials were changed. Run pi and use /logout, or update Pi.")?,
     }
     Ok(())
 }

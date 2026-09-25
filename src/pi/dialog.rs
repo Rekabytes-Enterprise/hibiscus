@@ -2,7 +2,8 @@ use crate::tui::terminal::{self, RawMode};
 use crate::Result;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 pub(crate) struct Dialogs;
 
@@ -18,6 +19,18 @@ impl Dialogs {
         events: Option<&Receiver<u8>>,
         interactive: bool,
     ) -> Result<()> {
+        if event["type"] == "extension_error" {
+            let error = super::error::ChatError::new(
+                super::error::ErrorSource::Extension,
+                event["error"].as_str().unwrap_or("Extension failed"),
+            );
+            if interactive {
+                writeln!(display, "\n  · Warning: {error}")?;
+            } else {
+                eprintln!("pi: {error}");
+            }
+            return Ok(());
+        }
         if event["type"] != "extension_ui_request" {
             return Ok(());
         }
@@ -26,7 +39,7 @@ impl Dialogs {
             writeln!(
                 display,
                 "[pi: {}]",
-                event["message"].as_str().unwrap_or("notification")
+                super::error::safe_message(event["message"].as_str().unwrap_or("notification"))
             )?;
             return Ok(());
         }
@@ -39,7 +52,15 @@ impl Dialogs {
             if let (Some(raw), Some(events)) = (raw.as_mut(), events) {
                 response_for(event, |question| {
                     raw.write(question)?;
-                    terminal::read_line(events, raw)
+                    if method == "select"
+                        && event["title"]
+                            .as_str()
+                            .is_some_and(|title| title.starts_with("Approval needed:"))
+                    {
+                        read_approval(events, raw, event["timeout"].as_u64().unwrap_or(60_000))
+                    } else {
+                        terminal::read_line(events, raw)
+                    }
                 })?
             } else {
                 response_for(event, |question| {
@@ -63,9 +84,47 @@ impl Dialogs {
                 reply[field] = value.clone();
             }
         }
-        writeln!(input, "{reply}")?;
-        input.flush()?;
+        writeln!(input, "{reply}").map_err(super::error::transport)?;
+        input.flush().map_err(super::error::transport)?;
         Ok(())
+    }
+}
+
+/// A timed, default-deny reader for tool approval. Ordinary terminal
+/// read_line ignores Esc, which must never leave an approval pending.
+fn read_approval(
+    events: &Receiver<u8>,
+    raw: &mut RawMode,
+    timeout_ms: u64,
+) -> Result<Option<String>> {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms.min(60_000));
+    let mut choice = None;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        match events.recv_timeout(remaining) {
+            Ok(b'\r' | b'\n') => {
+                raw.write("\r\n")?;
+                return Ok(choice.map(str::to_owned));
+            }
+            Ok(27 | 3 | 4) => return Ok(None),
+            Ok(8 | 127) => {
+                choice = None;
+                raw.write("\x08 \x08")?;
+            }
+            Ok(key @ b'1'..=b'3') => {
+                choice = Some(match key {
+                    b'1' => "1",
+                    b'2' => "2",
+                    _ => "3",
+                });
+                raw.write(&char::from(key).to_string())?;
+            }
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return Ok(None),
+        }
     }
 }
 

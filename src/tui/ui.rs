@@ -117,7 +117,14 @@ impl Ui {
             "  Models      /models  (↑↓ / wheel, Enter, Esc in full screen)"
         )?;
         writeln!(out, "  Account     /login  (Codex here; others in Pi)")?;
-        writeln!(out, "              /logout  (opens Pi)")?;
+        writeln!(
+            out,
+            "              /logout  (remove stored credentials here)"
+        )?;
+        writeln!(
+            out,
+            "  Recovery    /restore  (review failed prompt)  /reconnect"
+        )?;
         writeln!(
             out,
             "  Keys        Enter send  ·  Esc stop  ·  Ctrl+D exit\n"

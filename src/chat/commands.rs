@@ -26,7 +26,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/logout",
-        description: "Open Pi for provider logout",
+        description: "Remove a stored provider credential",
     },
     Command {
         name: "/models",
@@ -39,6 +39,14 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "/quit",
         description: "Leave Hibiscus",
+    },
+    Command {
+        name: "/reconnect",
+        description: "Reconnect Pi without resending",
+    },
+    Command {
+        name: "/restore",
+        description: "Restore a failed prompt for review",
     },
     Command {
         name: "/sessions",

@@ -177,10 +177,13 @@ export class ModelRuntime {
         tty.finish();
         assert!(!auth_log.exists());
         assert!(!browser_log.exists());
-        assert_eq!(
-            fs::read_to_string(pi_log).unwrap().trim(),
-            "--mode rpc --no-extensions --tools read,bash,edit,write"
-        );
+        let launch = fs::read_to_string(pi_log).unwrap();
+        let extension = launch
+            .trim()
+            .strip_prefix("--mode rpc --no-extensions --tools read,bash,edit,write --extension ")
+            .unwrap()
+            .to_owned();
+        assert!(extension.ends_with("/approval.mjs"));
         drop(tty);
         fs::remove_dir_all(root).unwrap();
         return;
@@ -262,8 +265,12 @@ export class ModelRuntime {
     assert!(!shown.contains("pi-only-input"), "{shown}");
     let log = fs::read_to_string(pi_log).unwrap();
     assert_eq!(log.lines().count(), 2, "{log}");
-    let base = "--mode rpc --no-extensions --tools read,bash,edit,write";
-    assert_eq!(log.lines().next().unwrap(), base, "{log}");
+    let base = log.lines().next().unwrap();
+    assert!(
+        base.starts_with("--mode rpc --no-extensions --tools read,bash,edit,write --extension "),
+        "{log}"
+    );
+    assert!(base.ends_with("/approval.mjs"), "{log}");
     if method == "logged_out" {
         assert!(shown.contains("Sign in to"), "{shown}");
         assert!(

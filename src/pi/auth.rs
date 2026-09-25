@@ -21,7 +21,7 @@ pub(crate) enum AuthOutcome {
 
 /// Only load the SDK belonging to the selected Pi installation. The override
 /// is useful for custom Pi installs and for isolated mock tests.
-fn sdk_entry() -> Option<PathBuf> {
+pub(super) fn sdk_entry() -> Option<PathBuf> {
     if let Some(entry) = env::var_os("HIBISCUS_AUTH_SDK") {
         let path = PathBuf::from(entry);
         return path.is_file().then_some(path);

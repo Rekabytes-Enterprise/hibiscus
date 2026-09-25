@@ -63,9 +63,10 @@ done
         String::from_utf8(result.stdout).unwrap(),
         "you> previous\nassistant> past reply\n\nreply\nStarted new session.\nreply\n"
     );
-    assert_eq!(
-        fs::read_to_string(log).unwrap().trim(),
-        "--mode rpc --no-extensions --tools read,bash,edit,write --continue"
-    );
+    let launch = fs::read_to_string(log).unwrap();
+    assert!(launch
+        .trim()
+        .starts_with("--mode rpc --no-extensions --tools read,bash,edit,write --extension "));
+    assert!(launch.trim().ends_with("/approval.mjs --continue"));
     fs::remove_dir_all(directory).unwrap();
 }
