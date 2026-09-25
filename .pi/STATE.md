@@ -2,30 +2,30 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — 0.1.7 preparation, 2026-09-25 (UTC)
+## Snapshot — macOS CI fixture correction, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: `0.1.7`. This source batch builds on `aca6b10` and includes rendering, composer, activity/goal tracking, live queues, shared modals, documentation, tests, and the records cleanup. Use `git status`/`git log` for current commit and worktree provenance; the fingerprint below identifies tested source independently of commit metadata.
-- `origin/dev` was fetched and matched `aca6b10` before preparation. The user requested a dev commit/push, not a release tag. Published releases and remote CI were not verified. A dev push must not be described as a deployed release or closure of the issues below.
-- Version references and `CHANGELOG.md` were updated for 0.1.7. No real credential changes or provider runs were performed during preparation.
+- Branch: `dev`; manifest version: `0.1.7`; baseline commit: `e369169`. This correction changes the steering clipboard test fixture and these records only; production code/version are unchanged. The user requested a dev commit/push; consult Git for its commit identifier. macOS CI verification remains pending.
+- The supplied macOS 0.1.7 CI log passes 80 unit tests and the preceding integration suites, then fails seven of eight steering cases while waiting for an image attachment. `tests/steering_tty.rs` mocked only `wl-paste`, whereas the compiled macOS backend in `src/tui/clipboard.rs` selects `osascript` first and ignores Wayland environment settings. The tests fell through to the runner clipboard instead of their image fixture; the no-image result precedes steering submission.
+- The local fixture now shadows all four platform reader names and logs helper invocations. A regression checks each fake reader's bytes/type-list response; steering cases assert the host's expected mock reader was used. Linux checks pass below; **a macOS CI rerun is still required**. This fixture correction does not establish real macOS clipboard or provider support. Published releases/remaining CI jobs were not verified.
 - Earlier user confirmations: WSL Alt+V image paste and Ctrl+Enter multiline input worked on earlier builds. They do not validate this newer worktree. The user's installed binary was not matched to this source snapshot.
 
 ## Latest automated evidence
 
-Rerun on Linux after the 0.1.7 bump, against the source/test fingerprint below:
+Rerun on Linux after the clipboard-fixture correction, against the source/test fingerprint below:
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Pass: 80 unit + 72 integration tests. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
+| `cargo test --locked` | Pass: 80 unit + 73 integration tests. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
 | `node tests/approval.mjs` | Pass for the fake extension harness's policy/checklist cases, not arbitrary shell safety. |
 | `node --check src/pi/approval.mjs` and `src/pi/logout.mjs` | Pass; syntax only. |
 | `sh tests/install.sh` and `sh tests/bump-version.sh` | Pass with mocked downloads/sandbox fixtures; no real installation or release. |
-| `git diff --check` | Pass; staging checks include newly added files before commit. |
+| `git diff --check` | Pass for the tracked fixture/record changes. |
 
-Environment: Cargo 1.98.1, Node v24.21.0; `pi --version` reports 0.87.1. No macOS run or real terminal visual check was performed.
+Environment: Cargo 1.98.1, Node v24.21.0; `pi --version` reports 0.87.1. No macOS rerun of this correction or real terminal visual check was performed here.
 
-Source/test fingerprint: `78ab71dce31f1a468e01d6c10bc16d94b7b1cc3e672dc3191e1e9cbf703e4542`.
+Source/test fingerprint: `5e5c2186bc842a9509031b74bc2e485c556ec32ca8da04a9b1628be1a1553c44`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`. Records/docs are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
 
 ## User-reported issues: candidates implemented, real-use closure pending
@@ -55,9 +55,10 @@ Also pending: inline `/logout` against an intentionally selected account, the cu
 
 ## Next actions, in order
 
-1. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
-2. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
-3. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.
-4. After the requested dev push, check remote CI and supported platforms separately. Before publishing, verify the intended version-matching commit and release artifacts. No release tag is requested by this preparation.
+1. Rerun macOS CI with the corrected fixture; confirm all steering cases and the subsequent suites finish. Do not label the macOS failure resolved until that result is available.
+2. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
+3. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
+4. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.
+5. Before publishing, verify the intended version-matching commit, supported-platform CI and release artifacts. No release tag/version bump is part of this fixture correction.
 
 Details live in `docs/terminal.md`, `docs/error-handling.md`, `docs/architecture.md`, and the named tests. Those documents describe intended/current implementation; they are not additional proof that a reported bug is resolved.

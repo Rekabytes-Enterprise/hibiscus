@@ -1,6 +1,91 @@
 mod support;
-use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::Command,
+};
 use support::{unique_temp_dir, Pty};
+
+/// Shadow every platform reader so tests never access a developer/CI desktop
+/// clipboard. WAYLAND_DISPLAY does not override the compiled macOS backend.
+fn install_clipboard_helpers(root: &Path) -> PathBuf {
+    for name in ["wl-paste", "xclip", "osascript", "powershell.exe"] {
+        let helper = root.join(name);
+        fs::write(
+            &helper,
+            r#"#!/bin/sh
+printf '%s\n' "${0##*/}" >> "$STEERING_CLIPBOARD_LOG"
+for arg in "$@"; do
+ case "$arg" in
+  --list-types|TARGETS) printf 'image/png\n'; exit 0 ;;
+ esac
+done
+cat "$STEERING_IMAGE"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(helper, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    root.join("clipboard-calls")
+}
+
+#[test]
+fn clipboard_fixture_covers_all_platform_readers() {
+    let root = unique_temp_dir("hibiscus-steering-clipboard");
+    let log = install_clipboard_helpers(&root);
+    let image = root.join("image.png");
+    let bytes = b"\x89PNG\r\n\x1a\n";
+    fs::write(&image, bytes).unwrap();
+    for (name, args) in [
+        ("osascript", vec!["-l", "JavaScript", "-e", "fixture-only"]),
+        (
+            "powershell.exe",
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-STA",
+                "-Command",
+                "fixture-only",
+            ],
+        ),
+        ("wl-paste", vec!["--type", "image/png", "--no-newline"]),
+        (
+            "xclip",
+            vec!["-selection", "clipboard", "-t", "image/png", "-o"],
+        ),
+    ] {
+        let result = Command::new(root.join(name))
+            .args(args)
+            .env("STEERING_IMAGE", &image)
+            .env("STEERING_CLIPBOARD_LOG", &log)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{name}");
+        assert_eq!(result.stdout, bytes, "{name} must return fixture bytes");
+    }
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        "osascript\npowershell.exe\nwl-paste\nxclip\n"
+    );
+    for (name, args) in [
+        ("wl-paste", vec!["--list-types"]),
+        (
+            "xclip",
+            vec!["-selection", "clipboard", "-t", "TARGETS", "-o"],
+        ),
+    ] {
+        let result = Command::new(root.join(name))
+            .args(args)
+            .env("STEERING_IMAGE", &image)
+            .env("STEERING_CLIPBOARD_LOG", &log)
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"image/png\n");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
 
 fn drive(scenario: &str) {
     let root = unique_temp_dir("hibiscus-steering");
@@ -8,9 +93,7 @@ fn drive(scenario: &str) {
     let log = root.join("commands");
     let image = root.join("image.png");
     fs::write(&image, b"\x89PNG\r\n\x1a\n").unwrap();
-    let clipboard = root.join("wl-paste");
-    fs::write(&clipboard, "#!/bin/sh\nif [ \"$1\" = --list-types ]; then printf 'image/png\\n'; else cat \"$STEERING_IMAGE\"; fi\n").unwrap();
-    fs::set_permissions(&clipboard, fs::Permissions::from_mode(0o755)).unwrap();
+    let clipboard_log = install_clipboard_helpers(&root);
     fs::write(&pi, r#"#!/bin/sh
 turn=0
 while IFS= read -r line; do
@@ -68,6 +151,7 @@ done
         .env("HIBISCUS_PI", &pi)
         .env("STEERING_LOG", &log)
         .env("STEERING_IMAGE", &image)
+        .env("STEERING_CLIPBOARD_LOG", &clipboard_log)
         .env("STEERING_SCENARIO", scenario)
         .env("HIBISCUS_NO_UPDATE_CHECK", "1")
         .env("WAYLAND_DISPLAY", "test")
@@ -156,6 +240,21 @@ done
     assert_eq!(prompts[1]["message"], "steer one");
     assert_eq!(prompts[1]["streamingBehavior"], "steer");
     assert_eq!(prompts[1]["images"][0]["mimeType"], "image/png");
+    assert_eq!(prompts[1]["images"][0]["data"], "iVBORw0KGgo=");
+    let clipboard_calls = fs::read_to_string(&clipboard_log).unwrap();
+    let expected_reader = if cfg!(target_os = "macos") {
+        "osascript"
+    } else {
+        "wl-paste"
+    };
+    assert!(
+        clipboard_calls.lines().any(|name| name == expected_reader),
+        "paste must use the platform's mock reader, not the real clipboard"
+    );
+    assert!(
+        clipboard_calls.lines().all(|name| name == expected_reader),
+        "unexpected clipboard backend: {clipboard_calls}"
+    );
     let ids = prompts
         .iter()
         .map(|prompt| prompt["id"].as_str().unwrap())
