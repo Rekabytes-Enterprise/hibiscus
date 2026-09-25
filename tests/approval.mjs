@@ -14,6 +14,16 @@ for (const command of ['ls -la', 'cargo test', 'rg pattern src', 'git status', '
 const handlers = {};
 const tools = {};
 approve({ on(name, fn) { handlers[name] = fn; }, registerTool(tool) { tools[tool.name] = tool; } });
+const promptOptions = { sections: { pi_base: 'Pi keeps its own instructions' }, selectedTools: ['read', 'bash'] };
+const start = { prompt: 'Who are you and what model?', systemPromptOptions: promptOptions };
+handlers.before_agent_start(start);
+assert.match(promptOptions.sections.hibiscus_identity, /presented to the user as Hibiscus/);
+assert.match(promptOptions.sections.hibiscus_identity, /powered by the Pi coding agent/);
+assert.match(promptOptions.sections.hibiscus_identity, /provider\/model/);
+assert.equal(promptOptions.sections.pi_base, 'Pi keeps its own instructions');
+assert.deepEqual(promptOptions.selectedTools, ['read', 'bash']);
+assert.equal(start.prompt, 'Who are you and what model?', 'do not rewrite the user prompt');
+assert.equal(handlers.before_agent_start(start), undefined, 'Pi builds the prompt from its structured sections');
 let asks = 0;
 let response;
 const ctx = {

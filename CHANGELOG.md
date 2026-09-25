@@ -17,6 +17,7 @@ All notable changes to Hibiscus are documented here.
 
 ### Changed
 
+- Guide identity answers to introduce Hibiscus as the terminal assistant powered by Pi, without replacing Pi's system prompt or misidentifying the model/provider.
 - Full-screen chat, composer, status and docked panels now grow with the terminal instead of remaining capped at 100 columns; drafts and cursor layout reflow on resize.
 - Validate but do not materialize incoming user image-echo base64 when only text and attachment counts are needed; leave Pi's saved messages and other RPC event payloads intact.
 - Validate but do not materialize the unused `partialResult` JSON subtree of `tool_execution_update`; preserve all other event fields, errors, approvals, queue ordering and settlement.

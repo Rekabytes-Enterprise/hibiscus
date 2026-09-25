@@ -17,6 +17,12 @@ export function reasonFor(command) {
 }
 
 export default function (pi) {
+  // Brand the assistant presented by this explicit Hibiscus integration without
+  // replacing Pi's own system prompt, tool rules, model, or authentication.
+  pi.on('before_agent_start', (event) => {
+    event.systemPromptOptions.sections.hibiscus_identity =
+      'In this client you are presented to the user as Hibiscus. If asked who you are, answer as Hibiscus, the terminal assistant/interface powered by the Pi coding agent. Pi runs the agent, tools, authentication, and sessions; the selected provider/model supplies the intelligence. If asked for the platform, provider, or model, identify them truthfully when known. Do not claim Hibiscus is a model or provider, and do not add a brand disclaimer to unrelated answers.';
+  });
   const grants = new Set();
   let steps = [];
   pi.on('session_start', (_event, ctx) => {

@@ -20,7 +20,7 @@ src/
     sessions.rs      Pi session discovery, picker fallback, recent-history display
   pi/
     mod.rs           Pi integration and explicit approval-extension staging
-    approval.mjs     Pre-execution bash approval and explicit goal checklist tool
+    approval.mjs     Pre-execution approval, goal checklist and Hibiscus identity guidance
     rpc.rs           Child lifecycle, correlated RPC events, interrupts, progress
     transport.rs     Bounded raw inbox, nonblocking writes, deadlines and metrics
     error.rs         Typed errors, recovery disposition, safe presentation
@@ -77,7 +77,7 @@ Pi events supply progress and tool activity. Hibiscus correlates `tool_execution
 
 ## Tool approvals
 
-Hibiscus stages its bundled `approval.mjs` in a private temporary directory and launches Pi with `--no-extensions --extension <trusted-file> --tools read,bash,edit,write,goal`. Pi's installed extensions are still disabled. Pi's `tool_call` event blocks a classified dangerous `bash` command until RPC `ctx.ui.select()` returns an explicit Allow or Always Allow. Approval is exact `(cwd, command)` and session-scoped. The existing extension UI subprotocol correlates responses by ID; empty/noninteractive/timeout/Esc deny. This is a best-effort policy for common commands, not a sandbox or guarantee that apparently safe shell commands cannot have side effects.
+Hibiscus stages its bundled `approval.mjs` in a private temporary directory and launches Pi with `--no-extensions --extension <trusted-file> --tools read,bash,edit,write,goal`. The same explicit extension adds a small `before_agent_start` prompt section asking the assistant to identify itself as Hibiscus while accurately disclosing Pi and the selected model/provider when relevant; it does not replace Pi's system prompt, agent or execution tools. Pi's installed extensions are still disabled. Pi's `tool_call` event blocks a classified dangerous `bash` command until RPC `ctx.ui.select()` returns an explicit Allow or Always Allow. Approval is exact `(cwd, command)` and session-scoped. The existing extension UI subprotocol correlates responses by ID; empty/noninteractive/timeout/Esc deny. This is a best-effort policy for common commands, not a sandbox or guarantee that apparently safe shell commands cannot have side effects.
 
 ## Failure boundaries
 

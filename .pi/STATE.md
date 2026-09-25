@@ -2,9 +2,9 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — 0.2.0 responsive-width dev push verified, 2026-09-25 (UTC)
+## Snapshot — Hibiscus identity dev push, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: **`0.2.0`**. Pushed **`ce944f8`** to `origin/dev` with manifest/lock/installation/installer-fixture/changelog bump and terminal-relative full-screen width (two-column margins) across composer, transcript, status, docked panels and cursor movement. The user-supplied wide-terminal screenshot and local profiling reports are not committed. GitHub CI [36183422312](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36183422312) for `ce944f8` passed Ubuntu tests, macOS 14 tests and formatting/Clippy/installer checks. This records-only update does not change the tested source. **No tag, GitHub Release or release artifacts were created**; a dev push is not a published 0.2.0. The requested binary digest remains absent from current tracked records.
+- Branch: `dev`; manifest version: **`0.2.0`**; previous remote HEAD **`1b249ae`**. The user requests committing/pushing Hibiscus identity guidance via the bundled extension's `before_agent_start` structured prompt section. The user-supplied example screenshot/transcript is not committed. The section preserves Pi's prompt and asks for truthful disclosure of Pi, model and provider; it cannot guarantee a model's exact wording. No version bump/tag/release. Verify new CI after pushing; older [36183422312](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36183422312) applies to prior source. A dev push is not a published 0.2.0. The requested binary digest remains absent from current tracked records.
 - Added optional Linux-only `scripts/profile-memory.py`, six helper tests in `tests/profile_memory.py`, and logical live/peak allocation-byte measurements in `benches/allocations.rs`. The helper launches a synthetic local Pi replacement solely for profiling; normal Hibiscus still launches real Pi. Credentials/Pi settings are isolated, clipboard helpers are mocked, and reports separate client and mock-process memory. No real models, sessions or clipboard contents were used.
 - Completed **33 experiments** (11 scenarios × three fresh processes) against a locally fingerprinted release binary, unchanged during the experiments. `docs/memory-profiling.md` records methodology, all results and caveats. Approximate client VmHWM medians: idle 3.06 MiB; 20 prose turns 9.00 MiB; four maximum images plus incoming echo 195.24 MiB at default limits; rejected queued images 123.24 MiB; ignored 2 MiB array 37.09 MiB versus text 7.15 MiB. Queue bursts hit their 8/32 MiB capacity budgets and explicitly disconnected.
 - Shared-image evidence: cloning four maximum-size owned image values allocated **55,926,840 bytes** versus **32 bytes** for four shared handles. On the same synthetic Linux queue-rejection fixture (three runs), client observed `VmHWM` median fell from **123.24 MiB** to **69.64 MiB**; initial rejection remained ~69.74 MiB, and successful maximum-image send plus echo remained ~195.28 MiB. The latter path is still dominated by serialization/incoming echo. Baseline ignored-array parsing also cost **33,555,741 bytes** for ~2 MiB wire data. The narrow decoder follow-up reduced synthetic client observed `VmHWM` median for that ignored array from **37.09 MiB** to **7.18 MiB** (three runs); text control remained ~7.22 MiB. The new incoming user-image echo follow-up reduced synthetic client observed `VmHWM` median for a successful maximum-image send from **195.28 MiB** to **141.83 MiB** (three fresh runs). All runs completed without inbox failure and retained the 64 MiB raw queue peak. Broader selective decoding of authoritative message ends/history remains unimplemented. Process RSS and these mock fixtures cannot establish real-provider behavior or prove absence of memory leaks. See `docs/memory-profiling.md`.
@@ -15,11 +15,11 @@ This is a working snapshot, **not a certificate that the product is bug-free**. 
 
 ## Latest automated evidence
 
-The checks below were rerun on Linux after the **0.2.0 version bump and responsive-width change**, against the source/test/benchmark fingerprint below. Full release-mode Rust testing was not performed; targeted release PTY suites were run.
+The checks below were rerun on Linux after identity guidance, against the source/test/benchmark fingerprint below. The earlier version/layout checks remain historical; no real provider reply was requested for this verification. Full release-mode Rust testing was not performed; targeted release PTY suites were run.
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Local pass: 104 unit + 81 integration tests at 0.2.0; Ubuntu/macOS CI jobs also passed for `ce944f8`. Mock/PTY scenarios are not real-provider or physical-terminal acceptance tests. |
+| `cargo test --locked` | Local pass: 104 unit + 81 integration tests at 0.2.0; Ubuntu/macOS CI jobs passed for older source `ce944f8`, not this identity guidance. Mock/PTY scenarios are not real-provider or model-generation acceptance tests. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
 | `cargo build --release --locked`; `target/release/hibiscus --version` | Pass; reports `hibiscus 0.2.0`. No binary digest is stored in this record; older digests already in Git history are not rewritten by this task. |
@@ -27,16 +27,16 @@ The checks below were rerun on Linux after the **0.2.0 version bump and responsi
 | `python3 scripts/profile-wake.py --samples 60 --output …` | Pass: synthetic before/after quiet-run latency comparison; results and limits in `docs/wake-profiling.md`. Earlier memory profiling remains historical. |
 | `python3 tests/profile_wake.py` | Pass: two synthetic/probe helper tests; no real Pi calls. |
 | `cargo bench --locked --bench session_list` | Pass: on this host, 200 files cold scan ~94 ms, cached repeat ~0.26 ms. The worker does not speed up cold I/O; the UI can show loading/cancel while it runs. |
-| `cargo test --locked --release --test wide_terminal_tty --test rendering_tty --test modal_tty --test background_tty --test multiline_tty --test steering_tty --test queue_order_tty --test session_scan_tty` | Pass: 19 targeted release PTY/integration tests at 0.2.0, including wide/narrow/wide resize, one-row 180-character draft and exact send. Wide-terminal fixture also passed five repeated release runs. |
+| `cargo test --locked --release --test approval_tty --test goal_tty --test chat` | Pass: four targeted release tests. Earlier wide-terminal tests passed on the pre-identity source; this task did not change layout. |
 | Transport unit tests | Included in the full Rust run; seven scenarios covering bounds/duplex behavior. Prior opt-in counter output is documented in the RPC review. |
-| `node tests/approval.mjs` | Pass for the fake extension harness's policy/checklist cases, not arbitrary shell safety. |
+| `node tests/approval.mjs` | Pass for fake extension harness approval/checklist **and structured Hibiscus identity section**; does not prove a live model will use exact wording. |
 | `node --check src/pi/approval.mjs` and `src/pi/logout.mjs` | Pass; syntax only. |
 | `sh tests/install.sh` and `sh tests/bump-version.sh` | Pass with mocked downloads/sandbox fixtures; no real installation or release. |
 | `git diff --check` | Pass for tracked changes; untracked new files were reviewed separately. |
 
 Environment: Cargo 1.98.1, Node v24.21.0, Python 3.12.3; `pi --version` reports 0.87.1. No local macOS run or real terminal visual check of the new wide layout was performed here; remote macOS CI passed as recorded above.
 
-Source/test/benchmark fingerprint: `59303c8ca2ad9aba4097b9476ca4ac261b926723ef8f1ce193505b6e93aa1a94`.
+Source/test/benchmark fingerprint: `b3ad6ebefa7c2ac7c3d2af5e5aefa85bac1f8ce05552ce0e429275d8a734f19f`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`, `benches/`. Records/docs and generated Python bytecode (`__pycache__`, `*.pyc`) are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
 
 ## User-reported issues: candidates implemented, real-use closure pending
@@ -66,7 +66,7 @@ Also pending: inline `/logout` against an intentionally selected account, the cu
 
 ## Next actions, in order
 
-1. Retest the widened/narrowed full-screen view in the user's actual terminal after building this source: composer, text reflow, panels, cursor and draft preservation. CI at `ce944f8` passed, but cannot verify on-screen presentation. Publishing 0.2.0 remains a separate explicit decision: verify the version-matching commit, release workflow and artifacts before tagging.
+1. Rebuild Hibiscus and ask the real agent “Who are you, which model are you using, and what powers you?” Check that it presents as Hibiscus while accurately identifying Pi and the actual selected model/provider. Inspect the active build before attributing a response to this worktree; model wording is not deterministic. CI and real-terminal retesting are pending for the local change. Publishing 0.2.0 remains a separate explicit decision: verify the version-matching commit, release workflow and artifacts before tagging.
 2. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
 3. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
 4. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.
