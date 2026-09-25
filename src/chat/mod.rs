@@ -28,7 +28,6 @@ use std::sync::mpsc::{self, Receiver};
 
 pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
     let show_history = !matches!(session, SessionStart::New);
-    let mut rpc = Rpc::start(session)?;
     let stdin = io::stdin();
     let ui = Ui::new(stdin.is_terminal());
     let tty = if stdin.is_terminal() {
@@ -41,6 +40,9 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
     let mut raw = tty.as_ref().map(Terminal::raw).transpose()?;
     let mut events = tty.as_ref().map(Terminal::events).transpose()?;
     let mut screen = Screen::new(stdin.is_terminal() && tty.is_some())?;
+    // Decide routing before the child starts: startup warnings must not race
+    // alternate-screen setup and write directly over the composer.
+    let mut rpc = Rpc::start_with_diagnostics(session, screen.diagnostic_feed())?;
     let update_notice = if screen.is_full()
         && env::var_os("HIBISCUS_NO_UPDATE_CHECK").is_none()
         && update::installed_prebuilt()

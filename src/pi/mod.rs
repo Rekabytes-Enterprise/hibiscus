@@ -1,4 +1,5 @@
 pub(crate) mod auth;
+pub(crate) mod diagnostics;
 pub(crate) mod dialog;
 pub(crate) mod error;
 pub(crate) mod logout;

@@ -235,6 +235,8 @@ pub(crate) struct Screen {
     suspended: bool,
     color: bool,
     painter: Painter,
+    diagnostics: crate::pi::diagnostics::Diagnostics,
+    diagnostic_revision: u64,
     last_paint: Option<Instant>,
     paint_pending: bool,
     transcript: Vec<u8>,
@@ -289,6 +291,8 @@ impl Screen {
             suspended: true,
             color,
             painter: Painter::new(env::var_os("HIBISCUS_NO_SYNC_UPDATE").is_none()),
+            diagnostics: crate::pi::diagnostics::Diagnostics::default(),
+            diagnostic_revision: 0,
             last_paint: None,
             paint_pending: false,
             transcript: Vec::new(),
@@ -345,6 +349,14 @@ impl Screen {
 
     pub(crate) fn is_full(&self) -> bool {
         self.full
+    }
+
+    pub(crate) fn diagnostic_feed(&self) -> Option<crate::pi::diagnostics::Diagnostics> {
+        self.full.then(|| self.diagnostics.clone())
+    }
+
+    fn diagnostics_changed(&self) -> bool {
+        self.diagnostic_revision != self.diagnostics.revision()
     }
 
     /// Keep the full authorization URL out of transcript text; render only a
@@ -668,7 +680,7 @@ impl Screen {
                 let byte = match events.recv_timeout(Duration::from_millis(100)) {
                     Ok(byte) => byte,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if self.painter.resized(self.size()) {
+                        if self.painter.resized(self.size()) || self.diagnostics_changed() {
                             self.render()?;
                         }
                         continue;
@@ -734,7 +746,7 @@ impl Screen {
                 let byte = match events.recv_timeout(Duration::from_millis(40)) {
                     Ok(byte) => byte,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if self.painter.resized((columns, rows)) {
+                        if self.painter.resized((columns, rows)) || self.diagnostics_changed() {
                             self.render()?;
                         }
                         continue;
@@ -1145,7 +1157,10 @@ impl Screen {
         let mut queued = self.pending_input.take();
         loop {
             self.poll_clipboard()?;
-            if self.full && !self.suspended && self.painter.resized(self.size()) {
+            if self.full
+                && !self.suspended
+                && (self.painter.resized(self.size()) || self.diagnostics_changed())
+            {
                 self.render()?;
             }
             // A delayed network check can interrupt idle input, never a draft
@@ -1671,6 +1686,13 @@ impl Screen {
             "{left}{}\x1b[K",
             self.accent(self.status_style(), &hint)
         ));
+        // The existing spare bottom row is reserved for diagnostics. Neither
+        // the composer nor its status/goal row moves when a warning arrives.
+        let (diagnostic_revision, diagnostic) = self.diagnostics.snapshot();
+        frame.push_str(&format!(
+            "\r\n{left}{}\x1b[K",
+            self.accent("38;2;255;183;90", &clip(&diagnostic, width))
+        ));
         let cursor_row = if let Some((row, _)) = modal_cursor {
             row
         } else if cursor_visible {
@@ -1704,6 +1726,7 @@ impl Screen {
         self.painter
             .paint(&mut self.out, rows_to_paint, (columns, rows), cursor)?;
         self.last_paint = Some(Instant::now());
+        self.diagnostic_revision = diagnostic_revision;
         self.paint_pending = false;
         Ok(())
     }
@@ -1798,6 +1821,7 @@ impl ScrollDisplay for Screen {
         }
         if changed
             || self.painter.resized(self.size())
+            || self.diagnostics_changed()
             || (self.paint_pending
                 && self
                     .last_paint

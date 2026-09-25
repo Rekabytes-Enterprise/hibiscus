@@ -56,6 +56,14 @@ The transcript renders common Markdown for readability without changing saved Pi
 
 Scrolling stops at the oldest complete viewport instead of leaving most of the screen empty. When new output arrives while you are scrolled up, the view remains anchored until you scroll back to the bottom.
 
+## Pi diagnostic warnings
+
+In full-screen chat, Pi's stderr is collected rather than written directly over the editor. A compact amber `Pi:` diagnostic row uses the bottom row **below the composer and its status/Goal hint**. It does not move the composer, hide its cursor, alter the draft, or send anything to the model. Startup warnings remain visible while waiting for Pi metadata, and the row refreshes during idle input, active runs, pickers and dialogs, including resize/reconnect.
+
+The summary retains up to four recent sanitized messages, newest first; repeats are counted, older entries are omitted, and long text is clipped to the terminal width. It is a recent diagnostic summary, not a complete log or a live authentication-status indicator. ANSI/control sequences are stripped, line storage is bounded, and common credential patterns are redacted on a best-effort basis—review screenshots before sharing. These messages are not RPC events and do not mark an agent run complete or change provider configuration. The underlying provider/model warning may still need attention.
+
+One-shot, piped and line-mode output keep Pi's original stderr separate from stdout. Native Pi TUI handoff retains its own display while Hibiscus is suspended.
+
 ## Dangerous-command approval
 
 `read`, `edit`, `write`, and ordinary `bash` commands run without a prompt. Before Pi's **agent** executes a recognized dangerous `bash` tool call (such as `rm`, `git clean`/force push, `sudo`, permission changes, publishing, shell indirection, or output redirection), Hibiscus shows the reason, working directory, and exact command. Use Up/Down or the wheel to choose **Deny** (default), **Allow** (once), or **Always Allow**, then Enter to confirm. Always Allow applies only to that exact command string and directory in the current chat; it resets on session switch/new session and restart. No wildcard or persistent approvals. Esc, Enter on the default Deny row, timeout, error, and non-interactive use deny by default. Approval details appear inside the docked panel rather than overwriting the composer. For long commands, use PgUp/PgDn to view the full details; Allow/Always Allow cannot be confirmed until the last detail page has been displayed. Line mode retains numbered prompts.
