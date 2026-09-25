@@ -2,9 +2,9 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — interactive session scan checkpoint, 2026-09-25 (UTC)
+## Snapshot — late queue acknowledgement dev push, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: `0.1.7`; last pushed HEAD **`97e57fc`**. This local uncommitted change moves full-screen `/sessions` and `/continue` discovery to a cancellable worker over the same Pi session files and disposable metadata cache. A loading notice appears; Esc cancels without switching Pi, and typing collected during the scan is replayed into the composer (Enter is not replayed). Startup `--sessions` and line mode remain synchronous. A cold scan still does the same file I/O, and cancellation may wait for an in-flight filesystem read before the detached worker stops. The user requested a local checkpoint commit, not a push/version bump/tag. Consult Git for the checkpoint identifier; CI on this newer source remains pending; the prior [36177585894](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36177585894) succeeded on `685c413`. The requested binary digest remains absent from current tracked records; local profiling reports stay outside Git.
+- Branch: `dev`; manifest version: `0.1.7`; previous remote HEAD **`97e57fc`**. The user requests committing/pushing interactive session scan checkpoint **`890485d`** and the targeted late-ack RPC completion fix to `dev`. Consult Git for the queue-fix commit identifier. No version bump/tag; verify new remote CI after pushing. The user reported their session-scan manual check worked without build/platform details. The requested binary digest remains absent from current tracked records; local profiling reports stay outside Git.
 - Added optional Linux-only `scripts/profile-memory.py`, six helper tests in `tests/profile_memory.py`, and logical live/peak allocation-byte measurements in `benches/allocations.rs`. The helper launches a synthetic local Pi replacement solely for profiling; normal Hibiscus still launches real Pi. Credentials/Pi settings are isolated, clipboard helpers are mocked, and reports separate client and mock-process memory. No real models, sessions or clipboard contents were used.
 - Completed **33 experiments** (11 scenarios × three fresh processes) against a locally fingerprinted release binary, unchanged during the experiments. `docs/memory-profiling.md` records methodology, all results and caveats. Approximate client VmHWM medians: idle 3.06 MiB; 20 prose turns 9.00 MiB; four maximum images plus incoming echo 195.24 MiB at default limits; rejected queued images 123.24 MiB; ignored 2 MiB array 37.09 MiB versus text 7.15 MiB. Queue bursts hit their 8/32 MiB capacity budgets and explicitly disconnected.
 - Shared-image evidence: cloning four maximum-size owned image values allocated **55,926,840 bytes** versus **32 bytes** for four shared handles. On the same synthetic Linux queue-rejection fixture (three runs), client observed `VmHWM` median fell from **123.24 MiB** to **69.64 MiB**; initial rejection remained ~69.74 MiB, and successful maximum-image send plus echo remained ~195.28 MiB. The latter path is still dominated by serialization/incoming echo. Baseline ignored-array parsing also cost **33,555,741 bytes** for ~2 MiB wire data. The narrow decoder follow-up reduced synthetic client observed `VmHWM` median for that ignored array from **37.09 MiB** to **7.18 MiB** (three runs); text control remained ~7.22 MiB. The new incoming user-image echo follow-up reduced synthetic client observed `VmHWM` median for a successful maximum-image send from **195.28 MiB** to **141.83 MiB** (three fresh runs). All runs completed without inbox failure and retained the 64 MiB raw queue peak. Broader selective decoding of authoritative message ends/history remains unimplemented. Process RSS and these mock fixtures cannot establish real-provider behavior or prove absence of memory leaks. See `docs/memory-profiling.md`.
@@ -15,11 +15,11 @@ This is a working snapshot, **not a certificate that the product is bug-free**. 
 
 ## Latest automated evidence
 
-The checks below were rerun on Linux after session scan changes, against the source/test/benchmark fingerprint below. Full release-mode Rust testing was not performed; targeted release PTY suites were run.
+The checks below were rerun on Linux after the late-ack regression/fix, against the source/test/benchmark fingerprint below. Full release-mode Rust testing was not performed; targeted release PTY suites were run.
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Local pass: 103 unit + 78 integration tests. Remote Ubuntu/macOS jobs passed on older source `685c413`, not this change. These are mock/PTY scenarios, not real-provider acceptance tests. |
+| `cargo test --locked` | Local pass: 103 unit + 80 integration tests. Remote Ubuntu/macOS jobs passed on older source `685c413`, not this change. These are mock/PTY scenarios, not real-provider acceptance tests. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
 | `cargo build --release --locked` | Pass; the local wake profiler ran against the release build. No binary digest is stored in this record; older digests already in Git history are not rewritten by this task. |
@@ -27,7 +27,7 @@ The checks below were rerun on Linux after session scan changes, against the sou
 | `python3 scripts/profile-wake.py --samples 60 --output …` | Pass: synthetic before/after quiet-run latency comparison; results and limits in `docs/wake-profiling.md`. Earlier memory profiling remains historical. |
 | `python3 tests/profile_wake.py` | Pass: two synthetic/probe helper tests; no real Pi calls. |
 | `cargo bench --locked --bench session_list` | Pass: on this host, 200 files cold scan ~94 ms, cached repeat ~0.26 ms. The worker does not speed up cold I/O; the UI can show loading/cancel while it runs. |
-| `cargo test --locked --release --test session_scan_tty --test in_chat_sessions --test models_tty --test rendering_tty --test steering_tty --test error_recovery --test auth_handoff` | Pass: 29 targeted release PTY/integration tests, including cold-load notice, Esc/picker cancellation, deferred typing and `/continue`. The session scan PTY fixture also passed five repeated release runs after test-race correction. |
+| `cargo test --locked --release --test queue_order_tty --test steering_tty --test rpc_pressure --test session_scan_tty --test error_recovery --test rendering_tty --test approval_tty` | Pass: 27 targeted release PTY/integration tests. Both queue-order scenarios also passed five repeated release runs. |
 | Transport unit tests | Included in the full Rust run; seven scenarios covering bounds/duplex behavior. Prior opt-in counter output is documented in the RPC review. |
 | `node tests/approval.mjs` | Pass for the fake extension harness's policy/checklist cases, not arbitrary shell safety. |
 | `node --check src/pi/approval.mjs` and `src/pi/logout.mjs` | Pass; syntax only. |
@@ -36,7 +36,7 @@ The checks below were rerun on Linux after session scan changes, against the sou
 
 Environment: Cargo 1.98.1, Node v24.21.0, Python 3.12.3; `pi --version` reports 0.87.1. No local macOS run or real terminal visual check was performed here; previous remote macOS CI applies to older source, not the current session-scan change.
 
-Source/test/benchmark fingerprint: `f8ff7b1a97c29de228db5a04da6f371e8d05a93a7b11c51575bde84455ad5bdc`.
+Source/test/benchmark fingerprint: `12f3e41c00659b7983ef8a0b7afeb3d66f14db822cdbcd3ed2fa7b4a5f0de655`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`, `benches/`. Records/docs and generated Python bytecode (`__pycache__`, `*.pyc`) are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
 
 ## User-reported issues: candidates implemented, real-use closure pending
@@ -61,12 +61,12 @@ Also pending: inline `/logout` against an intentionally selected account, the cu
 - **Goal percentage:** the extension counts steps marked complete by the model. It does not independently verify that the work was performed. No explicit checklist means no percentage; tool-call counts are not task completion.
 - **Activity boundaries:** `Screen::freeze_timeline` runs on assistant text as well as settlement. Summaries are per activity block, not necessarily one global summary for an entire long task (`pi/rpc.rs`, `tui/activity.rs`).
 - **Queue identity:** pending UI matches text/order; initial prompt echo suppression compares text (`Screen::delivered_user`). This is not a stable per-message identifier. Expanded/rewritten prompts and untested duplicate/ack orderings remain risks.
-- **Hypothesis to reproduce:** `rpc::exchange` resets `settled` on accepted queued responses. Check an acknowledgement arriving *after* the final settlement, with no later event. Current mock cases do not establish correct behavior for every ordering; do not record a root cause/fix before reproducing it.
+- **Reproduced late-ack hang and targeted fix:** `tests/queue_order_tty.rs` initially timed out when Pi's final queue drain/`agent_settled` preceded a queued success response with no later event. `rpc::exchange` both reset `settled` on acceptance and skipped its common completion check via `continue`. Queue acceptance no longer resets settlement; the response branch checks correlated acceptance, settlement, pending requests and Pi queue counts before returning. A second fixture confirms nonempty queues still wait for a later empty update. An earlier synthetic steering fixture now emits `agent_start` for a new run after early settlement, rather than relying on an acknowledgement to invent that boundary. These fixtures do not prove every real Pi ordering or solve text-based queue identity.
 - **Not covered by this verification:** real macOS clipboard/OAuth/provider compatibility and published installer/update behavior. The verified remote CI runs are named above; do not extrapolate them to future source changes.
 
 ## Next actions, in order
 
-1. Retest full-screen `/sessions` and `/continue` with a real project containing many saved Pi sessions; check loading notice, Esc, draft preservation, picker selection, and no unintended sends. Run macOS CI for this newer source before release; earlier CI does not establish it. Continue to verify image/input wake, Esc, steering, resize and handoff in the intended terminal.
+1. Run macOS CI for the unpushed session-scan and queue-order source before release. Retest real Pi steering/follow-up with duplicate text and a genuine late acknowledgement if reproducible; confirm no hang or auto replay. Keep real terminal/session-scan evidence separate from synthetic mocks.
 2. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
 3. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
 4. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.

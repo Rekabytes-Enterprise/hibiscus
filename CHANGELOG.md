@@ -8,6 +8,7 @@ All notable changes to Hibiscus are documented here.
 
 - Standard MIT license with Rekabytes Enterprise attribution and a fork/feature-branch contribution guide targeting `dev`.
 - Repeatable formatter, allocation and session-list benchmarks, plus a large-history paste regression and performance review.
+- Correlate delayed steering acknowledgements after final settlement without hanging or replaying, while still waiting for nonempty Pi queues to drain.
 - Full-screen `/sessions` and `/continue` now scan Pi session files off the UI thread, showing a cancellable loading notice and buffering typing for the composer; line-mode/startup listing is unchanged.
 - Optional isolated Linux input-wake profiler and shared input/RPC activity notification, reducing quiet-run key-to-output latency while retaining the timed animation fallback.
 - Optional Linux-only synthetic memory profiler with per-process RSS/high-water counters, isolated mock Pi/clipboard fixtures, and logical live/peak heap-byte benchmarks. No runtime behavior changes are part of this profiling addition.

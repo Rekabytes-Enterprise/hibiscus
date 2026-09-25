@@ -482,7 +482,9 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     display.rejected_queue(queued, "Pi is stopping; queue delivery is uncertain. Check history before resending")?;
                 } else if event["success"] == true {
                     display.queued(&queued)?;
-                    settled = false;
+                    // Acceptance is not a new agent run. A delayed ack can
+                    // arrive after Pi's final agent_settled; only agent_start
+                    // invalidates that authoritative settlement.
                 } else {
                     display.rejected_queue(
                         queued,
@@ -490,6 +492,24 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     )?;
                 }
                 display.flush()?;
+                // A late queue ack can be the last record after Pi's final
+                // settlement and queue drain. This branch skips the common
+                // completion check below, so finish here when all conditions
+                // are already satisfied; never wait for an invented event.
+                if accepted
+                    && settled
+                    && pending_queued.is_empty()
+                    && queued_count == 0
+                    && (!interrupted || (abort_done && clear_done))
+                {
+                    return finish_turn(
+                        &ui,
+                        display,
+                        printed_text || pending_newline,
+                        run.finish(interrupted),
+                        interrupted,
+                    );
+                }
                 continue;
             }
         }
