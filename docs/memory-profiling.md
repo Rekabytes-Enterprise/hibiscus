@@ -1,5 +1,11 @@
 # Memory profiling: synthetic Linux results
 
+## Incoming image-echo follow-up (local, unreleased)
+
+The UI consumes incoming user `message_start` only as a **delivery signal**, using its text and image count; Pi owns the full saved message. The decoder now borrows the incoming `message` and each content block from the bounded raw RPC frame. For image blocks in **user `message_start` only**, it validates but does not retain `data`; it preserves text, image block type/count, MIME and other metadata. Assistant message starts, user `message_end`, tool results, responses and unknown events still decode fully. Unknown content blocks (including a `data` field) retain that field. Escaped strings and earlier duplicate fields are validated, including invalid surrogate escapes. It does not log or display image base64.
+
+On the same Linux four-maximum-image fixture (three fresh processes, default 64 MiB queue budget), median Hibiscus observed `VmHWM` fell from **195.28 MiB** after shared-image recovery to **141.83 MiB** with selective echo decoding. All three runs completed, with no inbox failures; the queued raw-frame capacity still reached 64 MiB. This is a ~53.5 MiB reduction in the synthetic client peak, **not** a real Pi/provider or total-system memory guarantee. The local profiler checked that the release binary stayed unchanged throughout these runs; no binary digest is committed. Remaining allocations include the outbound command, bounded raw incoming frame, parsing of other records, clipboard and Pi's separate process. An image-heavy `get_messages` response is still fully decoded. Rerun: `python3 scripts/profile-memory.py --scenario image-send-max-default --repeats 3 --output /tmp/hibiscus-echo.json` after building the release binary.
+
 ## Selective tool-update decoding follow-up (local, unreleased)
 
 `src/pi/transport.rs` now validates but does not build a `serde_json::Value` tree for top-level `partialResult` on `tool_execution_update`. Hibiscus does not consume that intermediate result; it still fully decodes `tool_execution_start`, `tool_execution_end` (including goal details and edit diffs), responses, messages, queue updates, approval requests, settlement and unknown event types. Non-update events with a `partialResult` field retain it unchanged. A custom validation walker checks nested JSON and string escapes (including invalid surrogate escapes), even for repeated discarded fields; `RawValue` alone did **not** provide that validation. Byte/count inbox limits and strict LF framing are unchanged.
@@ -11,7 +17,7 @@ Against the same isolated Linux fixture, three fresh processes per case:
 | Numeric array | 37.09 MiB | **7.18 MiB** | ~2 MiB |
 | Text string | 7.15 MiB | **7.22 MiB** | ~2 MiB |
 
-Follow-up release binary SHA-256: `092e3916f3b4e8d49dc98d7e22e8f42d5656d9034e54cb8938b87ecaed714b7c`. All six follow-up experiments completed without receive failures; inbox peak allocated capacity was 4 MiB in each run. This is a **narrow optimization** for ignored tool updates, not general partial decoding of image echoes, session history or authoritative tool results. A `RawValue` copy and validation pass still cost time/memory; neither a total-process memory guarantee nor real Pi/provider event coverage follows from these fixtures.
+The local profiler checked that the release binary stayed unchanged throughout these follow-up runs. All six follow-up experiments completed without receive failures; inbox peak allocated capacity was 4 MiB in each run. This is a **narrow optimization** for ignored tool updates, not general partial decoding of image echoes, session history or authoritative tool results. A `RawValue` copy and validation pass still cost time/memory; neither a total-process memory guarantee nor real Pi/provider event coverage follows from these fixtures.
 
 ## Shared-image follow-up (local, unreleased)
 
@@ -25,7 +31,7 @@ On the same Linux fixture, three fresh runs for each scenario (client observed `
 | Rejected initial four × 10 MiB images | 69.75 MiB | 69.74 MiB | No duplicate expected |
 | Successful four × 10 MiB images plus incoming echo | 195.24 MiB | 195.28 MiB | Incoming echo/serialization still dominate |
 
-The isolated allocation benchmark reports **55,926,840 bytes** for cloning four owned image values versus **32 bytes** (one small vector allocation) for cloning four shared handles. These are synthetic measurements, not portable RSS guarantees or proof that real Pi uses the same event cadence. The initial full-matrix baseline below remains labelled with its own binary fingerprint; the follow-up measurements used rebuilt binary SHA-256 `f0fb1cef5720bc9456633679e862516ca49fa2f271bbf08a3bbe3da5162ceb86` and three repeats per listed scenario. Run `cargo build --release --locked`, then `python3 scripts/profile-memory.py --scenario queue-reject --repeats 3 --output /tmp/hibiscus-shared-images.json` to reproduce locally. Real macOS clipboard and provider behavior still need verification.
+The isolated allocation benchmark reports **55,926,840 bytes** for cloning four owned image values versus **32 bytes** (one small vector allocation) for cloning four shared handles. These are synthetic measurements, not portable RSS guarantees or proof that real Pi uses the same event cadence. The initial full-matrix baseline below was collected before the follow-up changes; follow-up measurements used a rebuilt binary and three repeats per listed scenario. The local profiler checks binary identity without committing its digest. Run `cargo build --release --locked`, then `python3 scripts/profile-memory.py --scenario queue-reject --repeats 3 --output /tmp/hibiscus-shared-images.json` to reproduce locally. Real macOS clipboard and provider behavior still need verification.
 
 The full-matrix baseline below was measured on the 0.1.7 application source at `dbba12f` (same runtime source as `dc5212c`), using the optimized release binary. No production runtime changes were made in this profiling task.
 
@@ -38,7 +44,7 @@ The full-matrix baseline below was measured on the 0.1.7 application source at `
 - Eleven scenarios, three fresh-process repeats each: **33 completed experiments**. File preparation is outside the measured child. Phase measurements wait for distinct rendered state markers, not a previously displayed idle footer.
 - Queue counters come from `HIBISCUS_RPC_METRICS=1`. Reports contain numeric phases/counters and a binary SHA-256, not transcripts or credentials. Temporary fixture data/diagnostics are cleaned up. An incomplete run marks its report `complete: false` rather than preserving an older success report.
 
-Profiled binary SHA-256: `fcf3ff78f7ab317f1d5fe0043091aea2ea208cec4794c3e9752fda3e44122472`.
+The local profiler recorded a binary fingerprint in temporary output to check that this baseline used an unchanged executable. The digest is not included in this document.
 
 ## Results
 
@@ -86,12 +92,12 @@ All measured operation results returned tracked live bytes to their pre-operatio
 
 ## Recommended next changes
 
-1. **Shared immutable image payloads:** implemented in the follow-up above. Preserve exact image serialization, newer live typing, explicit `/restore`, and the no-auto-replay rule during future changes.
-2. **Avoid materializing unused incoming payloads.** The ignored tool-update `partialResult` case is implemented above. Incoming image echoes and other large records still construct JSON trees; any broader selective decoder must preserve validation, response IDs, errors, approvals and settlement. Raw frames must remain bounded and accounted for. A wire-byte budget is not a JSON-tree or process-RSS budget.
+1. **Shared immutable image payloads and incoming user-image echo decoding:** implemented in the follow-ups above. Preserve exact image serialization, text/count delivery, newer live typing, explicit `/restore`, and the no-auto-replay rule during future changes.
+2. **Avoid materializing other unused incoming payloads.** The ignored tool-update `partialResult` and incoming user-image echo cases are implemented above. Other large records, including authoritative message ends and history responses, still construct JSON trees; any broader selective decoder must preserve validation, response IDs, errors, approvals and settlement. Raw frames must remain bounded and accounted for. A wire-byte budget is not a JSON-tree or process-RSS budget.
 3. **Keep the event-loop redesign separate.** These results identify memory costs, not the latency benefit of replacing the 40 ms wait. Measure input wake latency independently before changing scheduling.
 4. **Do not switch allocators or add forced trimming yet.** Obtain heap attribution/longer repeated ownership tests before calling residual RSS a leak or using allocator-specific workarounds.
 
-The baseline profiling task did not implement these optimizations. The subsequent shared-image and narrow selective tool-update changes are described above; broader selective decoding remains pending.
+The baseline profiling task did not implement these optimizations. The subsequent shared-image and narrowly scoped selective tool-update/image-echo changes are described above; broader selective decoding remains pending.
 
 ## Reproduce
 
@@ -104,6 +110,6 @@ cargo bench --locked --bench allocations
 
 Use `--scenario queue-reject`, `--scenario incoming-array`, or another name shown by `--help` to isolate one workload. The default `--repeats 1` is a quick screening pass; `--repeats 3` runs the full 33-experiment matrix. Every scenario has bounded waits and cleanup; expected overloads are reported as `disconnected`, not hidden as successful model runs. `completed` means the profiling workflow completed, including intentional request-rejection cases.
 
-Linux with readable `smaps_rollup` is required; no macOS estimate is substituted. Reports identify the binary by hash and reject binary changes between repeats. Do not run concurrent rebuilds while profiling. Put reports outside the repository and avoid comparing debug builds to these release results.
+Linux with readable `smaps_rollup` is required; no macOS estimate is substituted. Local, uncommitted reports identify the binary by hash and reject binary changes between repeats. Do not run concurrent rebuilds while profiling. Put reports outside the repository and avoid comparing debug builds to these release results.
 
 References: Linux [`proc_pid_status`](https://man7.org/linux/man-pages/man5/proc_pid_status.5.html) documents the limitations of VmHWM/VmRSS; [`proc_pid_smaps`](https://man7.org/linux/man-pages/man5/proc_pid_smaps.5.html) describes resident/proportional mapping accounting. See also [the transport budget/recovery design](rpc-transport.md) and [the earlier CPU/input performance review](performance-review.md).

@@ -12,6 +12,7 @@ All notable changes to Hibiscus are documented here.
 
 ### Changed
 
+- Validate but do not materialize incoming user image-echo base64 when only text and attachment counts are needed; leave Pi's saved messages and other RPC event payloads intact.
 - Validate but do not materialize the unused `partialResult` JSON subtree of `tool_execution_update`; preserve all other event fields, errors, approvals, queue ordering and settlement.
 - Share staged image values between the composer and recovery slot, avoiding a second base64 allocation on queued rejection while keeping Pi's JSONL wire format and explicit `/restore` behavior.
 - Bound RPC wire-record/backlog memory and record counts with explicit overload failure, nonblocking/deadline-controlled writes, partial-send cancellation and reviewable uncertain queued drafts. Add synthetic duplex/overload regressions and opt-in queue metrics.

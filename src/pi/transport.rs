@@ -257,6 +257,120 @@ impl<'de> DeserializeSeed<'de> for ValidateValue {
     }
 }
 
+fn validate_raw(raw: &RawValue) -> serde_json::Result<()> {
+    let mut validator = serde_json::Deserializer::from_str(raw.get());
+    ValidateValue.deserialize(&mut validator)?;
+    validator.end()
+}
+
+// User message_start is the delivery signal. Hibiscus reads only user text
+// and image block counts; Pi remains responsible for storing the full image.
+// Other message roles/types and all unknown blocks retain their original Value.
+fn decode_user_echo(raw: &RawValue) -> serde_json::Result<Value> {
+    struct Echo(Value);
+    impl<'de> serde::Deserialize<'de> for Echo {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+            struct EchoVisitor;
+            impl<'de> Visitor<'de> for EchoVisitor {
+                type Value = Echo;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("a message object")
+                }
+                fn visit_map<M: MapAccess<'de>>(
+                    self,
+                    mut map: M,
+                ) -> std::result::Result<Self::Value, M::Error> {
+                    let mut fields = serde_json::Map::new();
+                    let mut content = None::<&RawValue>;
+                    while let Some(key) = map.next_key::<String>()? {
+                        if key == "content" {
+                            let raw: &RawValue = map.next_value()?;
+                            validate_raw(raw).map_err(serde::de::Error::custom)?;
+                            content = Some(raw);
+                            fields.remove("content");
+                        } else {
+                            fields.insert(key, map.next_value()?);
+                        }
+                    }
+                    if let Some(raw) = content {
+                        let parsed = if fields.get("role").and_then(Value::as_str) == Some("user")
+                            && raw.get().trim_start().starts_with('[')
+                        {
+                            let blocks: Vec<&RawValue> = serde_json::from_str(raw.get())
+                                .map_err(serde::de::Error::custom)?;
+                            Value::Array(
+                                blocks
+                                    .into_iter()
+                                    .map(|block| decode_user_block(block.get()))
+                                    .collect::<serde_json::Result<Vec<_>>>()
+                                    .map_err(serde::de::Error::custom)?,
+                            )
+                        } else {
+                            serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?
+                        };
+                        fields.insert("content".into(), parsed);
+                    }
+                    Ok(Echo(Value::Object(fields)))
+                }
+            }
+            d.deserialize_any(EchoVisitor)
+        }
+    }
+    // Malformed/non-object messages must still be handled as normal values;
+    // the caller's check_record retains authority over event shape.
+    if !raw.get().trim_start().starts_with('{') {
+        return serde_json::from_str(raw.get());
+    }
+    serde_json::from_str::<Echo>(raw.get()).map(|echo| echo.0)
+}
+
+fn decode_user_block(raw: &str) -> serde_json::Result<Value> {
+    struct Block(Value);
+    impl<'de> serde::Deserialize<'de> for Block {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+            struct BlockVisitor;
+            impl<'de> Visitor<'de> for BlockVisitor {
+                type Value = Block;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("a content block")
+                }
+                fn visit_map<M: MapAccess<'de>>(
+                    self,
+                    mut map: M,
+                ) -> std::result::Result<Self::Value, M::Error> {
+                    let mut fields = serde_json::Map::new();
+                    let mut data = None::<&RawValue>;
+                    while let Some(key) = map.next_key::<String>()? {
+                        if key == "data" {
+                            let raw: &RawValue = map.next_value()?;
+                            validate_raw(raw).map_err(serde::de::Error::custom)?;
+                            data = Some(raw);
+                            fields.remove("data");
+                        } else {
+                            fields.insert(key, map.next_value()?);
+                        }
+                    }
+                    if let Some(raw) = data {
+                        if fields.get("type").and_then(Value::as_str) != Some("image") {
+                            fields.insert(
+                                "data".into(),
+                                serde_json::from_str(raw.get())
+                                    .map_err(serde::de::Error::custom)?,
+                            );
+                        }
+                    }
+                    Ok(Block(Value::Object(fields)))
+                }
+            }
+            d.deserialize_any(BlockVisitor)
+        }
+    }
+    if !raw.trim_start().starts_with('{') {
+        return serde_json::from_str(raw);
+    }
+    serde_json::from_str::<Block>(raw).map(|block| block.0)
+}
+
 /// Retain all Pi event fields except the partial result of a tool update:
 /// Hibiscus does not display tool_execution_update, but does consume the
 /// correlated start/end, goal details, errors and settlement separately.
@@ -281,19 +395,21 @@ fn decode_record(bytes: &[u8]) -> serde_json::Result<Value> {
                     mut input: M,
                 ) -> std::result::Result<Self::Value, M::Error> {
                     let mut fields = serde_json::Map::new();
-                    let mut partial = None::<Box<RawValue>>;
+                    let mut partial = None::<&RawValue>;
+                    let mut message = None::<&RawValue>;
                     while let Some(key) = input.next_key::<String>()? {
                         if key == "partialResult" {
-                            let raw: Box<RawValue> = input.next_value()?;
+                            let raw: &RawValue = input.next_value()?;
                             // Validate even earlier duplicate fields; the ordinary
                             // Value decoder validates each occurrence before replacing it.
-                            let mut validator = serde_json::Deserializer::from_str(raw.get());
-                            ValidateValue
-                                .deserialize(&mut validator)
-                                .map_err(serde::de::Error::custom)?;
-                            validator.end().map_err(serde::de::Error::custom)?;
+                            validate_raw(raw).map_err(serde::de::Error::custom)?;
                             partial = Some(raw);
                             fields.remove("partialResult");
+                        } else if key == "message" {
+                            let raw: &RawValue = input.next_value()?;
+                            validate_raw(raw).map_err(serde::de::Error::custom)?;
+                            message = Some(raw);
+                            fields.remove("message");
                         } else {
                             fields.insert(key, input.next_value()?);
                         }
@@ -308,6 +424,16 @@ fn decode_record(bytes: &[u8]) -> serde_json::Result<Value> {
                                     .map_err(serde::de::Error::custom)?,
                             );
                         }
+                    }
+                    if let Some(raw) = message {
+                        let parsed = if fields.get("type").and_then(Value::as_str)
+                            == Some("message_start")
+                        {
+                            decode_user_echo(raw).map_err(serde::de::Error::custom)?
+                        } else {
+                            serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?
+                        };
+                        fields.insert("message".into(), parsed);
                     }
                     Ok(Decoded(Value::Object(fields)))
                 }
@@ -639,13 +765,49 @@ mod tests {
     }
 
     #[test]
+    fn user_message_start_preserves_delivery_text_and_count_without_image_bytes() {
+        for wire in [
+            r#"{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"steer one"},{"data":"PRIVATE_BASE64","mimeType":"image/png","type":"image"},{"type":"image","data":"PRIVATE_2"}],"timestamp":3}}"#,
+            r#"{"message":{"content":[{"data":"PRIVATE_BASE64","type":"image"},{"type":"text","text":"follow up"}],"role":"user"},"type":"message_start"}"#,
+        ] {
+            let actual = decode_record(wire.as_bytes()).unwrap();
+            let mut expected: Value = serde_json::from_str(wire).unwrap();
+            for block in expected["message"]["content"].as_array_mut().unwrap() {
+                if block["type"] == "image" {
+                    block.as_object_mut().unwrap().remove("data");
+                }
+            }
+            assert_eq!(actual, expected);
+            assert!(!actual.to_string().contains("PRIVATE_"));
+        }
+        let wire = r#"{"type":"message_start","message":{"role":"user","content":[{"type":"custom","data":{"must":"stay"}},{"type":"text","data":"still-here","text":"hello"}]}}"#;
+        assert_eq!(
+            decode_record(wire.as_bytes()).unwrap(),
+            serde_json::from_str::<Value>(wire).unwrap()
+        );
+        // Every duplicate, including an overwritten image field, is validated.
+        for bad in [
+            r#"{"type":"message_start","message":{"role":"user","content":[{"type":"image","data":"\ud800"}]}}"#,
+            r#"{"type":"message_start","message":{"role":"user","content":[{"data":"\ud800","data":"valid","type":"image"}]}}"#,
+            r#"{"type":"message_start","message":{"role":"user","content":[{"data":[1,,2],"type":"image"}]}}"#,
+        ] {
+            assert!(
+                decode_record(bad.as_bytes()).is_err(),
+                "malformed image echo must fail"
+            );
+        }
+    }
+
+    #[test]
     fn every_other_record_retains_full_value_and_correlation() {
         for wire in [
             r#"{"id":"req-1","type":"response","success":true,"data":{"partialResult":[1,2]}}"#,
             r#"{"partialResult":[1,2],"type":"future_event","id":"req-2"}"#,
             r#"{"type":"tool_execution_end","toolCallId":"call-1","toolName":"goal","result":{"details":{"hibiscusGoal":{"completed":1}}}}"#,
             r#"{"type":"extension_ui_request","id":"approval","method":"select","title":"Confirm","options":["Deny","Allow"]}"#,
-            r#"{"type":"message_start","message":{"role":"user","content":[{"type":"image","data":"test"}]}}"#,
+            r#"{"type":"message_start","message":{"role":"assistant","content":[{"type":"image","data":"test"}]}}"#,
+            r#"{"type":"message_end","message":{"role":"user","content":[{"type":"image","data":"test"}]}}"#,
+            r#"{"type":"future_event","message":{"role":"user","content":[{"type":"image","data":"test"}]}}"#,
             r#"{"type":"queue_update","steering":["first"],"followUp":[]}"#,
             r#"{"type":"agent_settled"}"#,
             "{\"type\":\"future_event\",\"message\":\"a\u{2028}b\u{2029}c\"}",
@@ -653,6 +815,33 @@ mod tests {
             let expected: Value = serde_json::from_str(wire).unwrap();
             assert_eq!(decode_record(wire.as_bytes()).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn malformed_image_echo_invalidates_inbox_before_next_event() {
+        let wire = b"{\"type\":\"message_start\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"image\",\"data\":\"\\ud800\"}]}}\n{\"type\":\"agent_settled\"}\n";
+        let inbox = Inbox::start(
+            io::Cursor::new(wire.to_vec()),
+            Limits {
+                bytes: 4096,
+                records: 8,
+            },
+        );
+        let error = inbox
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Invalid Pi RPC"));
+        assert!(!error.contains("\\ud800"));
+        assert!(inbox.failed());
+        // The inbox reports its invalidation once, then closes; the queued
+        // settlement must never be delivered after a malformed image echo.
+        assert!(inbox.recv_timeout(Duration::ZERO).unwrap().is_err());
+        assert!(matches!(
+            inbox.recv_timeout(Duration::ZERO),
+            Err(RecvTimeoutError::Disconnected)
+        ));
     }
 
     #[test]
