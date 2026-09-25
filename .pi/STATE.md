@@ -2,16 +2,16 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — RPC dev push preparation, 2026-09-25 (UTC)
+## Snapshot — RPC dev push verified, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: `0.1.7`. Performance/license/contribution/architecture checkpoint: **`7c0f5e8`**. The user authorized proceeding with the proposed RPC commit/dev push and CI verification. Source fingerprint was rechecked against the tested snapshot below; use Git for the RPC commit identifier. No version bump or release tag is part of this task.
+- Branch: `dev`; manifest version: `0.1.7`. Pushed the performance/license/contribution/architecture checkpoint **`7c0f5e8`** and RPC protection commit **`dc5212c`** to `origin/dev`. Source fingerprint was rechecked against the tested snapshot below. This records-only follow-up does not change that tested source. No version bump or release tag was created.
 - The checkpoint contains Markdown/layout/input/session-cache optimizations, lower-copy image/RPC serialization, benchmarks, MIT attribution and the contribution guide targeting `dev`. Those changes remain intact. `docs/performance-review.md` records their before/after evidence.
 - Added `benches/{formatter,allocations,session_list}.rs` and `tests/performance_tty.rs`, plus unit regressions. On the original local synthetic PTY harness, a 521-byte paste into a 256 KiB transcript changed from 2.3 s to 0.31 ms; the committed PTY harness reports about 10 ms including driver polling. These timings are host-specific; no real provider/session data or physical-terminal presentation was tested.
 - New `src/pi/transport.rs`: byte/count-bounded raw-record inbox, bounded record assembly, lazy consumer-side JSON parsing, explicit overload invalidation, nonblocking/deadline-controlled writes, and opt-in high-water counters. Defaults are 64 MiB allocated queued capacity and 4,096 records; limits are configurable. This is **fail-fast overload protection**, not transparent flow control or a total RSS cap. It intentionally avoids blocking the stdout reader on a full queue.
 - Initial/queued sends service keys/ticks; Esc on a partial record disconnects with uncertain delivery rather than corrupting JSONL with an appended abort. Failed sends and the newest unacknowledged queued draft are reviewable without automatic replay. Shutdown waits are bounded. `docs/rpc-transport.md` documents configuration, trade-offs and recovery.
 - New evidence: seven transport tests (including slow FIFO consumption, byte/count/capacity caps, no-LF limits, blocked-write deadlines/callback cancellation and a duplex stdout-flood/stdin-block scenario) plus three PTY pressure tests (modal fail-closed approval/reconnect, blocked initial image send, blocked queued image send). Counter checks stayed within their test budgets; the duplex fixture peaked at 264 queued bytes/eight records before explicit failure. These are synthetic scenarios, not real-provider load or total-RSS measurements.
-- Still deferred: the 40 ms shared event-loop wake-up redesign, partial JSON decoding, background session scans and remaining rejected-draft copies. First session listing still scans files synchronously. No sampling/peak-RSS profiler or real macOS/provider verification was performed.
-- Verified GitHub CI run [36140379851](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36140379851) for `8616a00`: Ubuntu, macOS 14, and lint/installer jobs succeeded. This closes the reported macOS clipboard-fixture CI failure at that commit, not real desktop support. **CI for the newer performance/RPC changes is pending this push.** Published releases were not verified.
+- Still deferred: the 40 ms shared event-loop wake-up redesign, partial JSON decoding, background session scans and remaining rejected-draft copies. First session listing still scans files synchronously. No sampling/peak-RSS profiler or real-provider/physical-terminal verification was performed. Remote macOS CI is verified below.
+- Verified GitHub CI run [36140379851](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36140379851) for `8616a00`: Ubuntu, macOS 14, and lint/installer jobs succeeded. This closes the reported macOS clipboard-fixture CI failure at that commit, not real desktop support. Verified newer CI run [36166061931](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36166061931) for **`dc5212c`**: Ubuntu tests, macOS 14 tests, and formatting/Clippy/installer checks all succeeded. Published releases were not verified.
 - The user reports completing the suggested manual checks with everything working. No platform/build-specific reproduction details were supplied, so this is positive user evidence, not closure of every outstanding verification item.
 - Earlier user confirmations: WSL Alt+V image paste and Ctrl+Enter multiline input worked on earlier builds. They do not validate this newer worktree. The user's installed binary was not matched to this source snapshot.
 
@@ -21,7 +21,7 @@ The full checks below were rerun on Linux after the RPC changes, against the sou
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Pass: 95 unit + 77 integration tests. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
+| `cargo test --locked` | Local pass: 95 unit + 77 integration tests. Remote Ubuntu and macOS test jobs also passed on `dc5212c`. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
 | `cargo build --release --locked` | Pass during implementation; the final release binary was also built by the targeted release PTY test. |
@@ -33,7 +33,7 @@ The full checks below were rerun on Linux after the RPC changes, against the sou
 | `sh tests/install.sh` and `sh tests/bump-version.sh` | Pass with mocked downloads/sandbox fixtures; no real installation or release. |
 | `git diff --check` | Pass for tracked changes; untracked new files were reviewed separately. |
 
-Environment: Cargo 1.98.1, Node v24.21.0; `pi --version` reports 0.87.1. No macOS rerun of these changes or real terminal visual check was performed here.
+Environment: Cargo 1.98.1, Node v24.21.0; `pi --version` reports 0.87.1. No local macOS run or real terminal visual check was performed here; the remote macOS CI result is recorded above.
 
 Source/test/benchmark fingerprint: `4afeadac802408402bd6fe993476636f79b76a043731ae351ee735a75f335340`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`, `benches/`. Records/docs are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
@@ -61,11 +61,11 @@ Also pending: inline `/logout` against an intentionally selected account, the cu
 - **Activity boundaries:** `Screen::freeze_timeline` runs on assistant text as well as settlement. Summaries are per activity block, not necessarily one global summary for an entire long task (`pi/rpc.rs`, `tui/activity.rs`).
 - **Queue identity:** pending UI matches text/order; initial prompt echo suppression compares text (`Screen::delivered_user`). This is not a stable per-message identifier. Expanded/rewritten prompts and untested duplicate/ack orderings remain risks.
 - **Hypothesis to reproduce:** `rpc::exchange` resets `settled` on accepted queued responses. Check an acknowledgement arriving *after* the final settlement, with no later event. Current mock cases do not establish correct behavior for every ordering; do not record a root cause/fix before reproducing it.
-- **Not covered by this verification:** real macOS clipboard/OAuth/provider compatibility, published installer/update behavior, and latest remote CI. Old release-check results were removed rather than treated as current evidence.
+- **Not covered by this verification:** real macOS clipboard/OAuth/provider compatibility and published installer/update behavior. The verified remote CI runs are named above; do not extrapolate them to future source changes.
 
 ## Next actions, in order
 
-1. Verify Linux/macOS CI for the RPC dev push. The older clipboard-fixture CI failure is verified resolved at `8616a00`; keep that distinct from validation of newer changes. Test real workloads/default limits before any release.
+1. Linux/macOS CI is green for the RPC source at `dc5212c`. Before release, verify real workloads/default limits and the intended version-matching build; do not equate CI or a general user confirmation with exhaustive provider/terminal verification.
 2. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
 3. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
 4. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.
