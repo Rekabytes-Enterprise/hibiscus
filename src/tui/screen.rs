@@ -108,6 +108,8 @@ pub(crate) struct Screen {
     color: bool,
     transcript: Vec<u8>,
     draft: String,
+    restored_draft: Option<(String, Vec<Value>)>,
+    disconnected: bool,
     draft_scroll: usize,
     images: Vec<Value>,
     clipboard: Option<super::clipboard::Job>,
@@ -137,6 +139,8 @@ impl Screen {
             color,
             transcript: Vec::new(),
             draft: String::new(),
+            restored_draft: None,
+            disconnected: false,
             draft_scroll: 0,
             images: Vec::new(),
             clipboard: None,
@@ -265,12 +269,50 @@ impl Screen {
         }
     }
 
+    /// Reset only the local view after Pi has created a new session. Persisted
+    /// history belongs to Pi and is not deleted by clearing the screen.
+    pub(crate) fn clear_session(&mut self) -> io::Result<()> {
+        self.transcript.clear();
+        self.draft.clear();
+        self.restored_draft = None;
+        self.draft_scroll = 0;
+        self.scroll = 0;
+        self.clear_images();
+        self.suggestions = None;
+        self.suggestions_dismissed = false;
+        self.picker = None;
+        self.auth_url = None;
+        self.secret_input = false;
+        self.activity = None;
+        self.session = "new chat".into();
+        self.render()
+    }
+
+    pub(crate) fn defer_input(&mut self, byte: u8) {
+        self.pending_input = Some(byte);
+    }
+
+    pub(crate) fn restore_draft(&mut self, text: String, images: Vec<Value>) {
+        self.restored_draft = Some((text, images));
+    }
+
+    pub(crate) fn set_disconnected(&mut self, disconnected: bool) -> io::Result<()> {
+        self.disconnected = disconnected;
+        self.activity = None;
+        self.render()
+    }
+
     pub(crate) fn prompt_with_update(
         &mut self,
         events: &Receiver<u8>,
         updates: Option<&Receiver<Option<String>>>,
     ) -> Result<PromptAction> {
         self.draft.clear();
+        if let Some((text, images)) = self.restored_draft.take() {
+            self.draft = text;
+            self.images = images;
+        }
+        self.draft_scroll = 0;
         self.suggestions = None;
         self.suggestions_dismissed = false;
         self.render()?;
@@ -961,7 +1003,9 @@ impl Screen {
                 &border.replace('╭', "╰").replace('╮', "╯")
             )
         ));
-        let hint = if self.suggestions.is_some() {
+        let hint = if self.disconnected {
+            "Pi disconnected · /reconnect · /restore · /quit".into()
+        } else if self.suggestions.is_some() {
             "↑↓ choose  ·  Tab complete  ·  Enter run  ·  Esc dismiss".into()
         } else if self.auth_url.is_some() {
             if cfg!(target_os = "macos") {
@@ -1262,6 +1306,60 @@ fn draft_lines(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_session_clears_transcript_and_transient_input_but_keeps_model() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.transcript = b"old conversation".to_vec();
+        screen.draft = "old draft".into();
+        screen.restore_draft(
+            "failed prompt".into(),
+            vec![serde_json::json!({"type":"image"})],
+        );
+        screen.images.push(serde_json::json!({"type":"image"}));
+        screen.clipboard_notice = "old clipboard notice".into();
+        screen.auth_url = Some("https://example.invalid".into());
+        screen.scroll = 20;
+        screen.draft_scroll = 3;
+        screen.secret_input = true;
+        screen.session = "old session".into();
+        screen.model = "provider/model".into();
+        screen.suggestions = Some(Picker::new("Commands".into(), vec!["/new".into()], None, 5));
+        screen.clear_session().unwrap();
+        assert!(screen.transcript.is_empty());
+        assert!(screen.draft.is_empty());
+        assert!(screen.restored_draft.is_none());
+        assert!(screen.images.is_empty());
+        assert!(screen.clipboard_notice.is_empty());
+        assert!(screen.auth_url.is_none());
+        assert!(screen.suggestions.is_none());
+        assert!(!screen.secret_input);
+        assert_eq!(screen.scroll, 0);
+        assert_eq!(screen.draft_scroll, 0);
+        assert_eq!(screen.session, "new chat");
+        assert_eq!(screen.model, "provider/model");
+    }
+
+    #[test]
+    fn restored_failed_draft_keeps_images_and_waits_for_explicit_submission() {
+        let mut screen = Screen::new(false).unwrap();
+        let images = vec![serde_json::json!({"type":"image","data":"test","mimeType":"image/png"})];
+        screen.restore_draft("original\ntext".into(), images.clone());
+        let (send, recv) = std::sync::mpsc::channel();
+        for byte in b" edited\r" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(
+            screen.prompt(&recv).unwrap().as_deref(),
+            Some("original\ntext edited")
+        );
+        assert_eq!(screen.take_images(), images);
+        assert!(screen.restored_draft.is_none());
+        screen.set_disconnected(true).unwrap();
+        assert!(screen.disconnected);
+        screen.set_disconnected(false).unwrap();
+        assert!(!screen.disconnected);
+    }
+
     #[test]
     fn image_paste_recognizes_alt_and_ctrl_terminal_encodings() {
         for sequence in [

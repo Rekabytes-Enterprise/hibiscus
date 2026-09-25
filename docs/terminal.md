@@ -1,6 +1,8 @@
 # Terminal UI
 
-Start `hibiscus` in a terminal for an interactive chat. Hibiscus starts Pi with extensions disabled and only its built-in `read`, `bash`, `edit`, and `write` tools active, so Pi-installed MCP extensions do not start (also during auth handoffs). Running Pi directly still uses your normal configuration. `hibiscus --continue` resumes the latest Pi session for this directory; `hibiscus --sessions` opens the startup numbered picker. Inside the full-screen chat, `/sessions` and `/models` use docked pickers above the composer. `/models` lists Pi's configured models as `provider/model`, sorted by provider and model ID; selecting one switches providers and models in the current chat without a new login if Pi already has access. Pi remains responsible for credentials and reports any model-access errors.
+Start `hibiscus` in a terminal for an interactive chat. Hibiscus starts Pi with installed extensions disabled, one explicit approval gate, and only its built-in `read`, `bash`, `edit`, and `write` tools active, so Pi-installed MCP extensions do not start (also during auth handoffs). Running Pi directly still uses your normal configuration. `hibiscus --continue` resumes the latest Pi session for this directory; `hibiscus --sessions` opens the startup numbered picker. Inside the full-screen chat, `/sessions` and `/models` use docked pickers above the composer. `/models` lists Pi's configured models as `provider/model`, sorted by provider and model ID; selecting one switches providers and models in the current chat without a new login if Pi already has access. Pi remains responsible for credentials and reports any model-access errors.
+
+A successful **`/new`** opens a blank full-screen chat: it clears the visible transcript, input/attachments, scroll position, and failed-prompt recovery buffer. The model stays selected and the header updates from Pi. Saved sessions are not deleted; use `/sessions` to return to them. If Pi rejects or cancels creation, the current conversation stays visible. Line mode retains its plain “Started new session” confirmation.
 
 ## Input and navigation
 
@@ -33,6 +35,23 @@ The transcript renders common Markdown for readability without changing saved Pi
 
 Scrolling stops at the oldest complete viewport instead of leaving most of the screen empty. When new output arrives while you are scrolled up, the view remains anchored until you scroll back to the bottom.
 
+## Dangerous-command approval
+
+`read`, `edit`, `write`, and ordinary `bash` commands run without a prompt. Before Pi's **agent** executes a recognized dangerous `bash` tool call (such as `rm`, `git clean`/force push, `sudo`, permission changes, publishing, shell indirection, or output redirection), Hibiscus shows the reason, working directory, and exact command. Choose **1 Deny** (default), **2 Allow** (once), or **3 Always Allow**. Always Allow applies only to that exact command string and directory in the current chat; it resets on session switch/new session and restart. No wildcard or persistent approvals. Esc, Enter with no choice, timeout, error, and non-interactive use deny by default. In full-screen mode the confirmation is currently a numbered terminal prompt rather than a docked picker.
+
+This is a **best-effort guard, not a sandbox**. Arbitrary scripts, indirect effects of seemingly safe commands, and `edit`/`write` can still change or remove files; command classification cannot prove a shell program is harmless. Pi remains responsible for tool execution and model behavior. Direct user shell commands and tools outside the four-tool allowlist are not covered by this approval gate. [Architecture →](architecture.md)
+
+## Errors and recovery
+
+A rate limit, subscription/quota problem, authentication failure, or rejected command no longer closes interactive chat. Hibiscus shows bounded error details and guidance while retaining the transcript. Pi controls automatic retries; the composer becomes available after Pi settles, not at the first failed attempt. Tool and extension warnings do not automatically fail the whole run.
+
+- **`/restore`** brings the last failed prompt and images back into the full-screen composer for review. Nothing is sent until you press Enter; earlier tool actions may already have happened.
+- **`/reconnect`** recovers a disconnected Pi backend using the last confirmed session path. It never replays a prompt. If no path was confirmed, it explains that a new session will be opened.
+- While disconnected, `/help`, `/restore`, and `/quit` remain available; other input is not sent.
+- One-shot/piped failures still exit nonzero. Unusable terminal I/O and initial startup failures can still exit.
+
+See [error handling and recovery](error-handling.md) for the event mapping, classification, limits, and regression tests.
+
 ## Updates
 
 Prebuilt installs in full-screen mode check for a newer public GitHub release in the background at most once per day. When idle, the picker offers **Later** (the safe default) or **Update now**. A check never interrupts a draft in progress, and offline failures do not block chat. To check or update on demand, exit and run `hibiscus update`; see [Installation and releases](installation.md). Set `HIBISCUS_NO_UPDATE_CHECK=1` to disable automatic checks.
@@ -41,7 +60,17 @@ Prebuilt installs in full-screen mode check for a newer public GitHub release in
 
 In full-screen mode, `/login` offers **OpenAI Codex** or **another provider** regardless of the active model (which may be absent after logout). With Node.js and the matching Pi SDK available, choosing Codex stays in Hibiscus: select browser or device-code sign-in and wait for confirmation. On macOS, Hibiscus opens the validated browser sign-in URL with the system `open` command after you choose browser login, independent of terminal hyperlink support. The screen still shows **Open Codex sign-in ↗** as a short OSC 8 hyperlink where supported rather than a URL broken across rows. Press **Ctrl+Y** to ask an OSC 52-capable terminal to copy the complete URL. If the browser could not open and neither terminal feature works, cancel and retry using device-code sign-in. A browser callback can finish automatically; if it cannot reach WSL, paste the redirect URL into the masked composer instead. Press Esc to cancel. Once Pi's SDK reports login and credential storage complete, Hibiscus ends the dedicated helper itself; it does not wait for the browser tab or callback connection to close. The URL stays out of transcript text but still contains sensitive OAuth state; the device code is also short-lived and sensitive. Do not share screenshots of either. Pi handles credential storage and token refresh. On success Hibiscus reconnects its idle RPC child to the same saved session (or starts a fresh session if the chat is still empty). Ctrl+C is read as an input key while the terminal is in raw mode; use Esc to cancel the sign-in flow rather than expecting the shell's usual interrupt signal.
 
-`/logout`, non-Codex provider login, line mode, and an unavailable Node/SDK helper continue to use the **Pi TUI handoff**. No prior message is needed. Hibiscus closes its idle RPC child before Pi opens the saved session; for an empty chat Pi runs with `--no-session`. In Pi, run `/login` or `/logout`, then `/quit` to return. Hibiscus reconnects its RPC child afterward. Hibiscus never stores credentials itself.
+Non-Codex provider login, line-mode login, and login with an unavailable Node/SDK helper continue to use the **Pi TUI handoff**. No prior message is needed. Hibiscus closes its idle RPC child before Pi opens the saved session; for an empty chat Pi runs with `--no-session`. In Pi, run `/login`, then `/quit` to return. Hibiscus reconnects its RPC child afterward. Hibiscus never stores credentials itself.
+
+### Logout inside Hibiscus
+
+In full-screen mode, **`/logout`** lists providers with stored Pi credentials (OAuth or API keys), regardless of the active model. Choose a provider, then select **Remove stored credential** in the confirmation picker; **Cancel is the default**, and Esc cancels before removal. No saved chat is required.
+
+Hibiscus uses Pi SDK `ModelRuntime.listCredentials()` and `logout()`—it does not edit `auth.json` itself. Only provider IDs and credential types cross the helper protocol, never tokens or API keys. After confirmation, Hibiscus closes the idle RPC backend before authorizing removal, then reopens the same saved chat (or a new empty session) so cached credentials are discarded. It also reopens after a helper error that might have occurred after mutation. Once removal starts, it waits for the bounded result rather than pretending cancellation can undo it.
+
+This removes **one stored credential shared by Pi and Hibiscus**, not the conversation. It does **not** unset environment variables, change `models.json`, or revoke tokens at the provider. Those other credential sources can still provide access. If Pi removes the credential but reports a synchronization failure, Hibiscus reports that distinction and refreshes the backend.
+
+With no stored credentials, nothing is changed. If Node/the compatible SDK is missing, or full-screen input is unavailable, Hibiscus explains the limitation without opening Pi automatically; run `pi` and `/logout` manually if needed. Piped input never authorizes logout. Real-provider logout is not exercised by the automated tests; they use an isolated fake credential store.
 
 ## Terminal compatibility
 

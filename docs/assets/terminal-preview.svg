@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="556" viewBox="0 0 1040 556" role="img" aria-labelledby="title desc">
+  <title id="title">Hibiscus terminal — illustrated preview</title>
+  <desc id="desc">Sample chat showing a shaded user message, a hibi response, tool activity, an edit diff, and a multiline composer. This is an illustration, not a captured session.</desc>
+  <rect x="1" y="1" width="1038" height="554" rx="20" fill="#240c1d" stroke="#63304b" stroke-width="2"/>
+  <path d="M21 2H1019Q1038 2 1038 21V48H2V21Q2 2 21 2" fill="#35172b"/>
+  <g fill="#a66b89">
+    <circle cx="28" cy="25" r="5"/>
+    <circle cx="46" cy="25" r="5"/>
+    <circle cx="64" cy="25" r="5"/>
+  </g>
+  <text x="520" y="30" text-anchor="middle" fill="#d6adc2" font-family="system-ui, sans-serif" font-size="13" letter-spacing="2">HIBISCUS / TERMINAL PREVIEW</text>
+  <g font-family="'DejaVu Sans Mono', 'SFMono-Regular', Consolas, monospace" font-size="17">
+    <text x="36" y="87" fill="#ec4a7d" font-weight="bold">✿ hibiscus</text>
+    <text x="178" y="87" fill="#d6adc2">/ demo</text>
+    <text x="36" y="115" fill="#b493a8" font-size="14">provider/model · example session</text>
+    <path d="M36 145V365" stroke="#63304b" stroke-width="2"/>
+    <rect x="20" y="145" width="1000" height="38" rx="3" fill="#391e2e"/>
+    <path d="M36 145V183" stroke="#ec4a7d" stroke-width="4"/>
+    <text x="56" y="170" fill="#fff1f6">Make the welcome message a little warmer.</text>
+    <text x="56" y="210" fill="#ec4a7d" font-size="15">· ✓ read · src/main.rs</text>
+    <text x="56" y="236" fill="#ec4a7d" font-size="15">· ✓ edit · src/main.rs</text>
+    <rect x="56" y="253" width="920" height="28" rx="3" fill="#412331"/>
+    <rect x="56" y="283" width="920" height="28" rx="3" fill="#24372c"/>
+    <text x="70" y="273" fill="#ff8699" font-size="15">− 12  println!("Hello.");</text>
+    <text x="70" y="303" fill="#a9e0b8" font-size="15">+ 12  println!("Hello! What shall we build today?");</text>
+    <text x="56" y="340" fill="#ec4a7d" font-weight="bold">hibi</text>
+    <text x="56" y="367" fill="#fff1f6">A warmer welcome, ready for your next idea.</text>
+    <rect x="35" y="412" width="970" height="91" rx="9" fill="none" stroke="#ec4a7d" stroke-width="2"/>
+    <text x="51" y="442" fill="#ff9bbb">❯ Now add a regression test.</text>
+    <text x="72" y="471" fill="#ff9bbb">Keep it small and focused.</text>
+    <rect x="339" y="456" width="9" height="19" fill="#ff9bbb"/>
+    <text x="36" y="530" fill="#b493a8" font-size="13">Enter send · Ctrl+Enter newline · Alt+V image · ↑↓ input · /help</text>
+  </g>
+</svg>

@@ -1,3 +1,7 @@
+use super::{
+    error::{self, ChatError, ErrorSource},
+    run::{RunOutcome, RunState},
+};
 use crate::{
     pi::{configure_builtin_tools, dialog::Dialogs},
     tui::{
@@ -11,12 +15,14 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 use std::io::{self, BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+#[derive(Clone)]
 pub(crate) enum SessionStart {
     New,
     Latest,
@@ -29,6 +35,8 @@ pub(crate) struct Rpc {
     output: Receiver<Result<Value>>,
     diagnostics: Option<JoinHandle<io::Result<u64>>>,
     next_id: u64,
+    resume: SessionStart,
+    disconnected: bool,
 }
 
 impl Rpc {
@@ -37,6 +45,10 @@ impl Rpc {
         let mut command = Command::new(&pi);
         command.args(["--mode", "rpc"]);
         configure_builtin_tools(&mut command);
+        let resume = match &start {
+            SessionStart::Selected(path) => SessionStart::Selected(path.clone()),
+            _ => SessionStart::New,
+        };
         match start {
             SessionStart::Latest => {
                 command.arg("--continue");
@@ -50,9 +62,12 @@ impl Rpc {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .spawn()
             .map_err(|error| {
-                format!("could not start {pi}: {error} (install Pi or set HIBISCUS_PI)")
+                error::transport(format!(
+                    "could not start {pi}: {error} (install Pi or set HIBISCUS_PI)"
+                ))
             })?;
         let input = child.stdin.take().ok_or("pi stdin unavailable")?;
         let stdout = child.stdout.take().ok_or("pi stdout unavailable")?;
@@ -83,6 +98,8 @@ impl Rpc {
             output,
             diagnostics: Some(diagnostics),
             next_id: 0,
+            resume,
+            disconnected: false,
         })
     }
 
@@ -105,14 +122,17 @@ impl Rpc {
             .as_str()
             .ok_or("RPC command missing type")?
             .to_owned();
-        let input = self.input.as_mut().ok_or("pi stdin unavailable")?;
-        writeln!(input, "{command}")?;
-        input.flush()?;
+        let input = self
+            .input
+            .as_mut()
+            .ok_or_else(|| error::transport("stdin unavailable"))?;
+        writeln!(input, "{command}").map_err(error::transport)?;
+        input.flush().map_err(error::transport)?;
 
         if kind == "prompt" {
             display.start_work()?;
         }
-        let result = exchange(
+        let mut result = exchange(
             input,
             &self.output,
             display,
@@ -124,11 +144,16 @@ impl Rpc {
             raw,
             interactive,
         );
-        if kind == "prompt" {
-            let cleanup = display.stop_work();
-            if result.is_ok() {
-                cleanup?;
+        if let Err(error) = &mut result {
+            if let Some(error) = error.downcast_mut::<ChatError>() {
+                error.command_id = Some(id);
             }
+        }
+        if kind == "prompt" {
+            display.stop_work()?;
+        }
+        if kind == "new_session" && result.is_ok() {
+            self.resume = SessionStart::New;
         }
         result
     }
@@ -174,20 +199,35 @@ impl Rpc {
             .as_str()
             .ok_or("RPC command missing type")?
             .to_owned();
-        let writer = self.input.as_mut().ok_or("pi stdin unavailable")?;
-        writeln!(writer, "{command}")?;
-        writer.flush()?;
+        let writer = self
+            .input
+            .as_mut()
+            .ok_or_else(|| error::transport("stdin unavailable"))?;
+        writeln!(writer, "{command}").map_err(error::transport)?;
+        writer.flush().map_err(error::transport)?;
+        let mut deadline = Instant::now() + std::time::Duration::from_secs(30);
         loop {
-            let record = self
-                .read_record()?
-                .ok_or("pi RPC stream ended before the command completed")?;
+            let record = receive_record(&self.output, deadline)?
+                .ok_or_else(|| error::transport("stream ended before the command completed"))?;
+            check_record(&record)?;
             if record["type"] == "response" && record["id"] == id {
                 if record["success"] != true {
-                    return Err(format!(
-                        "pi rejected {kind}: {}",
-                        record["error"].as_str().unwrap_or("unknown error")
-                    )
-                    .into());
+                    return Err(rejected(&record, &kind, &id).into());
+                }
+                if kind == "get_state" {
+                    if !record["data"].is_object() {
+                        return Err(error::protocol("Invalid get_state response").into());
+                    }
+                    self.resume = record["data"]["sessionFile"]
+                        .as_str()
+                        .map(|path| SessionStart::Selected(path.into()))
+                        .unwrap_or(SessionStart::New);
+                }
+                if kind == "switch_session" && record["data"]["cancelled"] != true {
+                    self.resume = command["sessionPath"]
+                        .as_str()
+                        .map(|path| SessionStart::Selected(path.into()))
+                        .unwrap_or(SessionStart::New);
                 }
                 return Ok(record["data"].clone());
             }
@@ -200,14 +240,46 @@ impl Rpc {
                 events,
                 interactive,
             )?;
+            if record["type"] == "extension_ui_request" {
+                // Time spent answering a human dialog is not a stalled RPC.
+                deadline = Instant::now() + std::time::Duration::from_secs(30);
+            }
         }
     }
 
-    fn read_record(&mut self) -> Result<Option<Value>> {
-        match self.output.recv() {
-            Ok(event) => event.map(Some),
-            Err(_) => Ok(None),
+    pub(crate) fn is_connected(&self) -> bool {
+        !self.disconnected && self.input.is_some()
+    }
+
+    pub(crate) fn has_saved_session(&self) -> bool {
+        matches!(self.resume, SessionStart::Selected(_))
+    }
+
+    /// Stop an untrusted connection before opening another session writer.
+    pub(crate) fn disconnect(&mut self) {
+        let was_open = self.input.take().is_some();
+        self.disconnected = true;
+        if was_open {
+            // SAFETY: this child was started in its own process group. Kill
+            // before reaping so surviving tools cannot write the old session.
+            unsafe {
+                libc::kill(-(self.child.id() as i32), libc::SIGKILL);
+            }
+            let _ = self.child.kill();
         }
+        let _ = self.child.wait();
+        if let Some(reader) = self.diagnostics.take() {
+            if reader.is_finished() {
+                let _ = reader.join();
+            }
+        }
+    }
+
+    pub(crate) fn recover_connection(&mut self) -> Result<()> {
+        let start = self.resume.clone();
+        self.disconnect();
+        *self = Self::start(start)?;
+        Ok(())
     }
 
     /// Stop the idle RPC child before another Pi process opens its session.
@@ -241,8 +313,13 @@ impl Rpc {
     }
 
     pub(crate) fn finish(mut self, outcome: Result<()>) -> Result<()> {
+        if self.disconnected {
+            self.disconnect();
+            return outcome;
+        }
         if outcome.is_err() {
-            let _ = self.child.kill();
+            self.disconnect();
+            return outcome;
         }
         drop(self.input.take());
         let status = self.child.wait()?;
@@ -254,6 +331,14 @@ impl Rpc {
             return Err(format!("pi exited with {status}").into());
         }
         Ok(())
+    }
+}
+
+impl Drop for Rpc {
+    fn drop(&mut self) {
+        if self.input.is_some() {
+            self.disconnect();
+        }
     }
 }
 
@@ -277,12 +362,14 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
     let mut settled = false;
     let mut printed_text = false;
     let mut pending_newline = false;
-    let mut failed = false;
+    let mut run = RunState::default();
     let mut interrupted = false;
     let mut abort_id = None;
     let mut abort_done = false;
     let mut clear_id = None;
     let mut clear_done = false;
+    let mut rejection = None;
+    let mut cancellation_started = None;
     loop {
         if kind == "prompt" {
             display.tick_work()?;
@@ -300,14 +387,36 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             &mut clear_id,
             &mut abort_id,
         )?;
+        if interrupted
+            && cancellation_started
+                .get_or_insert_with(Instant::now)
+                .elapsed()
+                > std::time::Duration::from_secs(10)
+        {
+            return Err(error::transport(
+                "Cancellation did not settle within 10 seconds; outcome is uncertain",
+            )
+            .into());
+        }
         let event = match output.recv_timeout(std::time::Duration::from_millis(40)) {
             Ok(event) => event?,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err("pi RPC stream ended before the command completed".into())
+                return Err(error::transport("stream ended before the command completed").into())
             }
         };
+        check_record(&event)?;
+        run.observe(&event);
         if event["type"] == "response" {
+            if (clear_id.as_deref() == event["id"].as_str()
+                || abort_id.as_deref() == event["id"].as_str())
+                && event["id"].is_string()
+                && event["success"] != true
+            {
+                return Err(
+                    error::protocol("Pi rejected cancellation; run state is uncertain").into(),
+                );
+            }
             if clear_id.as_deref() == event["id"].as_str() {
                 clear_done = true;
             }
@@ -318,16 +427,19 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
         match event["type"].as_str() {
             Some("response") if event["id"] == id => {
                 if event["success"] != true {
-                    return Err(format!(
-                        "pi rejected {kind}: {}",
-                        event["error"].as_str().unwrap_or("unknown error")
-                    )
-                    .into());
+                    let error = rejected(&event, kind, id);
+                    if !interrupted || (clear_done && abort_done) {
+                        return Err(error.into());
+                    }
+                    // Esc may already have sent clear_queue/abort. Drain their
+                    // acknowledgements before another prompt can be submitted.
+                    rejection = Some(error);
+                    continue;
                 }
                 accepted = true;
                 if kind != "prompt" {
                     if event["data"]["cancelled"] == true {
-                        return Err(format!("pi cancelled {kind}").into());
+                        return Err(ChatError::cancelled(kind).into());
                     }
                     return Ok(false);
                 }
@@ -336,7 +448,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         &ui,
                         display,
                         printed_text || pending_newline,
-                        failed && !interrupted,
+                        run.finish(interrupted),
                         interrupted,
                     );
                 }
@@ -377,14 +489,8 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             Some("message_end") if kind == "prompt" && event["message"]["role"] == "assistant" => {
                 show_reasoning(&ui, display, &mut reasoning_since)?;
                 let message = &event["message"];
-                if matches!(message["stopReason"].as_str(), Some("error" | "aborted")) {
-                    failed = true;
-                    if !interrupted {
-                        if let Some(error) = message["errorMessage"].as_str() {
-                            eprintln!("pi: {error}");
-                        }
-                    }
-                }
+                // RunState retains the latest attempt error until settlement;
+                // intermediate failures must not be printed as final outcomes.
                 // Some providers emit no text deltas; use the completed message instead.
                 if !printed_text {
                     if let Some(blocks) = message["content"].as_array() {
@@ -452,10 +558,32 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             Some("compaction_start") if kind == "prompt" => {
                 display.set_work("Compacting context…")?
             }
-            Some("auto_retry_start") if kind == "prompt" => {
-                display.set_work("Retrying response…")?
+            Some("compaction_end") if event["reason"] != "overflow" => {
+                if let Some(message) = event["errorMessage"].as_str() {
+                    let error = ChatError::new(ErrorSource::Compaction, message);
+                    if interactive {
+                        writeln!(display)?;
+                        ui.info(display, &format!("Warning: {error}"))?;
+                    } else {
+                        eprintln!("pi: {error}");
+                    }
+                } else if event["aborted"] == true && interactive && !interrupted {
+                    ui.info(
+                        display,
+                        "Context compaction cancelled; chat remains available.",
+                    )?;
+                }
             }
-            Some("extension_ui_request") => {
+            Some("auto_retry_start" | "summarization_retry_scheduled") if kind == "prompt" => {
+                let attempt = event["attempt"].as_u64().unwrap_or(0);
+                let max = event["maxAttempts"].as_u64().unwrap_or(0);
+                let delay = event["delayMs"].as_u64().unwrap_or(0) / 1000;
+                display.set_work(&format!("Pi retry {attempt}/{max} in {delay}s…"))?;
+            }
+            Some("summarization_retry_attempt_start") if kind == "prompt" => {
+                display.set_work("Retrying context summary…")?;
+            }
+            Some("extension_ui_request" | "extension_error") => {
                 dialogs.handle(input, &event, fallback, display, raw, events, interactive)?;
                 display.flush()?;
             }
@@ -467,15 +595,26 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         &ui,
                         display,
                         printed_text || pending_newline,
-                        failed && !interrupted,
+                        run.finish(interrupted),
                         interrupted,
                     );
                 }
             }
             _ => {}
         }
+        if abort_done && clear_done {
+            if let Some(error) = rejection.take() {
+                return Err(error.into());
+            }
+        }
         if kind == "prompt" && accepted && settled && interrupted && abort_done && clear_done {
-            return finish_turn(&ui, display, printed_text || pending_newline, false, true);
+            return finish_turn(
+                &ui,
+                display,
+                printed_text || pending_newline,
+                RunOutcome::Cancelled,
+                true,
+            );
         }
     }
 }
@@ -570,9 +709,10 @@ fn maybe_interrupt(
         *interrupted = true;
         *clear_id = Some(format!("{id}-clear"));
         *abort_id = Some(format!("{id}-abort"));
-        writeln!(input, "{}", json!({"id":clear_id,"type":"clear_queue"}))?;
-        writeln!(input, "{}", json!({"id":abort_id,"type":"abort"}))?;
-        input.flush()?;
+        writeln!(input, "{}", json!({"id":clear_id,"type":"clear_queue"}))
+            .map_err(error::transport)?;
+        writeln!(input, "{}", json!({"id":abort_id,"type":"abort"})).map_err(error::transport)?;
+        input.flush().map_err(error::transport)?;
     }
     Ok(())
 }
@@ -592,13 +732,30 @@ fn active_keys(events: &Receiver<u8>, display: &mut impl ScrollDisplay) -> Resul
     Ok(false)
 }
 
+fn receive_record(output: &Receiver<Result<Value>>, deadline: Instant) -> Result<Option<Value>> {
+    if Instant::now() >= deadline {
+        return Err(error::transport(
+            "Pi command response timed out; connection state is uncertain",
+        )
+        .into());
+    }
+    match output.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(event) => event.map(Some),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Ok(None),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(error::transport(
+            "Pi command response timed out; connection state is uncertain",
+        )
+        .into()),
+    }
+}
+
 fn read_record<R: BufRead>(output: &mut R) -> Result<Option<Value>> {
     let mut line = String::new();
-    if output.read_line(&mut line)? == 0 {
+    if output.read_line(&mut line).map_err(error::transport)? == 0 {
         return Ok(None);
     }
     let event = serde_json::from_str(line.trim_end_matches(['\r', '\n']))
-        .map_err(|error| format!("invalid Pi RPC record: {error}"))?;
+        .map_err(|_| error::protocol("Invalid Pi RPC JSON record"))?;
     Ok(Some(event))
 }
 
@@ -606,10 +763,16 @@ fn finish_turn<W: Write>(
     ui: &Ui,
     display: &mut W,
     has_text: bool,
-    failed: bool,
+    outcome: RunOutcome,
     interrupted: bool,
 ) -> Result<bool> {
-    let done = finish_prompt(display, has_text, failed, interrupted)?;
+    if has_text {
+        writeln!(display)?;
+    }
+    if let RunOutcome::Failed(error) = outcome {
+        return Err(error.into());
+    }
+    let done = interrupted;
     if interrupted {
         ui.info(display, "Stopped. You can keep chatting.")?;
     }
@@ -619,19 +782,35 @@ fn finish_turn<W: Write>(
     Ok(done)
 }
 
-fn finish_prompt<W: Write>(
-    display: &mut W,
-    has_text: bool,
-    failed: bool,
-    interrupted: bool,
-) -> Result<bool> {
-    if has_text {
-        writeln!(display)?;
+fn rejected(event: &Value, kind: &str, id: &str) -> ChatError {
+    let mut error = ChatError::new(
+        ErrorSource::Command,
+        &format!(
+            "Pi rejected {kind}: {}",
+            event["error"].as_str().unwrap_or("Unknown error")
+        ),
+    );
+    error.command_id = Some(id.into());
+    error
+}
+
+fn check_record(event: &Value) -> Result<()> {
+    let kind = event["type"]
+        .as_str()
+        .ok_or_else(|| error::protocol("Pi record has no event type"))?;
+    if kind == "response" && !event["success"].is_boolean() {
+        return Err(error::protocol("Pi response has no success flag").into());
     }
-    if failed {
-        return Err("pi agent failed or was aborted".into());
+    if kind == "response" && event["command"] == "parse" && event["success"] == false {
+        return Err(error::protocol("Pi rejected RPC framing").into());
     }
-    Ok(interrupted)
+    if kind == "message_end"
+        && event["message"]["role"] == "assistant"
+        && !event["message"]["stopReason"].is_string()
+    {
+        return Err(error::protocol("Assistant message missing stopReason").into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -886,6 +1065,52 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["clear_queue", "abort"]
         );
+    }
+
+    #[test]
+    fn rejected_preflight_drains_already_sent_cancellation_before_returning() {
+        let rx = records(concat!(
+            "{\"type\":\"response\",\"id\":\"p\",\"success\":false,\"error\":\"no model\"}\n",
+            "{\"type\":\"response\",\"id\":\"p-clear\",\"success\":true}\n",
+            "{\"type\":\"response\",\"id\":\"p-abort\",\"success\":true}\n",
+            "{\"type\":\"response\",\"id\":\"next\",\"success\":true}\n"
+        ));
+        let (sender, keys) = mpsc::channel();
+        sender.send(27).unwrap();
+        assert!(exchange(
+            &mut Vec::new(),
+            &rx,
+            &mut Vec::new(),
+            &mut io::Cursor::new(Vec::<u8>::new()),
+            &mut Dialogs,
+            Some(&keys),
+            "p",
+            "prompt",
+            &mut None,
+            false
+        )
+        .is_err());
+        assert_eq!(rx.recv().unwrap().unwrap()["id"], "next");
+    }
+
+    #[test]
+    fn silent_command_deadline_and_invalid_records_require_reconnection() {
+        let (_sender, receiver) = mpsc::channel();
+        let error = receive_record(&receiver, Instant::now()).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ChatError>().unwrap().recovery(),
+            super::error::RecoveryAction::Reconnect
+        );
+        for record in [
+            json!({}),
+            json!({"type":"response","success":"yes"}),
+            json!({"type":"response","success":false,"command":"parse"}),
+        ] {
+            assert!(check_record(&record).is_err());
+        }
+        assert!(check_record(&json!({"type":"future_event"})).is_ok());
+        let error = read_record(&mut b"private invalid payload\n".as_slice()).unwrap_err();
+        assert!(!error.to_string().contains("private invalid payload"));
     }
 
     #[test]

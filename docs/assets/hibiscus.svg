@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-labelledby="title desc">
+  <title id="title">Hibiscus</title>
+  <desc id="desc">Five raspberry-pink petals surrounding a terminal chevron.</desc>
+  <defs>
+    <linearGradient id="petal" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#ff9bbb"/>
+      <stop offset="1" stop-color="#ec4a7d"/>
+    </linearGradient>
+    <path id="shape" d="M100 105C80 91 62 68 67 42C70 23 85 12 100 20C115 12 130 23 133 42C138 68 120 91 100 105Z"/>
+  </defs>
+  <g fill="url(#petal)" stroke="#ba2f60" stroke-width="2" stroke-linejoin="round">
+    <use href="#shape"/>
+    <use href="#shape" transform="rotate(72 100 100)"/>
+    <use href="#shape" transform="rotate(144 100 100)"/>
+    <use href="#shape" transform="rotate(216 100 100)"/>
+    <use href="#shape" transform="rotate(288 100 100)"/>
+  </g>
+  <circle cx="100" cy="100" r="30" fill="#301024" stroke="#ffb7ce" stroke-width="3"/>
+  <path d="M92 87L106 100L92 113" fill="none" stroke="#fff1f6" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="116" cy="113" r="3" fill="#ff9bbb"/>
+</svg>

@@ -106,8 +106,12 @@ fi
     let handed_off = fs::read_to_string(args).unwrap();
     let rpc_launches = fs::read_to_string(rpc_args).unwrap();
     let mut launches = rpc_launches.lines();
-    let base = "--mode rpc --no-extensions --tools read,bash,edit,write";
-    assert_eq!(launches.next(), Some(base));
+    let base = launches.next().unwrap();
+    let extension = base
+        .strip_prefix("--mode rpc --no-extensions --tools read,bash,edit,write --extension ")
+        .expect("only the explicit approval extension may be loaded");
+    assert!(extension.ends_with("/approval.mjs"));
+    assert!(!std::path::Path::new(extension).exists());
     if saved {
         assert_eq!(
             launches.next(),
@@ -116,7 +120,7 @@ fi
         assert_eq!(
             handed_off,
             format!(
-                "--no-extensions --tools read,bash,edit,write --session {}",
+                "--no-extensions --tools read,bash,edit,write --extension {extension} --session {}",
                 session.display()
             )
         );
@@ -124,7 +128,9 @@ fi
         assert_eq!(launches.next(), Some(base));
         assert_eq!(
             handed_off,
-            "--no-extensions --tools read,bash,edit,write --no-session"
+            format!(
+                "--no-extensions --tools read,bash,edit,write --extension {extension} --no-session"
+            )
         );
     }
     assert_eq!(launches.next(), None);
