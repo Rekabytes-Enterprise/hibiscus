@@ -59,7 +59,7 @@ impl Drop for ApprovalGuard {
 /// Keep built-in tools and only the explicit approval gate. Standalone Pi and
 /// user-installed extensions remain unchanged.
 pub(crate) fn configure_builtin_tools(command: &mut std::process::Command) {
-    command.args(["--no-extensions", "--tools", "read,bash,edit,write"]);
+    command.args(["--no-extensions", "--tools", "read,bash,edit,write,goal"]);
     command.arg("--extension").arg(
         APPROVAL_PATH
             .get()

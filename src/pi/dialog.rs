@@ -1,4 +1,7 @@
-use crate::tui::terminal::{self, RawMode};
+use crate::tui::{
+    screen::ScrollDisplay,
+    terminal::{self, RawMode},
+};
 use crate::Result;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -9,7 +12,7 @@ pub(crate) struct Dialogs;
 
 impl Dialogs {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn handle<R: BufRead, W: Write>(
+    pub(crate) fn handle<R: BufRead, W: ScrollDisplay>(
         &mut self,
         input: &mut impl Write,
         event: &Value,
@@ -48,7 +51,17 @@ impl Dialogs {
         }
         // Only a real terminal can approve. Fallback input is not used for
         // authorizing tool actions, even if prompts were piped into stdin.
-        let response = if interactive {
+        let modal_response = if interactive {
+            match events {
+                Some(events) => display.extension_dialog(event, events)?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let response = if let Some(response) = modal_response {
+            response
+        } else if interactive {
             if let (Some(raw), Some(events)) = (raw.as_mut(), events) {
                 response_for(event, |question| {
                     raw.write(question)?;
@@ -86,6 +99,19 @@ impl Dialogs {
         }
         writeln!(input, "{reply}").map_err(super::error::transport)?;
         input.flush().map_err(super::error::transport)?;
+        if method == "select"
+            && event["title"]
+                .as_str()
+                .is_some_and(|title| title.starts_with("Approval needed:"))
+            && interactive
+        {
+            let decision = match response["value"].as_str() {
+                Some("Allow") => "✓ approval · Allow once",
+                Some("Always Allow") => "✓ approval · Always Allow (exact command)",
+                _ => "✗ approval · Denied",
+            };
+            writeln!(display, "  · {decision}")?;
+        }
         Ok(())
     }
 }

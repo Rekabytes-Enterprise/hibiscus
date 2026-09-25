@@ -57,23 +57,25 @@ Prefer to inspect the installer first, choose a version, or use a custom directo
 
 | | What you get |
 | :--- | :--- |
-| **Clear conversations** | Shaded user rows, visible `hibi` reply headings, Markdown, and a scrolling transcript. |
-| **Room to think** | A multiline composer that grows to five rows, then scrolls within the input. |
+| **Clear conversations** | Ubuntu-style aubergine background, lighter user rows, visible `hibi` reply headings, Markdown, and a scrolling transcript. |
+| **Room to think** | A movable insertion cursor in a multiline composer that grows to five rows, then scrolls within the input. |
 | **Show, don't describe** | Paste clipboard images alongside your prompt, with a visible attachment count. |
 | **Models at your fingertips** | A keyboard-and-wheel picker of Pi-configured models, grouped by provider. |
 | **Pick up where you left off** | Resume the latest session or choose another, with recent conversation context shown. |
-| **Know what's happening** | A flower heartbeat, elapsed time, tool status, and bounded previews of successful edits. |
-| **Stay in control** | Common dangerous shell commands ask before running: Deny, Allow once, or Always Allow this exact command in this chat. Esc stops a run. |
+| **Know what's happening** | Live phase on the footer's left, optional checklist Goal bar on its right; a small rotating Exploring glyph beside the latest file, checked read/bash counts, visible failures, and individual edit diffs in chat. |
+| **Stay in control** | Type while Pi works: Enter steers, Ctrl+Q (WSL) or Alt+Enter queues a follow-up. Waiting messages stay beside the composer until Pi actually delivers them; dangerous shell commands request approval in the same docked panel style as `/models`. Esc clears the queue and stops a run. |
 
 ### A few keys to remember
 
 | Action | Shortcut |
 | :--- | :--- |
-| Send | **Enter** |
+| Send / steer during a run | **Enter** |
+| Queue a follow-up during a run | **Ctrl+Q on WSL** · **Alt+Enter elsewhere** |
 | Newline | **Ctrl+Enter** · Ctrl+J fallback |
 | Paste an image | **Alt+V on WSL** · **Ctrl+V elsewhere** |
 | Remove staged images | **Ctrl+X** |
-| Scroll a long draft | **↑ / ↓** or wheel over the input |
+| Move/edit inside a draft | **← / → / ↑ / ↓**, Home/End, Backspace/Delete |
+| Scroll a long draft | Wheel over the input |
 | Scroll the conversation | **PgUp / PgDn** or mouse wheel |
 | Stop the current run | **Esc** |
 

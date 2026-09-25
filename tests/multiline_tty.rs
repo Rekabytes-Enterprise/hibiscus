@@ -35,13 +35,22 @@ done
     tty.send(b"\x1b[A\x1b[B\r");
     tty.wait_text("MULTILINE_REPLY");
     tty.wait_text("Enter send · Ctrl+Enter");
+    tty.send(b"abCD\x1b[D\x1b[D-\x1b[C\x1b[3~\r");
+    tty.wait_text("MULTILINE_REPLY");
+    tty.wait_text("Enter send · Ctrl+Enter");
     tty.send(b"/quit\r");
     let shown = tty.finish();
     let prompts = fs::read_to_string(&log).unwrap();
     let lines: Vec<_> = prompts.lines().collect();
-    assert_eq!(lines.len(), 1);
+    assert_eq!(lines.len(), 2);
     let prompt: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(prompt["message"], "one\ntwo\nthree\nfour\nfive\nsix");
+    let corrected: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(corrected["message"], "ab-C");
+    assert!(
+        shown.contains("\x1b[21;9H"),
+        "cursor must move left inside the composer"
+    );
     assert!(shown.contains("\x1b[>1u"));
     assert!(shown.contains("\x1b[<u"));
     drop(tty);

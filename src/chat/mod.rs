@@ -13,7 +13,7 @@ use crate::{
         rpc::{Rpc, SessionStart},
     },
     tui::{
-        screen::{PromptAction, Screen},
+        screen::{PromptAction, Screen, ScrollDisplay},
         terminal::{self, RawMode, Terminal, TerminalEvents},
         ui::Ui,
     },
@@ -139,9 +139,9 @@ fn show_session_status<R: BufRead>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn show_history_for<R: BufRead, W: Write>(
+fn show_history_for<R: BufRead>(
     rpc: &mut Rpc,
-    output: &mut W,
+    output: &mut Screen,
     fallback: &mut R,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,
@@ -161,6 +161,7 @@ fn show_history_for<R: BufRead, W: Write>(
     let messages = messages["messages"]
         .as_array()
         .ok_or("invalid get_messages response")?;
+    output.restore_goal(messages)?;
     sessions::show_recent_with(messages, output, ui)
 }
 
@@ -459,6 +460,9 @@ fn chat<R: BufRead>(
                 }
             }
         }
+        if let Some(rejected) = output.take_rejected_queue() {
+            last_failed = Some(rejected);
+        }
         // Capture the authoritative session path once Pi has settled. A
         // reconnect never guesses another session from the workspace's latest.
         if (submitted || failed) && rpc.is_connected() && interactive {
@@ -679,9 +683,19 @@ fn auth_handoff<R: BufRead>(
     let (Some(keys), Some(editor)) = (events.as_ref(), raw.as_mut()) else {
         return Ok(());
     };
-    editor.write(&format!("Hand off to Pi for {action}? [y/N] "))?;
-    let confirmed = terminal::read_line(&keys.receiver, editor)?
-        .is_some_and(|s| s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes"));
+    let confirmed = if output.is_full() {
+        output.select(
+            &format!("Hand off to Pi for {action}?"),
+            &["Cancel".into(), "Open Pi".into()],
+            None,
+            &keys.receiver,
+        )? == Some(1)
+    } else {
+        output.invalidate_screen();
+        editor.write(&format!("Hand off to Pi for {action}? [y/N] "))?;
+        terminal::read_line(&keys.receiver, editor)?
+            .is_some_and(|s| s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes"))
+    };
     if !confirmed {
         writeln!(output, "Cancelled.")?;
         return Ok(());
@@ -748,10 +762,10 @@ fn auth_handoff<R: BufRead>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn open_session<R: BufRead, W: Write>(
+fn open_session<R: BufRead>(
     rpc: &mut Rpc,
     path: &std::path::Path,
-    output: &mut W,
+    output: &mut Screen,
     input: &mut R,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,

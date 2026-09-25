@@ -34,10 +34,10 @@ done
 #[test]
 fn approval_choices_are_correlated_and_default_to_deny() {
     for (choice, expected) in [
-        (b"\r".as_slice(), None),
-        (b"1\r", Some("Deny")),
-        (b"2\r", Some("Allow")),
-        (b"3\r", Some("Always Allow")),
+        (b"\r".as_slice(), Some("Deny")),
+        (b"\x1b[B\x1b[A\r", Some("Deny")),
+        (b"\x1b[B\r", Some("Allow")),
+        (b"\x1b[B\x1b[B\r", Some("Always Allow")),
         (b"\x1b", None),
     ] {
         let (root, pi) = fixture();
@@ -68,6 +68,9 @@ fn approval_choices_are_correlated_and_default_to_deny() {
         assert!(
             shown.contains("Deny") && shown.contains("Allow") && shown.contains("Always Allow")
         );
+        assert!(shown.contains("╭─ ✿ Approval needed:"));
+        assert!(!shown.contains("Choose a number"));
+        assert!(!shown.contains("[pi] Approval"));
         let launches = fs::read_to_string(root.join("launches")).unwrap();
         let extension = launches
             .lines()

@@ -87,9 +87,9 @@ fi
     tty.wait_text("Sign in to");
     tty.send(if other_provider { b"\x1b[B\r" } else { b"\r" });
     tty.wait_text("Hand off to Pi for /login?");
-    tty.send(b"y\r");
-    // This marker is emitted only after the old reader is joined and Pi owns
-    // the tty. No input is needed to unblock the reader being stopped.
+    tty.send(b"\x1b[B\r"); // shared confirmation defaults to Cancel
+                           // This marker is emitted only after the old reader is joined and Pi owns
+                           // the tty. No input is needed to unblock the reader being stopped.
     tty.wait_text("MOCK_TUI_READY");
     tty.send(b"pi-only-input\r");
     tty.wait_text("Returned from Pi.");
@@ -97,7 +97,15 @@ fi
     tty.wait_text("MOCK_REPLY_AFTER");
     tty.wait_text("Enter send · Ctrl+Enter");
     tty.send(b"/quit\r");
-    tty.finish();
+    let shown = tty.finish();
+    assert!(
+        shown.matches("\x1b[2 q").count() >= 2,
+        "steady cursor must be set again after Pi handoff"
+    );
+    assert!(
+        shown.matches("\x1b[0 q").count() >= 2,
+        "terminal cursor must be restored on handoff and exit"
+    );
     assert_eq!(fs::read_to_string(log).unwrap(), "pi-only-input");
     assert!(
         !sdk_marker.exists(),
@@ -108,7 +116,7 @@ fi
     let mut launches = rpc_launches.lines();
     let base = launches.next().unwrap();
     let extension = base
-        .strip_prefix("--mode rpc --no-extensions --tools read,bash,edit,write --extension ")
+        .strip_prefix("--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension ")
         .expect("only the explicit approval extension may be loaded");
     assert!(extension.ends_with("/approval.mjs"));
     assert!(!std::path::Path::new(extension).exists());
@@ -120,7 +128,7 @@ fi
         assert_eq!(
             handed_off,
             format!(
-                "--no-extensions --tools read,bash,edit,write --extension {extension} --session {}",
+                "--no-extensions --tools read,bash,edit,write,goal --extension {extension} --session {}",
                 session.display()
             )
         );
@@ -129,7 +137,7 @@ fi
         assert_eq!(
             handed_off,
             format!(
-                "--no-extensions --tools read,bash,edit,write --extension {extension} --no-session"
+                "--no-extensions --tools read,bash,edit,write,goal --extension {extension} --no-session"
             )
         );
     }

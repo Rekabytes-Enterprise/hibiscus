@@ -5,7 +5,7 @@ use super::{
 use crate::{
     pi::{configure_builtin_tools, dialog::Dialogs},
     tui::{
-        screen::{escape_key, Navigation, ScrollDisplay},
+        screen::{escape_key, ActiveAction, DraftSubmission, Navigation, QueueMode, ScrollDisplay},
         terminal::RawMode,
         ui::Ui,
     },
@@ -126,6 +126,9 @@ impl Rpc {
             .input
             .as_mut()
             .ok_or_else(|| error::transport("stdin unavailable"))?;
+        if kind == "prompt" {
+            display.expect_initial_user(command["message"].as_str().unwrap_or(""));
+        }
         writeln!(input, "{command}").map_err(error::transport)?;
         input.flush().map_err(error::transport)?;
 
@@ -182,7 +185,7 @@ impl Rpc {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn request<R: BufRead, W: Write>(
+    pub(crate) fn request<R: BufRead, W: ScrollDisplay>(
         &mut self,
         mut command: Value,
         fallback: &mut R,
@@ -370,6 +373,9 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
     let mut clear_done = false;
     let mut rejection = None;
     let mut cancellation_started = None;
+    let mut pending_queued = HashMap::<String, DraftSubmission>::new();
+    let mut next_queue_id = 0;
+    let mut queued_count = 0;
     loop {
         if kind == "prompt" {
             display.tick_work()?;
@@ -382,10 +388,14 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             events,
             kind,
             id,
-            settled,
+            accepted,
+            settled && pending_queued.is_empty() && queued_count == 0,
             &mut interrupted,
             &mut clear_id,
             &mut abort_id,
+            &mut pending_queued,
+            &mut next_queue_id,
+            queued_count,
         )?;
         if interrupted
             && cancellation_started
@@ -407,6 +417,26 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
         };
         check_record(&event)?;
         run.observe(&event);
+        if kind == "prompt" && event["type"] == "response" {
+            if let Some(queued) = event["id"]
+                .as_str()
+                .and_then(|id| pending_queued.remove(id))
+            {
+                if event["success"] == true && interrupted {
+                    display.rejected_queue(queued, "Pi is stopping; queue delivery is uncertain. Check history before resending")?;
+                } else if event["success"] == true {
+                    display.queued(&queued)?;
+                    settled = false;
+                } else {
+                    display.rejected_queue(
+                        queued,
+                        event["error"].as_str().unwrap_or("unknown error"),
+                    )?;
+                }
+                display.flush()?;
+                continue;
+            }
+        }
         if event["type"] == "response" {
             if (clear_id.as_deref() == event["id"].as_str()
                 || abort_id.as_deref() == event["id"].as_str())
@@ -419,12 +449,15 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             }
             if clear_id.as_deref() == event["id"].as_str() {
                 clear_done = true;
+                display.clear_queue_display()?;
+                queued_count = 0;
             }
             if abort_id.as_deref() == event["id"].as_str() {
                 abort_done = true;
             }
         }
         match event["type"].as_str() {
+            Some("agent_start") if kind == "prompt" => settled = false,
             Some("response") if event["id"] == id => {
                 if event["success"] != true {
                     let error = rejected(&event, kind, id);
@@ -443,7 +476,11 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     }
                     return Ok(false);
                 }
-                if settled && (!interrupted || (abort_done && clear_done)) {
+                if settled
+                    && pending_queued.is_empty()
+                    && queued_count == 0
+                    && (!interrupted || (abort_done && clear_done))
+                {
                     return finish_turn(
                         &ui,
                         display,
@@ -453,11 +490,28 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     );
                 }
             }
+            Some("message_start") if kind == "prompt" && event["message"]["role"] == "user" => {
+                if display.delivered_user(&event["message"])? {
+                    printed_text = false;
+                    pending_newline = false;
+                    display.flush()?;
+                }
+            }
+            Some("queue_update") if kind == "prompt" => {
+                queued_count = event["steering"].as_array().map_or(0, Vec::len)
+                    + event["followUp"].as_array().map_or(0, Vec::len);
+                display.queue_update(&event)?;
+            }
             Some("message_update") if kind == "prompt" => {
                 let update = &event["assistantMessageEvent"];
                 match update["type"].as_str() {
                     Some("thinking_start" | "thinking_delta") => {
-                        reasoning_since.get_or_insert_with(Instant::now);
+                        if reasoning_since.is_none() {
+                            reasoning_since = Some(Instant::now());
+                            if interactive {
+                                display.thinking_start()?;
+                            }
+                        }
                         display.set_work("Thinking…")?;
                     }
                     Some("thinking_end") => {
@@ -471,11 +525,15 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     Some("text_delta") => {
                         display.set_work("Writing reply…")?;
                         if let Some(delta) = update["delta"].as_str() {
+                            if !printed_text && reasoning_since.is_some() {
+                                show_reasoning(&ui, display, &mut reasoning_since)?;
+                            }
                             if pending_newline {
                                 writeln!(display)?;
                                 pending_newline = false;
                             }
                             if !printed_text && !pending_newline {
+                                display.split_timeline()?;
                                 ui.assistant(display)?;
                             }
                             write!(display, "{delta}")?;
@@ -502,6 +560,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                                         pending_newline = false;
                                     }
                                     if !printed_text && !pending_newline {
+                                        display.split_timeline()?;
                                         ui.assistant(display)?;
                                     }
                                     write!(display, "{text}")?;
@@ -530,27 +589,52 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         writeln!(display)?;
                         pending_newline = false;
                     }
-                    ui.info(display, &format!("↳ {label} …"))?;
+                    let path = label.split_once(" · ").map_or("", |(_, path)| path);
+                    if name != "goal"
+                        && !display.tool_start(
+                            event["toolCallId"].as_str().unwrap_or(""),
+                            name,
+                            path,
+                        )?
+                    {
+                        ui.info(display, &format!("↳ {label} …"))?;
+                    }
                     display.flush()?;
                 } else {
                     eprintln!("[tool: {name}]");
                 }
             }
             Some("tool_execution_end") if kind == "prompt" => {
+                let name = event["toolName"].as_str().unwrap_or("tool");
                 let label = event["toolCallId"]
                     .as_str()
                     .and_then(|id| active_tools.remove(id))
-                    .unwrap_or_else(|| safe_detail(event["toolName"].as_str().unwrap_or("tool")));
-                display.set_work("Thinking…")?;
-                if interactive {
+                    .unwrap_or_else(|| safe_detail(name));
+                display.set_work("Working…")?;
+                if name == "goal" && event["isError"] != true {
+                    display.goal(&event["result"]["details"])?;
+                }
+                if interactive && name != "goal" {
                     let outcome = if event["isError"] == true {
                         "✗ failed"
                     } else {
                         "✓ done"
                     };
-                    ui.info(display, &format!("{outcome} · {label}"))?;
-                    if event["toolName"] == "edit" && event["isError"] != true {
-                        show_edit_diff(&ui, display, &label, &event["result"])?;
+                    let path = label.split_once(" · ").map_or("", |(_, path)| path);
+                    let diff = (name == "edit" && event["isError"] != true)
+                        .then(|| event["result"]["details"]["diff"].as_str())
+                        .flatten();
+                    if !display.tool_end(
+                        event["toolCallId"].as_str().unwrap_or(""),
+                        name,
+                        path,
+                        event["isError"] == true,
+                        diff,
+                    )? {
+                        ui.info(display, &format!("{outcome} · {label}"))?;
+                        if name == "edit" && event["isError"] != true {
+                            show_edit_diff(&ui, display, &label, &event["result"])?;
+                        }
                     }
                     display.flush()?;
                 }
@@ -584,13 +668,19 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 display.set_work("Retrying context summary…")?;
             }
             Some("extension_ui_request" | "extension_error") => {
+                // Full-screen dialogs render through the shared cached modal
+                // component; only line mode uses direct terminal prompts.
                 dialogs.handle(input, &event, fallback, display, raw, events, interactive)?;
                 display.flush()?;
             }
             Some("agent_settled") if kind == "prompt" => {
                 show_reasoning(&ui, display, &mut reasoning_since)?;
                 settled = true;
-                if accepted && (!interrupted || (abort_done && clear_done)) {
+                if accepted
+                    && pending_queued.is_empty()
+                    && queued_count == 0
+                    && (!interrupted || (abort_done && clear_done))
+                {
                     return finish_turn(
                         &ui,
                         display,
@@ -607,19 +697,32 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 return Err(error.into());
             }
         }
-        if kind == "prompt" && accepted && settled && interrupted && abort_done && clear_done {
+        // Pi may emit the final queue_update after agent_settled. Only leave
+        // once both the final settlement and all correlated queue responses
+        // (and queue counts) agree there is no more work.
+        if kind == "prompt"
+            && accepted
+            && settled
+            && pending_queued.is_empty()
+            && queued_count == 0
+            && (!interrupted || (abort_done && clear_done))
+        {
             return finish_turn(
                 &ui,
                 display,
                 printed_text || pending_newline,
-                RunOutcome::Cancelled,
-                true,
+                run.finish(interrupted),
+                interrupted,
             );
         }
     }
 }
 
-fn show_reasoning<W: Write>(ui: &Ui, display: &mut W, since: &mut Option<Instant>) -> Result<()> {
+fn show_reasoning<W: ScrollDisplay>(
+    ui: &Ui,
+    display: &mut W,
+    since: &mut Option<Instant>,
+) -> Result<()> {
     if let Some(start) = since.take() {
         if ui.interactive {
             let seconds = start.elapsed().as_secs();
@@ -628,7 +731,9 @@ fn show_reasoning<W: Write>(ui: &Ui, display: &mut W, since: &mut Option<Instant
             } else {
                 format!("{seconds}s")
             };
-            ui.info(display, &format!("reasoning · {duration}"))?;
+            if !display.thinking_end()? {
+                ui.info(display, &format!("reasoning · {duration}"))?;
+            }
             display.flush()?;
         }
     }
@@ -692,16 +797,30 @@ fn maybe_interrupt(
     events: Option<&Receiver<u8>>,
     kind: &str,
     id: &str,
+    accepted: bool,
     settled: bool,
     interrupted: &mut bool,
     clear_id: &mut Option<String>,
     abort_id: &mut Option<String>,
+    pending_queued: &mut HashMap<String, DraftSubmission>,
+    next_queue_id: &mut u64,
+    queued_count: usize,
 ) -> Result<()> {
     let stop = if kind == "prompt" && !settled && !*interrupted {
-        events
-            .map(|rx| active_keys(rx, display))
-            .transpose()?
-            .unwrap_or(false)
+        match events {
+            Some(rx) if display.live_input() => poll_live_input(
+                input,
+                display,
+                rx,
+                id,
+                accepted,
+                queued_count,
+                pending_queued,
+                next_queue_id,
+            )?,
+            Some(rx) => active_keys(rx, display)?,
+            None => false,
+        }
     } else {
         false
     };
@@ -715,6 +834,54 @@ fn maybe_interrupt(
         input.flush().map_err(error::transport)?;
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // Pi stdin, terminal events and correlated queue state are independent.
+fn poll_live_input(
+    input: &mut impl Write,
+    display: &mut impl ScrollDisplay,
+    events: &Receiver<u8>,
+    id: &str,
+    accepted: bool,
+    queued_count: usize,
+    pending: &mut HashMap<String, DraftSubmission>,
+    sequence: &mut u64,
+) -> Result<bool> {
+    // Bound input work so a fast paste cannot starve Pi stdout or the spinner.
+    for _ in 0..128 {
+        let byte = match display.pending_key().or_else(|| events.try_recv().ok()) {
+            Some(byte) => byte,
+            None => break,
+        };
+        match display.active_key(byte, events)? {
+            ActiveAction::Stop => return Ok(true),
+            ActiveAction::None => {}
+            ActiveAction::Submit(submission) => {
+                if !accepted {
+                    display.hold_queue(submission)?;
+                    continue;
+                }
+                if pending.len() + queued_count >= 16 {
+                    display.rejected_queue(submission, "Too many pending queue requests")?;
+                    continue;
+                }
+                *sequence += 1;
+                let queue_id = format!("{id}-queued-{sequence}");
+                let behavior = match submission.mode {
+                    QueueMode::Steer => "steer",
+                    QueueMode::FollowUp => "followUp",
+                };
+                let mut command = json!({"id":queue_id,"type":"prompt","message":&submission.text,"streamingBehavior":behavior});
+                if !submission.images.is_empty() {
+                    command["images"] = json!(&submission.images);
+                }
+                writeln!(input, "{command}").map_err(error::transport)?;
+                input.flush().map_err(error::transport)?;
+                pending.insert(queue_id, submission);
+            }
+        }
+    }
+    Ok(false)
 }
 
 // Mouse and page-key CSI sequences also start with Esc. They scroll the

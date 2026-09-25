@@ -6,7 +6,10 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use super::{
+    activity::Timeline,
     markdown::{self, Role, Tone},
+    modal::{self, Modal},
+    paint::{Cursor, Painter, SYNC_END},
     picker::Picker,
 };
 use crate::{chat::commands, Result};
@@ -17,7 +20,33 @@ pub(crate) enum PromptAction {
     Update(String),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueueMode {
+    Steer,
+    FollowUp,
+}
+
+pub(crate) struct DraftSubmission {
+    pub(crate) text: String,
+    pub(crate) images: Vec<Value>,
+    pub(crate) mode: QueueMode,
+}
+
+pub(crate) enum ActiveAction {
+    Stop,
+    Submit(DraftSubmission),
+    None,
+}
+
+struct PendingQueue {
+    text: String,
+    mode: QueueMode,
+    images: usize,
+    accepted: bool,
+    sending: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Navigation {
     Escape,
     EscapeWith(u8),
@@ -25,9 +54,13 @@ pub(crate) enum Navigation {
     ScrollLines(i32),
     Up,
     Down,
+    Left,
+    Right,
     Home,
     End,
+    Delete,
     Newline,
+    FollowUp,
     PasteImage,
     MouseScroll(i32, usize),
     Other,
@@ -37,6 +70,7 @@ pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
     match events.recv_timeout(std::time::Duration::from_millis(25)) {
         Ok(b'[') => {}
         Ok(b'v') => return Navigation::PasteImage, // legacy Alt+V (Pi's WSL default)
+        Ok(b'\r' | b'\n') => return Navigation::FollowUp, // legacy Alt+Enter
         Ok(next) => return Navigation::EscapeWith(next),
         Err(_) => return Navigation::Escape,
     }
@@ -51,6 +85,10 @@ pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
         "118;3u" | "118;5u" | "27;3;118~" | "27;5;118~" | "118;3:1u" | "118;5:1u" | "118;3:2u"
         | "118;5:2u" => Navigation::PasteImage,
         "13;2u" | "27;2;13~" | "13;2~" | "13;5u" | "27;5;13~" | "13;5~" => Navigation::Newline,
+        "13;3u" | "27;3;13~" | "13;3~" => Navigation::FollowUp,
+        "3~" => Navigation::Delete,
+        "C" => Navigation::Right,
+        "D" => Navigation::Left,
         "5~" => Navigation::ScrollPage(1),
         "6~" => Navigation::ScrollPage(-1),
         "A" => Navigation::Up,
@@ -86,17 +124,96 @@ pub(crate) trait ScrollDisplay: Write {
     fn stop_work(&mut self) -> io::Result<()> {
         Ok(())
     }
+    fn thinking_start(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    fn thinking_end(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn tool_start(&mut self, _id: &str, _name: &str, _path: &str) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn tool_end(
+        &mut self,
+        _id: &str,
+        _name: &str,
+        _path: &str,
+        _failed: bool,
+        _diff: Option<&str>,
+    ) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn goal(&mut self, _details: &Value) -> io::Result<()> {
+        Ok(())
+    }
+    fn split_timeline(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    fn live_input(&self) -> bool {
+        false
+    }
+    fn pending_key(&mut self) -> Option<u8> {
+        None
+    }
+    fn active_key(&mut self, _byte: u8, _events: &Receiver<u8>) -> Result<ActiveAction> {
+        Ok(ActiveAction::None)
+    }
+    fn queued(&mut self, _submission: &DraftSubmission) -> io::Result<()> {
+        Ok(())
+    }
+    fn expect_initial_user(&mut self, _message: &str) {}
+    fn delivered_user(&mut self, _message: &Value) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn hold_queue(&mut self, _submission: DraftSubmission) -> io::Result<()> {
+        Ok(())
+    }
+    fn rejected_queue(&mut self, _submission: DraftSubmission, _error: &str) -> io::Result<()> {
+        Ok(())
+    }
+    fn queue_update(&mut self, _update: &Value) -> io::Result<()> {
+        Ok(())
+    }
+    fn clear_queue_display(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    fn invalidate_screen(&mut self) {}
+    fn extension_dialog(
+        &mut self,
+        _event: &Value,
+        _events: &Receiver<u8>,
+    ) -> Result<Option<Value>> {
+        Ok(None)
+    }
 }
 impl ScrollDisplay for io::Stdout {}
 impl ScrollDisplay for Vec<u8> {}
 
 const FLOWERS: [&str; 4] = ["✿", "❀", "✾", "❁"];
+// Ubuntu's aubergine terminal background. Set SGR only inside the alternate
+// screen; never change the terminal's configured background with OSC 11.
+const BASE_BACKGROUND: &str = "\x1b[48;2;48;10;36m";
+
+fn paint_background(frame: &str, color: bool) -> String {
+    if color {
+        // The theme's accent and Markdown renderers reset foreground styles.
+        // Restore the base background after each reset so blank columns and
+        // subsequent erase-to-end sequences never expose the terminal default.
+        format!(
+            "{BASE_BACKGROUND}{}",
+            frame.replace("\x1b[0m", &format!("\x1b[0m{BASE_BACKGROUND}"))
+        )
+    } else {
+        frame.to_owned()
+    }
+}
 
 struct Activity {
     phase: String,
     started: Instant,
-    last_frame: Instant,
-    frame: usize,
+    last_refresh: Instant,
+    last_spinner: Instant,
+    flower_frame: usize,
 }
 
 /// An alternate-screen transcript with a persistent composer. Non-terminal
@@ -106,24 +223,42 @@ pub(crate) struct Screen {
     full: bool,
     suspended: bool,
     color: bool,
+    painter: Painter,
+    last_paint: Option<Instant>,
+    paint_pending: bool,
     transcript: Vec<u8>,
     draft: String,
+    draft_cursor: usize,
+    preferred_column: Option<usize>,
     restored_draft: Option<(String, Vec<Value>)>,
     disconnected: bool,
     draft_scroll: usize,
     images: Vec<Value>,
     clipboard: Option<super::clipboard::Job>,
     clipboard_notice: String,
+    input_notice: Option<String>,
+    queue_steering: usize,
+    queue_follow_up: usize,
+    pending_queue: Vec<PendingQueue>,
+    delivered_before_ack: Vec<String>,
+    initial_user_pending: Option<String>,
+    rejected_queued: Option<(String, Vec<Value>)>,
+    active_utf8: Vec<u8>,
     model: String,
     session: String,
     scroll: usize,
     picker: Option<Picker>,
+    modal: Option<Modal>,
     suggestions: Option<Picker>,
     suggestions_dismissed: bool,
     pending_input: Option<u8>,
     secret_input: bool,
     auth_url: Option<String>,
     activity: Option<Activity>,
+    timelines: Vec<Timeline>,
+    current_timeline: Option<usize>,
+    timeline_marked: bool,
+    goal: Option<(usize, usize)>,
 }
 
 impl Screen {
@@ -137,24 +272,42 @@ impl Screen {
             full,
             suspended: true,
             color,
+            painter: Painter::new(env::var_os("HIBISCUS_NO_SYNC_UPDATE").is_none()),
+            last_paint: None,
+            paint_pending: false,
             transcript: Vec::new(),
             draft: String::new(),
+            draft_cursor: 0,
+            preferred_column: None,
             restored_draft: None,
             disconnected: false,
             draft_scroll: 0,
             images: Vec::new(),
             clipboard: None,
             clipboard_notice: String::new(),
+            input_notice: None,
+            queue_steering: 0,
+            queue_follow_up: 0,
+            pending_queue: Vec::new(),
+            delivered_before_ack: Vec::new(),
+            initial_user_pending: None,
+            rejected_queued: None,
+            active_utf8: Vec::new(),
             model: "no model".into(),
             session: "new chat".into(),
             scroll: 0,
             picker: None,
+            modal: None,
             suggestions: None,
             suggestions_dismissed: false,
             pending_input: None,
             secret_input: false,
             auth_url: None,
             activity: None,
+            timelines: Vec::new(),
+            current_timeline: None,
+            timeline_marked: false,
+            goal: None,
         };
         if screen.size().0 < 40 || screen.size().1 < 14 {
             screen.full = false;
@@ -202,10 +355,13 @@ impl Screen {
 
     pub(crate) fn suspend(&mut self) -> io::Result<()> {
         if self.full && !self.suspended {
-            write!(
-                self.out,
-                "\x1b[<u\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l"
-            )?;
+            self.painter.invalidate();
+            self.last_paint = None;
+            write!(self.out, "{SYNC_END}\x1b[<u\x1b[?1000l\x1b[?1006l")?;
+            if self.color {
+                write!(self.out, "\x1b[0m")?;
+            }
+            write!(self.out, "\x1b[?25h\x1b[?1049l\x1b[0 q")?;
             self.suspended = true;
             self.out.flush()?;
         }
@@ -214,10 +370,15 @@ impl Screen {
 
     pub(crate) fn resume(&mut self) -> io::Result<()> {
         if self.full && self.suspended {
-            write!(
-                self.out,
-                "\x1b[?1049h\x1b[>1u\x1b[2J\x1b[?1000h\x1b[?1006h\x1b[?25l"
-            )?;
+            self.painter.invalidate();
+            self.last_paint = None;
+            // DECSCUSR 2 requests a steady block cursor. Restore the
+            // terminal's preferred cursor style when leaving Hibiscus.
+            write!(self.out, "\x1b[?1049h\x1b[2 q\x1b[>1u")?;
+            if self.color {
+                self.out.write_all(BASE_BACKGROUND.as_bytes())?;
+            }
+            write!(self.out, "\x1b[2J\x1b[?1000h\x1b[?1006h\x1b[?25l")?;
             self.suspended = false;
             self.render()?;
         }
@@ -247,6 +408,8 @@ impl Screen {
 
     pub(crate) fn user(&mut self, text: &str) -> io::Result<()> {
         self.draft.clear();
+        self.draft_cursor = 0;
+        self.preferred_column = None;
         self.suggestions = None;
         if self.full {
             while self.transcript.last() == Some(&b'\n') {
@@ -274,6 +437,8 @@ impl Screen {
     pub(crate) fn clear_session(&mut self) -> io::Result<()> {
         self.transcript.clear();
         self.draft.clear();
+        self.draft_cursor = 0;
+        self.preferred_column = None;
         self.restored_draft = None;
         self.draft_scroll = 0;
         self.scroll = 0;
@@ -281,9 +446,22 @@ impl Screen {
         self.suggestions = None;
         self.suggestions_dismissed = false;
         self.picker = None;
+        self.modal = None;
         self.auth_url = None;
         self.secret_input = false;
         self.activity = None;
+        self.timelines.clear();
+        self.current_timeline = None;
+        self.timeline_marked = false;
+        self.goal = None;
+        self.queue_steering = 0;
+        self.queue_follow_up = 0;
+        self.pending_queue.clear();
+        self.delivered_before_ack.clear();
+        self.initial_user_pending = None;
+        self.rejected_queued = None;
+        self.active_utf8.clear();
+        self.input_notice = None;
         self.session = "new chat".into();
         self.render()
     }
@@ -292,8 +470,93 @@ impl Screen {
         self.pending_input = Some(byte);
     }
 
+    pub(crate) fn take_rejected_queue(&mut self) -> Option<(String, Vec<Value>)> {
+        self.rejected_queued.take()
+    }
+
     pub(crate) fn restore_draft(&mut self, text: String, images: Vec<Value>) {
         self.restored_draft = Some((text, images));
+    }
+
+    pub(crate) fn restore_goal(&mut self, messages: &[Value]) -> io::Result<()> {
+        self.goal = None;
+        for message in messages {
+            if message["role"] == "toolResult" && message["toolName"] == "goal" {
+                self.set_goal(&message["details"]);
+            }
+        }
+        self.render()
+    }
+
+    fn set_goal(&mut self, details: &Value) {
+        let details = &details["hibiscusGoal"];
+        if details.get("error").is_some() {
+            return;
+        }
+        let (Some(completed), Some(total)) =
+            (details["completed"].as_u64(), details["total"].as_u64())
+        else {
+            return;
+        };
+        if total <= 50 && completed <= total {
+            self.goal = (total > 0).then_some((completed as usize, total as usize));
+        }
+    }
+
+    fn rendered_transcript(&self) -> String {
+        let mut text = strip_ansi(&String::from_utf8_lossy(&self.transcript));
+        for (index, timeline) in self.timelines.iter().enumerate() {
+            text = text.replace(
+                &format!("· __hibiscus_activity_{index}__"),
+                &timeline.lines(),
+            );
+        }
+        text
+    }
+
+    fn freeze_timeline(&mut self) {
+        if let Some(index) = self.current_timeline {
+            self.timelines[index].finish();
+        }
+        self.current_timeline = None;
+        self.timeline_marked = false;
+        if self.full && !self.timelines.is_empty() {
+            self.transcript = self.rendered_transcript().into_bytes();
+            self.timelines.clear();
+        }
+    }
+
+    fn update_timeline(&mut self, f: impl FnOnce(&mut Timeline)) -> io::Result<()> {
+        if !self.full {
+            return Ok(());
+        }
+        let width = self.size().0.saturating_sub(7).clamp(1, 97);
+        let before = if self.scroll > 0 {
+            markdown::format(&self.rendered_transcript(), width).len()
+        } else {
+            0
+        };
+        let index = match self.current_timeline {
+            Some(index) => index,
+            None => {
+                let index = self.timelines.len();
+                self.timelines.push(Timeline::default());
+                self.current_timeline = Some(index);
+                self.timeline_marked = false;
+                index
+            }
+        };
+        f(&mut self.timelines[index]);
+        if !self.timeline_marked && !self.timelines[index].lines().is_empty() {
+            self.transcript
+                .extend_from_slice(format!("\n· __hibiscus_activity_{index}__\n").as_bytes());
+            self.timeline_marked = true;
+        }
+        if before > 0 {
+            let after = markdown::format(&self.rendered_transcript(), width).len();
+            self.scroll = self.scroll.saturating_add(after.saturating_sub(before));
+        }
+        self.render()
     }
 
     pub(crate) fn set_disconnected(&mut self, disconnected: bool) -> io::Result<()> {
@@ -307,14 +570,18 @@ impl Screen {
         events: &Receiver<u8>,
         updates: Option<&Receiver<Option<String>>>,
     ) -> Result<PromptAction> {
-        self.draft.clear();
         if let Some((text, images)) = self.restored_draft.take() {
-            self.draft = text;
-            self.images = images;
+            if !self.draft.is_empty() || !self.images.is_empty() {
+                self.restored_draft = Some((text, images));
+            } else {
+                self.draft = text;
+                self.draft_cursor = self.draft.len();
+                self.images = images;
+            }
         }
-        self.draft_scroll = 0;
-        self.suggestions = None;
+        self.ensure_cursor_visible();
         self.suggestions_dismissed = false;
+        self.refresh_suggestions();
         self.render()?;
         self.read_prompt(events, updates)
     }
@@ -333,7 +600,17 @@ impl Screen {
         self.picker = Some(Picker::new(clean(title), items.to_vec(), current, rows));
         let result = (|| {
             self.render()?;
-            while let Ok(byte) = events.recv() {
+            loop {
+                let byte = match events.recv_timeout(Duration::from_millis(100)) {
+                    Ok(byte) => byte,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if self.painter.resized(self.size()) {
+                            self.render()?;
+                        }
+                        continue;
+                    }
+                    Err(_) => break,
+                };
                 let movement = match byte {
                     b'\r' | b'\n' => return Ok(self.picker.as_ref().map(|picker| picker.selected)),
                     3 | 4 => return Ok(None),
@@ -369,6 +646,61 @@ impl Screen {
         })();
         self.picker = None;
         self.render()?;
+        result
+    }
+
+    fn run_modal(
+        &mut self,
+        modal: Modal,
+        events: &Receiver<u8>,
+        mut cancelled: impl FnMut() -> Result<bool>,
+    ) -> Result<Option<Value>> {
+        let saved_scroll = self.draft_scroll;
+        self.modal = Some(modal);
+        let result = (|| {
+            self.render()?;
+            loop {
+                if cancelled()? || self.modal.as_ref().is_none_or(Modal::expired) {
+                    return Ok(None);
+                }
+                let (columns, rows) = self.size();
+                if columns < 20 || rows < 14 {
+                    return Ok(None);
+                }
+                let byte = match events.recv_timeout(Duration::from_millis(40)) {
+                    Ok(byte) => byte,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if self.painter.resized((columns, rows)) {
+                            self.render()?;
+                        }
+                        continue;
+                    }
+                    Err(_) => return Ok(None),
+                };
+                if self.modal.as_ref().is_some_and(Modal::expired) {
+                    return Ok(None);
+                }
+                if byte == 25 && self.auth_url.is_some() {
+                    self.copy_auth_url()?;
+                } else if byte == 27 {
+                    match escape_key(events) {
+                        Navigation::Escape => return Ok(None),
+                        Navigation::EscapeWith(next) => {
+                            self.defer_input(next);
+                            return Ok(None);
+                        }
+                        key => self.modal.as_mut().unwrap().navigate(key),
+                    }
+                } else if let Some(response) = self.modal.as_mut().unwrap().key(byte) {
+                    return Ok(Some(response));
+                }
+                self.render()?;
+            }
+        })();
+        self.modal = None;
+        self.draft_scroll = saved_scroll;
+        let cleanup = self.render();
+        cleanup?;
         result
     }
 
@@ -418,12 +750,12 @@ impl Screen {
     }
 
     fn refresh_suggestions(&mut self) {
-        self.draft_scroll = 0;
-        let options = if self.draft.contains('\n') || !self.images.is_empty() {
-            Vec::new()
-        } else {
-            commands::matches(&self.draft)
-        };
+        let options =
+            if self.activity.is_some() || self.draft.contains('\n') || !self.images.is_empty() {
+                Vec::new()
+            } else {
+                commands::matches(&self.draft)
+            };
         self.suggestions = if self.suggestions_dismissed || options.is_empty() {
             None
         } else {
@@ -436,14 +768,159 @@ impl Screen {
         };
     }
 
+    fn insert_draft(&mut self, text: &str) {
+        self.input_notice = None;
+        self.draft.insert_str(self.draft_cursor, text);
+        self.draft_cursor += text.len();
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
+    }
+
+    fn ensure_cursor_visible(&mut self) {
+        let width = self
+            .size()
+            .0
+            .saturating_sub(4)
+            .clamp(1, 100)
+            .saturating_sub(5)
+            .max(1);
+        let total = draft_lines(&self.draft, width).len();
+        let visible = total.min(5);
+        let row = draft_cursor_position(&self.draft, width, self.draft_cursor).0;
+        let end = total - self.draft_scroll.min(total - visible);
+        let start = end - visible;
+        if row < start {
+            self.draft_scroll = total - visible - row;
+        } else if row >= end {
+            self.draft_scroll = total - row - 1;
+        }
+        self.draft_scroll = self.draft_scroll.min(total - visible);
+    }
+
+    fn move_draft(&mut self, key: Navigation) -> io::Result<()> {
+        let width = self
+            .size()
+            .0
+            .saturating_sub(4)
+            .clamp(1, 100)
+            .saturating_sub(5)
+            .max(1);
+        match key {
+            Navigation::Left => {
+                if let Some(ch) = self.draft[..self.draft_cursor].chars().next_back() {
+                    self.draft_cursor -= ch.len_utf8();
+                }
+            }
+            Navigation::Right => {
+                if let Some(ch) = self.draft[self.draft_cursor..].chars().next() {
+                    self.draft_cursor += ch.len_utf8();
+                }
+            }
+            Navigation::Home => {
+                self.draft_cursor = self.draft[..self.draft_cursor]
+                    .rfind('\n')
+                    .map_or(0, |i| i + 1);
+            }
+            Navigation::End => {
+                self.draft_cursor += self.draft[self.draft_cursor..]
+                    .find('\n')
+                    .unwrap_or(self.draft.len() - self.draft_cursor);
+            }
+            Navigation::Delete => {
+                if let Some(ch) = self.draft[self.draft_cursor..].chars().next() {
+                    self.draft
+                        .drain(self.draft_cursor..self.draft_cursor + ch.len_utf8());
+                }
+            }
+            Navigation::Up | Navigation::Down => {
+                let (row, col) = draft_cursor_position(&self.draft, width, self.draft_cursor);
+                let target = if key == Navigation::Up {
+                    row.checked_sub(1)
+                } else {
+                    Some(row + 1)
+                };
+                if let Some(target) = target {
+                    let column = *self.preferred_column.get_or_insert(col);
+                    if let Some(index) = draft_index_on_row(&self.draft, width, target, column) {
+                        self.draft_cursor = index;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if !matches!(key, Navigation::Up | Navigation::Down) {
+            self.preferred_column = None;
+        }
+        if key == Navigation::Delete || self.suggestions.is_some() {
+            self.suggestions_dismissed = true;
+            self.refresh_suggestions();
+        }
+        self.ensure_cursor_visible();
+        self.render()
+    }
+
+    fn backspace_draft(&mut self) -> io::Result<()> {
+        self.active_utf8.clear();
+        if let Some(ch) = self.draft[..self.draft_cursor].chars().next_back() {
+            let start = self.draft_cursor - ch.len_utf8();
+            self.draft.drain(start..self.draft_cursor);
+            self.draft_cursor = start;
+        }
+        self.preferred_column = None;
+        self.suggestions_dismissed = false;
+        self.refresh_suggestions();
+        self.ensure_cursor_visible();
+        self.render()
+    }
+
+    fn send_active_draft(&mut self, mode: QueueMode) -> io::Result<ActiveAction> {
+        if self.clipboard.is_some() {
+            self.input_notice = Some("Reading clipboard… press Enter when ready".into());
+        } else if self.draft.trim_start().starts_with('/') {
+            self.input_notice =
+                Some("Commands are available after Pi settles; keep this draft or clear it".into());
+        } else if !self.draft.trim().is_empty() || !self.images.is_empty() {
+            let submission = DraftSubmission {
+                text: self.draft.trim().to_owned(),
+                images: std::mem::take(&mut self.images),
+                mode,
+            };
+            self.draft.clear();
+            self.draft_cursor = 0;
+            self.draft_scroll = 0;
+            self.active_utf8.clear();
+            self.input_notice = Some(
+                match mode {
+                    QueueMode::Steer => "Sending steering message…",
+                    QueueMode::FollowUp => "Queueing follow-up…",
+                }
+                .into(),
+            );
+            self.render()?;
+            return Ok(ActiveAction::Submit(submission));
+        }
+        self.render()?;
+        Ok(ActiveAction::None)
+    }
+
     fn input_navigation(&mut self, key: Navigation) -> io::Result<()> {
         if key == Navigation::PasteImage {
             return self.paste_image();
         }
         if key == Navigation::Newline {
-            self.draft.push('\n');
+            self.insert_draft("\n");
             self.refresh_suggestions();
             return self.render();
+        }
+        if matches!(
+            key,
+            Navigation::Left
+                | Navigation::Right
+                | Navigation::Home
+                | Navigation::End
+                | Navigation::Delete
+        ) {
+            return self.move_draft(key);
         }
         let (columns, height) = self.size();
         let layout = draft_lines(
@@ -461,13 +938,8 @@ impl Screen {
                 return self.render();
             }
             Navigation::MouseScroll(lines, _) => Navigation::ScrollLines(lines),
-            Navigation::Up if self.suggestions.is_none() => {
-                self.scroll_draft(1, layout.len());
-                return self.render();
-            }
-            Navigation::Down if self.suggestions.is_none() => {
-                self.scroll_draft(-1, layout.len());
-                return self.render();
+            Navigation::Up | Navigation::Down if self.suggestions.is_none() => {
+                return self.move_draft(key);
             }
             key => key,
         };
@@ -509,7 +981,18 @@ impl Screen {
         secret: bool,
         mut cancelled: impl FnMut() -> Result<bool>,
     ) -> Result<Option<String>> {
+        if self.full {
+            let modal = Modal::input(
+                "Codex authorization",
+                String::new(),
+                "Enter authorization response".into(),
+                secret,
+            );
+            let response = self.run_modal(modal, events, &mut cancelled)?;
+            return Ok(response.and_then(|response| response["value"].as_str().map(str::to_owned)));
+        }
         self.draft.clear();
+        self.draft_cursor = 0;
         self.secret_input = secret;
         self.suggestions = None;
         let result = (|| {
@@ -533,6 +1016,7 @@ impl Screen {
                     8 | 127 => {
                         bytes.clear();
                         self.draft.pop();
+                        self.draft_cursor = self.draft.len();
                         self.render()?;
                     }
                     27 => {
@@ -548,6 +1032,7 @@ impl Screen {
                         match std::str::from_utf8(&bytes) {
                             Ok(text) => {
                                 self.draft.push_str(text);
+                                self.draft_cursor = self.draft.len();
                                 bytes.clear();
                                 self.render()?;
                             }
@@ -560,6 +1045,7 @@ impl Screen {
             }
         })();
         self.draft.clear();
+        self.draft_cursor = 0;
         self.secret_input = false;
         self.render()?;
         result
@@ -570,10 +1056,13 @@ impl Screen {
         events: &Receiver<u8>,
         mut updates: Option<&Receiver<Option<String>>>,
     ) -> Result<PromptAction> {
-        let mut pending = Vec::new();
+        let mut pending = std::mem::take(&mut self.active_utf8);
         let mut queued = self.pending_input.take();
         loop {
             self.poll_clipboard()?;
+            if self.full && !self.suspended && self.painter.resized(self.size()) {
+                self.render()?;
+            }
             // A delayed network check can interrupt idle input, never a draft
             // already being typed. No update result ever blocks terminal input.
             if self.draft.is_empty()
@@ -599,7 +1088,7 @@ impl Screen {
             let byte = match queued.take() {
                 Some(byte) => byte,
                 None => {
-                    if updates.is_none() && self.clipboard.is_none() {
+                    if !self.full && updates.is_none() && self.clipboard.is_none() {
                         match events.recv() {
                             Ok(byte) => byte,
                             Err(_) => return Ok(PromptAction::Text(None)),
@@ -636,6 +1125,8 @@ impl Screen {
                     });
                     let message = completed.unwrap_or_else(|| std::mem::take(&mut self.draft));
                     self.draft.clear();
+                    self.draft_cursor = 0;
+                    self.preferred_column = None;
                     self.suggestions = None;
                     self.render()?;
                     return Ok(PromptAction::Text(Some(message)));
@@ -656,6 +1147,8 @@ impl Screen {
                 }
                 3 => {
                     self.draft.clear();
+                    self.draft_cursor = 0;
+                    self.preferred_column = None;
                     self.clear_images();
                     pending.clear();
                     self.suggestions_dismissed = false;
@@ -664,15 +1157,19 @@ impl Screen {
                 }
                 8 | 127 => {
                     pending.clear();
-                    self.draft.pop();
-                    self.suggestions_dismissed = false;
-                    self.refresh_suggestions();
-                    self.render()?;
+                    self.backspace_draft()?;
                 }
+                4 => self.input_navigation(Navigation::Delete)?,
+                1 => self.input_navigation(Navigation::Home)?,
+                5 => self.input_navigation(Navigation::End)?,
+                2 => self.input_navigation(Navigation::Left)?,
+                6 => self.input_navigation(Navigation::Right)?,
                 b'\t' => {
                     if let Some(picker) = self.suggestions.as_ref() {
                         if let Some(cmd) = commands::matches(&self.draft).get(picker.selected) {
                             self.draft = cmd.name.to_owned();
+                            self.draft_cursor = self.draft.len();
+                            self.preferred_column = None;
                             self.suggestions = None;
                             self.suggestions_dismissed = true;
                             self.render()?;
@@ -684,13 +1181,20 @@ impl Screen {
                         self.input_navigation(Navigation::Escape)?;
                         queued = Some(next);
                     }
+                    Navigation::FollowUp => {
+                        // Alt+Enter is a follow-up only during an active run.
+                        // At idle it is an ordinary Enter (and still dismisses
+                        // a slash picker before running the typed command).
+                        self.input_navigation(Navigation::Escape)?;
+                        queued = Some(b'\r');
+                    }
                     key => self.input_navigation(key)?,
                 },
                 32..=126 | 128..=255 => {
                     pending.push(byte);
                     match std::str::from_utf8(&pending) {
                         Ok(s) => {
-                            self.draft.push_str(s);
+                            self.insert_draft(s);
                             pending.clear();
                             self.suggestions_dismissed = false;
                             self.refresh_suggestions();
@@ -820,71 +1324,38 @@ impl Screen {
         }
     }
 
-    fn picker_rows(&self, width: usize, height: usize, left: &str) -> Option<(usize, Vec<String>)> {
-        let picker = self.picker.as_ref().or(self.suggestions.as_ref())?;
-        let panel_width = width;
-        let body = picker.visible(height.saturating_sub(3));
-        let title = clip(
-            &format!("✿ {}", picker.title),
-            panel_width.saturating_sub(5),
-        );
-        let top = format!(
-            "╭─ {title} {}╮",
-            "─".repeat(panel_width.saturating_sub(title.chars().count() + 5))
-        );
-        let mut rows = vec![format!("{left}{}", self.accent("1;38;2;236;74;125", &top))];
-        for line in 0..body {
-            let index = picker.first + line;
-            let selected = index == picker.selected;
-            let mark = if selected { "❯" } else { " " };
-            let suffix = if picker.current == Some(index) {
-                "  ● current"
-            } else {
-                ""
-            };
-            let reserved = panel_width.saturating_sub(6 + suffix.chars().count());
-            let label = clip(&clean(&picker.items[index]), reserved);
-            let inner = format!("{mark} {label}{suffix}");
-            let slider = if picker.items.len() <= body {
-                '│'
-            } else if line == picker.thumb(height.saturating_sub(3)) {
-                '█'
-            } else {
-                '│'
-            };
-            let plain = format!(
-                "│ {:<space$} {slider}",
-                inner,
-                space = panel_width.saturating_sub(4)
-            );
-            let styled = if selected {
-                self.accent("1;38;2;255;155;187;48;2;77;27;51", &plain)
-            } else {
-                self.accent("38;2;255;220;230", &plain)
-            };
-            rows.push(format!("{left}{styled}"));
-        }
-        let range = format!("{}/{}", picker.selected + 1, picker.items.len());
-        let instructions = if self.picker.is_some() {
-            format!("↑↓ move · Enter select · Esc cancel   {range}")
+    fn picker_rows(
+        &mut self,
+        width: usize,
+        height: usize,
+        left: &str,
+    ) -> Option<(usize, Vec<String>)> {
+        let rows = if let Some(modal) = &mut self.modal {
+            modal.rows(width, height)
         } else {
-            format!("↑↓ choose · Tab complete · Enter run · Esc dismiss   {range}")
+            let suggestions = self.picker.is_none();
+            let picker = self.picker.as_mut().or(self.suggestions.as_mut())?;
+            picker.move_by(0, height.saturating_sub(3));
+            modal::picker_panel(picker, width, height, suggestions)
         };
-        let hint = clip(&instructions, panel_width.saturating_sub(4));
-        rows.push(format!(
-            "{left}│ {:<space$}│",
-            hint,
-            space = panel_width.saturating_sub(3)
-        ));
-        rows.push(format!(
-            "{left}{}",
-            self.accent(
-                "38;2;184;57;101",
-                &format!("╰{}╯", "─".repeat(panel_width.saturating_sub(2)))
-            )
-        ));
-        let top_row = height.saturating_sub(rows.len());
-        Some((top_row, rows))
+        let top = height.saturating_sub(rows.len());
+        Some((
+            top,
+            rows.into_iter()
+                .map(|row| format!("{left}{}", self.accent(row.style, &row.text)))
+                .collect(),
+        ))
+    }
+
+    fn render_stream(&mut self) -> io::Result<()> {
+        self.paint_pending = true;
+        if self
+            .last_paint
+            .is_none_or(|last| last.elapsed() >= Duration::from_millis(33))
+        {
+            self.render()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn render(&mut self) -> io::Result<()> {
@@ -892,6 +1363,9 @@ impl Screen {
             return Ok(());
         }
         let (columns, rows) = self.size();
+        if self.painter.resized((columns, rows)) && !self.secret_input {
+            self.ensure_cursor_visible();
+        }
         let width = columns.saturating_sub(4).clamp(1, 100);
         let left = " ".repeat(columns.saturating_sub(width) / 2);
         let workspace = env::current_dir()
@@ -901,14 +1375,16 @@ impl Screen {
         let flower = self
             .activity
             .as_ref()
-            .map_or(FLOWERS[0], |activity| FLOWERS[activity.frame]);
-        let title = clip(&format!("{flower} hibiscus   /   {workspace}"), width);
+            .map_or(FLOWERS[0], |activity| FLOWERS[activity.flower_frame]);
+        let title = clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width);
         let metadata = format!("{}  ·  {}", self.model, self.session);
         let header = clip(&metadata, width);
-        let text = strip_ansi(&String::from_utf8_lossy(&self.transcript));
+        let text = self.rendered_transcript();
         let lines = markdown::format(&text, width.saturating_sub(3).max(1));
         let draft_width = width.saturating_sub(5).max(1);
-        let draft_rows = if self.secret_input {
+        let draft_rows = if self.modal.is_some() {
+            vec![clip("Respond in the dialog above", draft_width)]
+        } else if self.secret_input {
             vec![clip_tail(
                 &"•".repeat(self.draft.chars().count()),
                 draft_width,
@@ -922,14 +1398,37 @@ impl Screen {
             .min(draft_rows.len().saturating_sub(draft_height));
         let draft_end = draft_rows.len() - self.draft_scroll;
         let draft_start = draft_end - draft_height;
-        let available = rows.saturating_sub(8 + draft_height);
+        let pending_height = if self.modal.is_some() {
+            0
+        } else {
+            self.pending_queue.len().min(3) + usize::from(self.pending_queue.len() > 3)
+        };
+        let available = rows.saturating_sub(8 + draft_height + pending_height);
         let modal = self.picker_rows(width, available, &left);
         let transcript_rows = modal.as_ref().map_or(available, |(top, _)| *top);
         let viewport = transcript_viewport(lines.len(), transcript_rows, self.scroll);
         self.scroll = viewport.scroll;
         let start = viewport.start;
         let end = viewport.end;
-        let mut frame = String::from("\x1b[H\x1b[?25l");
+        // Keep the cursor visible during routine redraws. Hiding it on every
+        // animation frame causes a visible blink even with a steady style.
+        let (cursor_line, cursor_column) = if self.secret_input {
+            (draft_start, draft_rows[0].chars().count())
+        } else {
+            draft_cursor_position(&self.draft, draft_width, self.draft_cursor)
+        };
+        let modal_cursor = self
+            .modal
+            .as_ref()
+            .and_then(|dialog| dialog.cursor)
+            .zip(modal.as_ref())
+            .map(|((row, column), (top, _))| (top + row + 4, left.len() + column + 1));
+        let cursor_visible = if self.modal.is_some() {
+            modal_cursor.is_some()
+        } else {
+            self.picker.is_none() && (draft_start..draft_end).contains(&cursor_line)
+        };
+        let mut frame = String::new();
         frame.push_str(&format!(
             "{left}{}\x1b[K\r\n",
             self.accent("1;38;2;236;74;125", &title)
@@ -952,12 +1451,57 @@ impl Screen {
                 frame.push_str("\x1b[K\r\n");
             }
         }
+        for pending in self
+            .pending_queue
+            .iter()
+            .take(if self.modal.is_some() { 0 } else { 3 })
+        {
+            let mode = match pending.mode {
+                QueueMode::Steer => "Steering",
+                QueueMode::FollowUp => "Follow-up",
+            };
+            let state = if pending.sending {
+                "Sending"
+            } else {
+                "Waiting"
+            };
+            let images = if pending.images == 0 {
+                String::new()
+            } else {
+                format!(" · {} image(s)", pending.images)
+            };
+            let label = clip(
+                &format!("↳ {state} · {mode}: {}{images}", clean(&pending.text)),
+                width,
+            );
+            frame.push_str(&format!(
+                "{left}{}\x1b[K\r\n",
+                self.accent("2;38;2;255;183;206", &label)
+            ));
+        }
+        if self.modal.is_none() && self.pending_queue.len() > 3 {
+            let label = format!("↳ {} more queued", self.pending_queue.len() - 3);
+            frame.push_str(&format!("{left}{}\x1b[K\r\n", self.accent("2", &label)));
+        }
         frame.push_str("\x1b[K\r\n");
         let border = format!("╭{}╮", "─".repeat(width.saturating_sub(2)));
         let attachment = if !self.clipboard_notice.is_empty() {
             self.clipboard_notice.clone()
+        } else if let Some(notice) = &self.input_notice {
+            notice.clone()
+        } else if !self.images.is_empty() && self.activity.is_some() {
+            format!(
+                "{} image(s) attached · Enter steer · {} later",
+                self.images.len(),
+                follow_up_key()
+            )
         } else if !self.images.is_empty() {
             format!("{} image(s) attached · Ctrl+X remove", self.images.len())
+        } else if self.activity.is_some() && !self.draft.is_empty() {
+            format!(
+                "Enter steer · {} follow-up · Ctrl+Enter newline",
+                follow_up_key()
+            )
         } else {
             String::new()
         };
@@ -1003,7 +1547,9 @@ impl Screen {
                 &border.replace('╭', "╰").replace('╮', "╯")
             )
         ));
-        let hint = if self.disconnected {
+        let hint = if self.modal.is_some() {
+            "Dialog · Esc cancels · your draft is preserved".into()
+        } else if self.disconnected {
             "Pi disconnected · /reconnect · /restore · /quit".into()
         } else if self.suggestions.is_some() {
             "↑↓ choose  ·  Tab complete  ·  Enter run  ·  Esc dismiss".into()
@@ -1014,15 +1560,22 @@ impl Screen {
                 "Open Codex sign-in ↗  ·  Ctrl+Y copy link  ·  Esc cancel".into()
             }
         } else if let Some(activity) = &self.activity {
+            let queue_hint = match (self.queue_steering, self.queue_follow_up) {
+                (0, 0) => String::new(),
+                (steer, later) => format!(" · ↪{steer} ▷{later}"),
+            };
             let scrolled = if self.scroll > 0 {
                 format!("  ·  ↑ {} lines", self.scroll)
             } else {
                 String::new()
             };
-            format!(
-                "{flower} {}  ·  {}s  ·  Esc stop{scrolled}",
-                activity.phase,
-                activity.started.elapsed().as_secs()
+            working_status(
+                width,
+                flower,
+                &activity.phase,
+                activity.started.elapsed().as_secs(),
+                &format!("{queue_hint}{scrolled}"),
+                self.goal,
             )
         } else if self.scroll > 0 {
             format!(
@@ -1037,26 +1590,64 @@ impl Screen {
         };
         let hint = clip(&hint, width);
         frame.push_str(&format!(
-            "{left}{}\x1b[J",
+            "{left}{}\x1b[K",
             self.accent(self.status_style(), &hint)
         ));
-        // Place the cursor after the visible draft inside the composer.
-        let cursor_row = rows.saturating_sub(3).max(1);
-        let cursor_col = left.len() + 5 + draft_rows.last().map_or(0, |line| line.chars().count());
-        if self.picker.is_none() && self.draft_scroll == 0 {
-            frame.push_str(&format!(
-                "\x1b[{cursor_row};{}H\x1b[?25h",
-                cursor_col.min(columns)
-            ));
+        let cursor_row = if let Some((row, _)) = modal_cursor {
+            row
+        } else if cursor_visible {
+            rows.saturating_sub(3 + draft_height - 1 - (cursor_line - draft_start))
+                .max(1)
         } else {
-            frame.push_str("\x1b[?25l");
-        }
-        self.out.write_all(frame.as_bytes())?;
-        self.out.flush()
+            rows.saturating_sub(3).max(1)
+        };
+        let cursor = Cursor {
+            row: cursor_row.min(rows.max(1)),
+            column: modal_cursor
+                .map_or(
+                    left.len() + 5 + cursor_column.min(draft_width),
+                    |(_, col)| col,
+                )
+                .min(columns.max(1)),
+            visible: cursor_visible,
+        };
+        let mut rows_to_paint = frame
+            .split("\r\n")
+            .map(|line| {
+                if self.color {
+                    paint_background(&format!("\x1b[0m{line}"), true)
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>();
+        // Include the spare bottom row so removed panels cannot leave artifacts.
+        rows_to_paint.resize(rows, paint_background("\x1b[K", self.color));
+        self.painter
+            .paint(&mut self.out, rows_to_paint, (columns, rows), cursor)?;
+        self.last_paint = Some(Instant::now());
+        self.paint_pending = false;
+        Ok(())
     }
 }
 
 impl ScrollDisplay for Screen {
+    fn invalidate_screen(&mut self) {
+        self.painter.invalidate();
+        self.last_paint = None;
+    }
+    fn extension_dialog(&mut self, event: &Value, events: &Receiver<u8>) -> Result<Option<Value>> {
+        if !self.full || self.suspended {
+            return Ok(None);
+        }
+        let Some(modal) = Modal::from_rpc(event) else {
+            return Ok(Some(serde_json::json!({"cancelled":true})));
+        };
+        let response = self.run_modal(modal, events, || Ok(false))?;
+        Ok(Some(
+            response.unwrap_or_else(|| serde_json::json!({"cancelled":true})),
+        ))
+    }
     fn scroll(&mut self, navigation: Navigation) -> io::Result<()> {
         let step = self.size().1.saturating_sub(10).max(1);
         let offset = match navigation {
@@ -1076,6 +1667,7 @@ impl ScrollDisplay for Screen {
     }
 
     fn start_work(&mut self) -> io::Result<()> {
+        self.current_timeline = None;
         if !self.full {
             return Ok(());
         }
@@ -1083,8 +1675,9 @@ impl ScrollDisplay for Screen {
         self.activity = Some(Activity {
             phase: "Working…".into(),
             started: now,
-            last_frame: now,
-            frame: 0,
+            last_refresh: now,
+            last_spinner: now,
+            flower_frame: 0,
         });
         self.render()
     }
@@ -1105,23 +1698,382 @@ impl ScrollDisplay for Screen {
     }
 
     fn tick_work(&mut self) -> io::Result<()> {
+        self.poll_clipboard()?;
+        let mut changed = false;
         if let Some(activity) = self.activity.as_mut() {
             let now = Instant::now();
-            if now.duration_since(activity.last_frame) >= Duration::from_millis(180) {
-                activity.last_frame = now;
-                activity.frame = (activity.frame + 1) % FLOWERS.len();
-                self.render()?;
+            if now.duration_since(activity.last_refresh) >= Duration::from_secs(1) {
+                activity.last_refresh = now;
+                changed = true;
             }
+            if now.duration_since(activity.last_spinner) >= Duration::from_millis(320) {
+                activity.last_spinner = now;
+                activity.flower_frame = (activity.flower_frame + 1) % FLOWERS.len();
+                changed = true;
+                if let Some(index) = self.current_timeline {
+                    changed |= self.timelines[index].advance_explore();
+                }
+            }
+        }
+        if changed
+            || self.painter.resized(self.size())
+            || (self.paint_pending
+                && self
+                    .last_paint
+                    .is_none_or(|last| last.elapsed() >= Duration::from_millis(33)))
+        {
+            self.render()?;
         }
         Ok(())
     }
 
     fn stop_work(&mut self) -> io::Result<()> {
+        self.freeze_timeline();
+        self.queue_steering = 0;
+        self.queue_follow_up = 0;
+        self.pending_queue.clear();
+        self.delivered_before_ack.clear();
+        self.initial_user_pending = None;
+        if self.input_notice.as_deref().is_some_and(|notice| {
+            notice.contains("accepted by Pi")
+                || notice.starts_with("Sending")
+                || notice.starts_with("Queueing")
+        }) {
+            self.input_notice = None;
+        }
+        if self.full && self.transcript.len() > 256 * 1024 {
+            let excess = self.transcript.len() - 256 * 1024;
+            let cut = self.transcript[excess..]
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(excess, |index| excess + index + 1);
+            self.transcript.drain(..cut);
+            self.scroll = 0;
+        }
         if self.activity.take().is_some() {
             self.render()?;
         }
         Ok(())
     }
+
+    fn thinking_start(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    fn thinking_end(&mut self) -> io::Result<bool> {
+        Ok(self.full)
+    }
+    fn tool_start(&mut self, id: &str, name: &str, path: &str) -> io::Result<bool> {
+        if !self.full {
+            return Ok(false);
+        }
+        self.update_timeline(|timeline| timeline.tool_start(id, name, path))?;
+        Ok(true)
+    }
+    fn tool_end(
+        &mut self,
+        id: &str,
+        name: &str,
+        path: &str,
+        failed: bool,
+        diff: Option<&str>,
+    ) -> io::Result<bool> {
+        if !self.full {
+            return Ok(false);
+        }
+        self.update_timeline(|timeline| timeline.tool_end(id, name, path, failed, diff))?;
+        Ok(true)
+    }
+    fn split_timeline(&mut self) -> io::Result<()> {
+        self.freeze_timeline();
+        Ok(())
+    }
+    fn live_input(&self) -> bool {
+        self.full && self.activity.is_some()
+    }
+    fn pending_key(&mut self) -> Option<u8> {
+        self.pending_input.take()
+    }
+    fn active_key(&mut self, byte: u8, events: &Receiver<u8>) -> Result<ActiveAction> {
+        self.poll_clipboard()?;
+        match byte {
+            b'\r' => return Ok(self.send_active_draft(QueueMode::Steer)?),
+            17 => return Ok(self.send_active_draft(QueueMode::FollowUp)?), // Ctrl+Q (WSL)
+            b'\n' => self.input_navigation(Navigation::Newline)?,
+            22 => self.paste_image()?,
+            24 => {
+                self.clear_images();
+                self.render()?;
+            }
+            3 => {
+                self.draft.clear();
+                self.draft_cursor = 0;
+                self.preferred_column = None;
+                self.clear_images();
+                self.active_utf8.clear();
+                self.render()?;
+            }
+            8 | 127 => self.backspace_draft()?,
+            4 => self.input_navigation(Navigation::Delete)?,
+            1 => self.input_navigation(Navigation::Home)?,
+            5 => self.input_navigation(Navigation::End)?,
+            2 => self.input_navigation(Navigation::Left)?,
+            6 => self.input_navigation(Navigation::Right)?,
+            27 => match escape_key(events) {
+                Navigation::Escape => return Ok(ActiveAction::Stop),
+                Navigation::EscapeWith(next) => {
+                    self.pending_input = Some(next);
+                    return Ok(ActiveAction::Stop);
+                }
+                Navigation::FollowUp => return Ok(self.send_active_draft(QueueMode::FollowUp)?),
+                nav => self.input_navigation(nav)?,
+            },
+            32..=126 | 128..=255 => {
+                self.active_utf8.push(byte);
+                match std::str::from_utf8(&self.active_utf8) {
+                    Ok(value) => {
+                        let text = value.to_owned();
+                        self.active_utf8.clear();
+                        self.insert_draft(&text);
+                        self.render()?;
+                    }
+                    Err(error) if error.error_len().is_some() => self.active_utf8.clear(),
+                    Err(_) => {}
+                }
+            }
+            _ => {}
+        }
+        Ok(ActiveAction::None)
+    }
+    fn hold_queue(&mut self, submission: DraftSubmission) -> io::Result<()> {
+        if self.draft.is_empty() && self.images.is_empty() {
+            self.draft = submission.text;
+            self.draft_cursor = self.draft.len();
+            self.images = submission.images;
+            self.ensure_cursor_visible();
+        }
+        self.input_notice =
+            Some("Pi is starting; press Enter again after it accepts the prompt".into());
+        self.render()
+    }
+    fn expect_initial_user(&mut self, message: &str) {
+        if self.full {
+            self.initial_user_pending = Some(message.to_owned());
+        }
+    }
+    fn queued(&mut self, submission: &DraftSubmission) -> io::Result<()> {
+        if let Some(index) = self
+            .delivered_before_ack
+            .iter()
+            .position(|text| text == &submission.text)
+        {
+            self.delivered_before_ack.remove(index);
+        } else if let Some(pending) = self.pending_queue.iter_mut().find(|item| {
+            item.text == submission.text && item.mode == submission.mode && !item.accepted
+        }) {
+            pending.accepted = true;
+            pending.images = submission.images.len();
+        } else {
+            self.pending_queue.push(PendingQueue {
+                text: submission.text.clone(),
+                mode: submission.mode,
+                images: submission.images.len(),
+                accepted: true,
+                sending: false,
+            });
+        }
+        let kind = match submission.mode {
+            QueueMode::Steer => "steering",
+            QueueMode::FollowUp => "follow-up",
+        };
+        self.input_notice = Some(format!("{kind} accepted by Pi · waiting for delivery"));
+        self.render()
+    }
+    fn delivered_user(&mut self, message: &Value) -> io::Result<bool> {
+        if !self.full {
+            return Ok(false);
+        }
+        let (text, images) = user_content(&message["content"]);
+        if self.initial_user_pending.as_deref() == Some(text.as_str()) {
+            self.initial_user_pending = None;
+            return Ok(false);
+        }
+        let index = self
+            .pending_queue
+            .iter()
+            .position(|item| item.text == text && item.sending)
+            .or_else(|| self.pending_queue.iter().position(|item| item.text == text));
+        let unacknowledged = index
+            .map(|index| !self.pending_queue.remove(index).accepted)
+            .unwrap_or(true);
+        if unacknowledged && !text.is_empty() {
+            self.delivered_before_ack.push(text.clone());
+            if self.delivered_before_ack.len() > 16 {
+                self.delivered_before_ack.remove(0);
+            }
+        }
+        let image_note = if images > 0 {
+            format!(" [{} image(s) attached]", images)
+        } else {
+            String::new()
+        };
+        let shown = format!("\nyou › {}{image_note}\n", text.trim_start_matches('\n'));
+        if self.suspended {
+            self.transcript.extend_from_slice(shown.as_bytes());
+        } else {
+            self.write_all(shown.as_bytes())?;
+        }
+        self.render()?;
+        Ok(true)
+    }
+    fn rejected_queue(&mut self, submission: DraftSubmission, error: &str) -> io::Result<()> {
+        if let Some(index) = self.pending_queue.iter().position(|item| {
+            item.text == submission.text && item.mode == submission.mode && !item.accepted
+        }) {
+            self.pending_queue.remove(index);
+        }
+        if self.draft.is_empty() && self.images.is_empty() {
+            self.draft = submission.text.clone();
+            self.draft_cursor = self.draft.len();
+            self.images = submission.images.clone();
+            self.ensure_cursor_visible();
+        }
+        self.rejected_queued = Some((submission.text, submission.images));
+        self.input_notice = Some(format!(
+            "Pi rejected queued message: {} · /restore after run",
+            crate::pi::error::safe_message(error)
+        ));
+        self.render()
+    }
+    fn queue_update(&mut self, update: &Value) -> io::Result<()> {
+        self.queue_steering = update["steering"].as_array().map_or(0, Vec::len);
+        self.queue_follow_up = update["followUp"].as_array().map_or(0, Vec::len);
+        let mut old = std::mem::take(&mut self.pending_queue);
+        let mut current = Vec::new();
+        for (mode, field) in [
+            (QueueMode::Steer, "steering"),
+            (QueueMode::FollowUp, "followUp"),
+        ] {
+            if let Some(messages) = update[field].as_array() {
+                let mut kept = Vec::new();
+                // Keep the newest matching entries when identical queued texts
+                // shrink: Pi drains the oldest first, and events have no IDs.
+                for text in messages.iter().filter_map(Value::as_str).rev() {
+                    let mut item = if let Some(index) = old
+                        .iter()
+                        .rposition(|item| item.mode == mode && item.text == text && !item.sending)
+                    {
+                        old.remove(index)
+                    } else {
+                        PendingQueue {
+                            text: text.to_owned(),
+                            mode,
+                            images: 0,
+                            accepted: false,
+                            sending: false,
+                        }
+                    };
+                    item.sending = false;
+                    kept.push(item);
+                }
+                kept.reverse();
+                current.extend(kept);
+            }
+        }
+        for mut item in old {
+            item.sending = true; // removed from Pi's queue, awaiting message_start
+            current.push(item);
+        }
+        self.pending_queue = current;
+        self.render()
+    }
+    fn clear_queue_display(&mut self) -> io::Result<()> {
+        self.queue_steering = 0;
+        self.queue_follow_up = 0;
+        self.pending_queue.clear();
+        self.delivered_before_ack.clear();
+        self.render()
+    }
+    fn goal(&mut self, details: &Value) -> io::Result<()> {
+        if self.full {
+            self.set_goal(details);
+            self.render()?;
+        }
+        Ok(())
+    }
+}
+
+fn user_content(content: &Value) -> (String, usize) {
+    match content {
+        Value::String(text) => (text.clone(), 0),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter(|block| block["type"] == "text")
+                .filter_map(|block| block["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let images = blocks
+                .iter()
+                .filter(|block| block["type"] == "image")
+                .count();
+            (text, images)
+        }
+        _ => (String::new(), 0),
+    }
+}
+
+fn follow_up_key() -> &'static str {
+    if super::clipboard::paste_key() == "Alt+V" {
+        "Ctrl+Q"
+    } else {
+        "Alt+Enter"
+    }
+}
+
+fn working_status(
+    width: usize,
+    flower: &str,
+    phase: &str,
+    seconds: u64,
+    scrolled: &str,
+    goal: Option<(usize, usize)>,
+) -> String {
+    let left = format!("{flower} {phase} · {seconds}s · Esc stop{scrolled}");
+    let Some((completed, total)) = goal.filter(|(_, total)| *total > 0) else {
+        return clip(&left, width);
+    };
+    let right = if width >= 60 {
+        goal_line(width, completed, total)
+    } else {
+        format!("Goal {completed}/{total} · {}%", completed * 100 / total)
+    };
+    let space = width.saturating_sub(right.chars().count() + 1);
+    if space < 5 {
+        return clip(&left, width);
+    }
+    let left = clip(&left, space);
+    format!(
+        "{left}{}{right}",
+        " ".repeat(width.saturating_sub(left.chars().count() + right.chars().count()))
+    )
+}
+
+fn goal_line(width: usize, completed: usize, total: usize) -> String {
+    let percent = completed * 100 / total;
+    let suffix = format!("  {completed}/{total} · {percent}%");
+    let length = width
+        .saturating_sub("Goal  ".len() + suffix.chars().count())
+        .clamp(1, 20);
+    let filled = completed * length / total;
+    clip(
+        &format!(
+            "Goal  {}{}{}",
+            "█".repeat(filled),
+            "░".repeat(length - filled),
+            suffix
+        ),
+        width,
+    )
 }
 
 impl Write for Screen {
@@ -1135,11 +2087,7 @@ impl Write for Screen {
                     .clamp(1, 100)
                     .saturating_sub(3)
                     .max(1);
-                markdown::format(
-                    &strip_ansi(&String::from_utf8_lossy(&self.transcript)),
-                    width,
-                )
-                .len()
+                markdown::format(&self.rendered_transcript(), width).len()
             } else {
                 0
             };
@@ -1152,11 +2100,7 @@ impl Write for Screen {
                     .clamp(1, 100)
                     .saturating_sub(3)
                     .max(1);
-                let new_lines = markdown::format(
-                    &strip_ansi(&String::from_utf8_lossy(&self.transcript)),
-                    width,
-                )
-                .len();
+                let new_lines = markdown::format(&self.rendered_transcript(), width).len();
                 self.scroll = self
                     .scroll
                     .saturating_add(new_lines.saturating_sub(old_lines));
@@ -1181,7 +2125,11 @@ impl Write for Screen {
     }
     fn flush(&mut self) -> io::Result<()> {
         if self.full && !self.suspended {
-            self.render()
+            if self.activity.is_some() {
+                self.render_stream()
+            } else {
+                self.render()
+            }
         } else {
             self.out.flush()
         }
@@ -1283,6 +2231,52 @@ fn strip_ansi(text: &str) -> String {
 
 /// Visual input rows, preserving explicit newlines and the insertion row at
 /// an exact wrap boundary. Draft bytes sent to Pi are never reflowed.
+fn draft_cursor_position(text: &str, width: usize, cursor: usize) -> (usize, usize) {
+    let (mut row, mut col) = (0, 0);
+    for (index, ch) in text.char_indices() {
+        if index >= cursor {
+            break;
+        }
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col == width.max(1) {
+                row += 1;
+                col = 0;
+            }
+        }
+    }
+    (row, col)
+}
+
+fn draft_index_on_row(text: &str, width: usize, row: usize, column: usize) -> Option<usize> {
+    let (mut current, mut col, mut best) = (0, 0, None);
+    for (index, ch) in text.char_indices() {
+        if current == row && col <= column {
+            best = Some(index);
+        }
+        if current > row {
+            return best;
+        }
+        if ch == '\n' {
+            current += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col == width.max(1) {
+                current += 1;
+                col = 0;
+            }
+        }
+    }
+    if current == row && col <= column {
+        best = Some(text.len());
+    }
+    best
+}
+
 fn draft_lines(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut rows = vec![String::new()];
@@ -1361,6 +2355,22 @@ mod tests {
     }
 
     #[test]
+    fn follow_up_shortcuts_are_distinct_from_ctrl_enter_newlines() {
+        for sequence in [b"\r".as_slice(), b"[13;3u", b"[27;3;13~"] {
+            let (send, rx) = std::sync::mpsc::channel();
+            for byte in sequence {
+                send.send(*byte).unwrap();
+            }
+            assert_eq!(escape_key(&rx), Navigation::FollowUp);
+        }
+        let (send, rx) = std::sync::mpsc::channel();
+        for byte in b"[13;5u" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(escape_key(&rx), Navigation::Newline);
+    }
+
+    #[test]
     fn image_paste_recognizes_alt_and_ctrl_terminal_encodings() {
         for sequence in [
             b"v".as_slice(),
@@ -1405,6 +2415,189 @@ mod tests {
     }
 
     #[test]
+    fn pi_queue_updates_wait_for_user_delivery_with_duplicate_text_and_late_acks() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.full = true;
+        screen.suspended = true;
+        screen.user("initial").unwrap();
+        screen.expect_initial_user("initial");
+        assert!(!screen
+            .delivered_user(&serde_json::json!({"content":"initial"}))
+            .unwrap());
+        screen
+            .queue_update(&serde_json::json!({"steering":["same","same"],"followUp":["later"]}))
+            .unwrap();
+        assert_eq!(screen.pending_queue.len(), 3);
+        assert!(screen.pending_queue.iter().all(|item| !item.sending));
+        let first = DraftSubmission {
+            text: "same".into(),
+            images: vec![serde_json::json!({"type":"image"})],
+            mode: QueueMode::Steer,
+        };
+        screen.queued(&first).unwrap();
+        assert_eq!(screen.pending_queue[0].images, 1);
+        assert_eq!(
+            String::from_utf8_lossy(&screen.transcript)
+                .matches("same")
+                .count(),
+            0
+        );
+        screen
+            .queue_update(&serde_json::json!({"steering":["same"],"followUp":["later"]}))
+            .unwrap();
+        assert_eq!(
+            screen
+                .pending_queue
+                .iter()
+                .filter(|item| item.text == "same" && item.sending)
+                .count(),
+            1
+        );
+        screen.delivered_user(&serde_json::json!({"content":[{"type":"text","text":"same"},{"type":"image","data":"private-base64"}]})).unwrap();
+        assert_eq!(
+            screen
+                .pending_queue
+                .iter()
+                .filter(|item| item.text == "same")
+                .count(),
+            1
+        );
+        assert!(!String::from_utf8_lossy(&screen.transcript).contains("private-base64"));
+        screen
+            .queued(&DraftSubmission {
+                text: "same".into(),
+                images: vec![],
+                mode: QueueMode::Steer,
+            })
+            .unwrap();
+        screen
+            .queue_update(&serde_json::json!({"steering":[],"followUp":["later"]}))
+            .unwrap();
+        screen
+            .delivered_user(&serde_json::json!({"content":"same"}))
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&screen.transcript)
+                .matches("you › same")
+                .count(),
+            2
+        );
+        screen
+            .queue_update(&serde_json::json!({"steering":[],"followUp":[]}))
+            .unwrap();
+        screen
+            .delivered_user(&serde_json::json!({"content":"later"}))
+            .unwrap();
+        screen
+            .queued(&DraftSubmission {
+                text: "later".into(),
+                images: vec![],
+                mode: QueueMode::FollowUp,
+            })
+            .unwrap();
+        assert!(
+            screen.pending_queue.is_empty(),
+            "late acknowledgement must not recreate an already delivered message"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&screen.transcript)
+                .matches("you › initial")
+                .count(),
+            1
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&screen.transcript)
+                .matches("you › later")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn live_composer_keeps_editing_and_stages_only_explicit_queue_submissions() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.full = true;
+        screen.suspended = true;
+        screen.start_work().unwrap();
+        let (_send, events) = std::sync::mpsc::channel();
+        for byte in b"hello" {
+            assert!(matches!(
+                screen.active_key(*byte, &events).unwrap(),
+                ActiveAction::None
+            ));
+        }
+        screen.input_navigation(Navigation::Left).unwrap();
+        screen.active_key(b'!', &events).unwrap();
+        screen
+            .images
+            .push(serde_json::json!({"type":"image","mimeType":"image/png","data":"test"}));
+        let ActiveAction::Submit(submission) = screen.active_key(17, &events).unwrap() else {
+            panic!("Ctrl+Q should queue a follow-up");
+        };
+        assert_eq!(submission.text, "hell!o");
+        assert_eq!(submission.mode, QueueMode::FollowUp);
+        assert_eq!(submission.images.len(), 1);
+        assert!(screen.draft.is_empty() && screen.images.is_empty());
+        screen.active_key(b'k', &events).unwrap();
+        screen.rejected_queue(submission, "queue denied").unwrap();
+        assert_eq!(screen.draft, "k", "a newer draft must not be overwritten");
+        assert_eq!(screen.take_rejected_queue().unwrap().0, "hell!o");
+        screen.active_key(3, &events).unwrap();
+        for byte in b"/new" {
+            screen.active_key(*byte, &events).unwrap();
+        }
+        assert!(matches!(
+            screen.active_key(b'\r', &events).unwrap(),
+            ActiveAction::None
+        ));
+        assert_eq!(
+            screen.draft, "/new",
+            "local commands cannot be sent as steering"
+        );
+    }
+
+    #[test]
+    fn composer_edits_mid_string_with_arrows_and_utf8_boundaries() {
+        fn type_keys(bytes: &[u8]) -> String {
+            let (send, recv) = std::sync::mpsc::channel();
+            for byte in bytes {
+                send.send(*byte).unwrap();
+            }
+            Screen::new(false).unwrap().prompt(&recv).unwrap().unwrap()
+        }
+        assert_eq!(type_keys(b"abCD\x1b[D\x1b[D-\x1b[C\x1b[3~\r"), "ab-C");
+        assert_eq!(type_keys("aé文\x1b[D\x7fß\r".as_bytes()), "aß文");
+        assert_eq!(type_keys(b"hello\x01Hi \x05!\r"), "Hi hello!");
+        assert_eq!(
+            type_keys(b"one\ntwo\x1b[Hstart \x1b[F end\r"),
+            "one\nstart two end"
+        );
+        assert_eq!(type_keys(b"abc\x1b[D\x04\r"), "ab");
+    }
+
+    #[test]
+    fn cursor_follows_wrapping_and_multiline_navigation_without_animation() {
+        assert_eq!(draft_cursor_position("abcdef", 3, 3), (1, 0));
+        assert_eq!(draft_cursor_position("abc\ndef", 3, 4), (2, 0));
+        assert_eq!(draft_index_on_row("abcdef", 3, 1, 2), Some(5));
+        let mut screen = Screen::new(false).unwrap();
+        screen.draft = "one\ntwo\nthree\nfour\nfive\nsix\nseven".into();
+        screen.draft_cursor = screen.draft.len();
+        for _ in 0..5 {
+            screen.input_navigation(Navigation::Up).unwrap();
+        }
+        assert_eq!(
+            draft_cursor_position(&screen.draft, 75, screen.draft_cursor).0,
+            1
+        );
+        assert!(screen.draft_scroll > 0);
+        screen.input_navigation(Navigation::Right).unwrap();
+        assert_eq!(screen.preferred_column, None);
+        screen.input_navigation(Navigation::End).unwrap();
+        assert!(screen.draft.is_char_boundary(screen.draft_cursor));
+    }
+
+    #[test]
     fn attachment_cancellation_limits_and_command_guard_preserve_drafts() {
         let mut screen = Screen::new(false).unwrap();
         let image = serde_json::json!({"type":"image","mimeType":"image/png","data":"test"});
@@ -1439,8 +2632,13 @@ mod tests {
         assert_eq!(draft_lines("abcdef", 3), ["abc", "def", ""]);
         let mut screen = Screen::new(false).unwrap();
         screen.draft = "1\n2\n3\n4\n5\n6\n7".into();
+        screen.draft_cursor = screen.draft.len();
         screen.input_navigation(Navigation::Up).unwrap();
-        assert_eq!(screen.draft_scroll, 1);
+        assert_eq!(screen.draft_scroll, 0);
+        assert_eq!(
+            draft_cursor_position(&screen.draft, 75, screen.draft_cursor).0,
+            5
+        );
         screen
             .input_navigation(Navigation::MouseScroll(3, 19))
             .unwrap();
@@ -1451,7 +2649,7 @@ mod tests {
             .unwrap();
         assert_eq!(screen.scroll, 3);
         screen.input_navigation(Navigation::Down).unwrap();
-        assert_eq!(screen.draft_scroll, 1);
+        assert_eq!(screen.draft_scroll, 0);
         screen.input_navigation(Navigation::Newline).unwrap();
         assert_eq!(screen.draft_scroll, 0);
         assert!(screen.draft.ends_with('\n'));
@@ -1515,15 +2713,31 @@ mod tests {
     }
 
     #[test]
-    fn flower_heartbeat_advances_without_provider_output_and_clears_on_stop() {
+    fn working_flower_animates_while_explore_and_elapsed_status_refresh() {
         let mut screen = Screen::new(false).unwrap();
         screen.full = true;
         screen.suspended = true; // test the state machine without writing ANSI to stdout
         screen.start_work().unwrap();
         assert_eq!(screen.activity.as_ref().unwrap().phase, "Working…");
-        screen.activity.as_mut().unwrap().last_frame -= Duration::from_millis(200);
+        screen.tool_start("r", "read", "src/main.rs").unwrap();
+        screen
+            .tool_end("r", "read", "src/main.rs", false, None)
+            .unwrap();
+        assert!(screen.rendered_transcript().contains("◐ Exploring"));
+        screen.activity.as_mut().unwrap().last_spinner -= Duration::from_millis(400);
         screen.tick_work().unwrap();
-        assert_eq!(screen.activity.as_ref().unwrap().frame, 1);
+        assert!(screen.rendered_transcript().contains("◓ Exploring"));
+        assert_eq!(screen.activity.as_ref().unwrap().flower_frame, 1);
+        screen.activity.as_mut().unwrap().last_refresh -= Duration::from_secs(2);
+        screen.tick_work().unwrap();
+        assert!(screen.activity.as_ref().unwrap().last_refresh.elapsed() < Duration::from_secs(1));
+        screen.tool_start("e", "edit", "src/main.rs").unwrap();
+        let settled = screen.rendered_transcript();
+        assert!(settled.contains("✓ Explored"));
+        screen.activity.as_mut().unwrap().last_spinner -= Duration::from_millis(400);
+        screen.tick_work().unwrap();
+        assert_eq!(screen.rendered_transcript(), settled);
+        assert_eq!(screen.activity.as_ref().unwrap().flower_frame, 2);
         screen.set_work("Running read…").unwrap();
         assert_eq!(screen.activity.as_ref().unwrap().phase, "Running read…");
         screen.stop_work().unwrap();
@@ -1685,6 +2899,61 @@ mod tests {
             .all(|line| line.starts_with("  ") && line.chars().count() <= 38));
         assert!(rows.iter().any(|line| line.contains("● current")));
         assert!(rows.iter().any(|line| line.contains('█')));
+    }
+
+    #[test]
+    fn working_footer_puts_status_left_and_goal_right_only_while_active() {
+        let line = working_status(76, "✿", "Thinking…", 49, "", Some((2, 4)));
+        assert!(line.starts_with("✿ Thinking… · 49s · Esc stop"));
+        assert!(
+            line.ends_with("Goal  ██████████░░░░░░░░░░  2/4 · 50%"),
+            "{line}"
+        );
+        assert_eq!(line.chars().count(), 76);
+        let narrow = working_status(40, "✿", "Reading…", 7, "", Some((2, 4)));
+        assert!(narrow.contains("Goal 2/4 · 50%"));
+        assert!(narrow.chars().count() <= 40);
+        assert!(!working_status(76, "✿", "Working…", 3, "", None).contains("Goal"));
+    }
+
+    #[test]
+    fn goal_row_is_one_line_and_absent_without_an_explicit_checklist() {
+        assert_eq!(
+            goal_line(40, 12, 20),
+            "Goal  ████████████░░░░░░░░  12/20 · 60%"
+        );
+        assert_eq!(
+            goal_line(40, 20, 20),
+            "Goal  ████████████████████  20/20 · 100%"
+        );
+        assert!(goal_line(18, 3, 20).chars().count() <= 18);
+        let mut screen = Screen::new(false).unwrap();
+        screen.set_goal(&serde_json::json!({"hibiscusGoal":{"completed":3,"total":20}}));
+        assert_eq!(screen.goal, Some((3, 20)));
+        screen.set_goal(
+            &serde_json::json!({"hibiscusGoal":{"completed":20,"total":20,"error":"invalid"}}),
+        );
+        assert_eq!(screen.goal, Some((3, 20)));
+        screen.clear_session().unwrap();
+        assert_eq!(screen.goal, None);
+        screen.restore_goal(&[
+            serde_json::json!({"role":"toolResult","toolName":"goal","details":{"hibiscusGoal":{"completed":12,"total":20}}}),
+            serde_json::json!({"role":"toolResult","toolName":"read","details":{"hibiscusGoal":{"completed":20,"total":20}}}),
+        ]).unwrap();
+        assert_eq!(screen.goal, Some((12, 20)));
+        screen.restore_goal(&[]).unwrap();
+        assert_eq!(screen.goal, None);
+    }
+
+    #[test]
+    fn background_covers_erased_space_and_survives_style_resets_only_with_color() {
+        let original = "\x1b[Hleft\x1b[1;38;2;236;74;125m✿\x1b[0m\x1b[K\r\n\x1b[K\r\n\x1b[48;2;57;30;46muser\x1b[0m\x1b[K\r\n\x1b[J";
+        let painted = paint_background(original, true);
+        assert!(painted.starts_with(BASE_BACKGROUND));
+        assert!(painted.contains(&format!("✿\x1b[0m{BASE_BACKGROUND}\x1b[K")));
+        assert!(painted.contains(&format!("user\x1b[0m{BASE_BACKGROUND}\x1b[K")));
+        assert!(painted.ends_with("\x1b[J"));
+        assert_eq!(paint_background(original, false), original);
     }
 
     #[test]

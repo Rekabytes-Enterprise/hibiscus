@@ -130,26 +130,17 @@ done
     assert!(transcript.contains("✿ hibiscus"), "{transcript}");
     assert!(transcript.contains("demo/small  ·  test"), "{transcript}");
     assert!(transcript.contains("│  done with code"), "{transcript}");
-    assert!(transcript.contains("❀ hibiscus"), "{transcript}");
-    assert!(transcript.contains("reasoning · <1s"), "{transcript}");
-    assert!(transcript.contains("↳ read · README.md"), "{transcript}");
+    assert!(!transcript.contains("❀ hibiscus"), "{transcript}");
+    assert!(transcript.contains("Thinking…"), "{transcript}");
     assert!(
-        transcript.contains("✓ done · read · README.md"),
+        transcript.contains("✓ Explored · latest: README.md"),
         "{transcript}"
     );
-    assert!(transcript.contains("↳ write · notes.md"), "{transcript}");
-    assert!(
-        transcript.contains("✓ done · write · notes.md"),
-        "{transcript}"
-    );
-    assert!(
-        transcript.contains("✗ failed · edit · broken.md"),
-        "{transcript}"
-    );
-    assert!(
-        transcript.contains("✓ done · edit · updated.md"),
-        "{transcript}"
-    );
+    assert!(transcript.contains("✓ Read · 1 file"), "{transcript}");
+    assert!(!transcript.contains("thinking · <1s"), "{transcript}");
+    assert!(transcript.contains("✓ write · notes.md"), "{transcript}");
+    assert!(transcript.contains("✗ edit · broken.md"), "{transcript}");
+    assert!(transcript.contains("✓ edit · updated.md"), "{transcript}");
     assert!(transcript.contains("diff · updated.md"), "{transcript}");
     assert!(transcript.contains("-12 old line"), "{transcript}");
     assert!(transcript.contains("+12 new line"), "{transcript}");

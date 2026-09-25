@@ -75,7 +75,7 @@ done
     std::thread::sleep(Duration::from_millis(250));
     write_bytes(master, b"hello\r");
     std::thread::sleep(Duration::from_millis(250));
-    write_bytes(master, b"yes\r");
+    write_bytes(master, b"\x1b[B\r"); // choose Confirm in the docked modal
     std::thread::sleep(Duration::from_millis(250));
     write_bytes(master, b"/quit\r");
     let status = child.wait().unwrap();

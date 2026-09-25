@@ -2,6 +2,27 @@
 
 All notable changes to Hibiscus are documented here.
 
+## [0.1.7] - 2026-09-25
+
+### Added
+
+- Editable full-screen input during Pi runs: Enter requests steering, and Ctrl+Q (WSL) or Alt+Enter queues a follow-up, including image attachments.
+- A pending-message panel that distinguishes queue acceptance from delivery; user rows are inserted on Pi's user-message event.
+- An explicit `goal` checklist tool with model-reported completion counts and a compact progress indicator beside the live status.
+- Shared docked modal components for approvals, selections, confirmations, text input, and supported auth prompts.
+
+### Changed
+
+- Composer editing supports arrow navigation, Home/End, and insertion/deletion at the cursor across multiline drafts.
+- The terminal UI uses an aubergine background, a latest-file exploration indicator, checked Read/Bash counts, and per-edit diff previews.
+- Full-screen rendering caches rows and batches streamed text updates, with synchronized output where supported and a steady-cursor request. `HIBISCUS_NO_SYNC_UPDATE=1` disables synchronized markers.
+- Project state and memory records now separate implementation, automated evidence, user reports, and unresolved risks instead of accumulating historical test claims.
+
+### Verification limits
+
+- Automated checks use unit tests, mocked Pi/SDK subprocesses, and PTYs. Real terminal flicker, provider queue ordering, auth flows, and macOS behavior still require targeted retesting.
+- Goal percentages reflect checklist updates supplied by the model, not independently verified work. The approval gate remains a best-effort guard, not a sandbox.
+
 ## [0.1.6] - 2026-09-25
 
 ### Added
@@ -79,7 +100,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.7
 [0.1.6]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.6
 [0.1.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.5
 [0.1.4]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.4

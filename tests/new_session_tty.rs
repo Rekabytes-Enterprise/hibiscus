@@ -69,8 +69,9 @@ done
         tty.send(b"\x03/quit\r");
         let shown = tty.finish();
         if outcome == "success" {
-            let blank = shown
-                .split("\x1b[H\x1b[?25l")
+            let frames = support::screen::snapshots(&shown);
+            let blank = frames
+                .iter()
                 .find(|frame| frame.contains("NEW_SESSION"))
                 .unwrap();
             for old in [
@@ -90,10 +91,8 @@ done
             } else {
                 "Could not create session"
             };
-            let preserved = shown
-                .split("\x1b[H\x1b[?25l")
-                .find(|frame| frame.contains(error))
-                .unwrap();
+            let frames = support::screen::snapshots(&shown);
+            let preserved = frames.iter().find(|frame| frame.contains(error)).unwrap();
             assert!(preserved.contains("OLD_REPLY"));
             assert!(preserved.contains("OLD_SESSION"));
             assert!(!shown.contains("NEW_SESSION"));
