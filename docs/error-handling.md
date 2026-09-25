@@ -18,6 +18,7 @@ This mapping follows Pi 0.87.1's RPC records. Providers and extensions can intro
 | `summarization_retry_scheduled/attempt_start/finished` | Show retry progress. `finished` alone is not proof of success. |
 | `tool_execution_end.isError` | Show the existing failed-tool status; do not fail the whole agent run. Pi can recover or choose another tool. |
 | `extension_error` | Show a bounded warning without terminating the run. |
+| Pi stderr diagnostics | Full screen: bounded/sanitized recent summary below composer/status; never parse as RPC or write over the editor. Plain/line mode: preserve ordinary stderr output. Provider configuration is unchanged. |
 | Extension UI error notification | Show the notification, not a fatal application exception. |
 | Cancelled session command | Keep the current chat; do not claim the session was changed. |
 | RPC EOF, broken pipe, child exit | Enter a disconnected state; the last operation may have partially executed. |
@@ -28,6 +29,7 @@ This mapping follows Pi 0.87.1's RPC records. Providers and extensions can intro
 
 ## Rust boundary
 
+- `src/pi/diagnostics.rs`: continuously drain full-screen Pi stderr into a bounded, deduplicated, sanitized UI summary; line/piped mode preserves stderr passthrough.
 - `src/pi/error.rs`: `ChatError`, `ErrorSource`, `ErrorCategory`, `RecoveryAction`, and bounded/redacted error presentation.
 - `src/pi/run.rs`: `RunState` and `RunOutcome` track the **final** run result. A failed attempt is not a sticky failure when Pi later succeeds.
 - `src/pi/rpc.rs`: preserve response IDs, strict JSONL framing, stderr separation, cancellation acknowledgements, and settlement semantics. Transport/protocol failures are typed separately from provider failures.
@@ -54,4 +56,4 @@ If no session path was confirmed, Hibiscus explains that reconnecting opens a ne
 
 ## Regression coverage
 
-`tests/error_recovery.rs` exercises preflight rejection, subscription/quota failures, rate-limit exhaustion and successful retry, failed model commands, compaction failure and successful overflow recovery, warning-only tool/extension errors, Esc during retry, image/text restoration, backend crashes, malformed records, explicit same-session reconnect, failed reconnect, clean disconnected exit, and nonzero one-shot/piped exits. Unit tests cover classification/redaction, retry/compaction outcome transitions, and restored image drafts. These are mock Pi tests; real provider billing, rate limiting, and macOS recovery still need smoke tests.
+`tests/error_recovery.rs` exercises preflight rejection, subscription/quota failures, rate-limit exhaustion and successful retry, failed model commands, compaction failure and successful overflow recovery, warning-only tool/extension errors, Esc during retry, image/text restoration, backend crashes, malformed records, explicit same-session reconnect, failed reconnect, clean disconnected exit, and nonzero one-shot/piped exits. Unit tests cover classification/redaction, retry/compaction outcome transitions, and restored image drafts. `tests/diagnostics_tty.rs` covers startup warnings before metadata responds, idle/live draft preservation, protocol-looking stderr text, dialogs, resize, reconnect, color/no-color and one-shot stderr separation. These are mock Pi tests; real provider billing, rate limiting, and macOS recovery/diagnostic presentation still need smoke tests.

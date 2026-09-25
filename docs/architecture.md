@@ -24,6 +24,7 @@ src/
     rpc.rs           Child lifecycle, correlated RPC events, interrupts, progress
     transport.rs     Bounded raw inbox, nonblocking writes, deadlines and metrics
     error.rs         Typed errors, recovery disposition, safe presentation
+    diagnostics.rs   Bounded Pi stderr summary for the bottom diagnostic row
     run.rs           Final run outcome across Pi retries and compaction
     auth.rs          Codex SDK helper discovery and OAuth UI bridge
     codex-auth.mjs    Embedded Node helper calling Pi ModelRuntime.login()
@@ -68,7 +69,7 @@ The RPC transport now uses a bounded raw-record inbox and nonblocking, deadline-
 terminal input → chat commands → Pi RPC stdin (JSONL)
                                ← Pi RPC stdout (JSONL responses/events)
                                → terminal UI or plain stdout
-Pi stderr → diagnostics (never parsed as protocol records)
+Pi stderr → full-screen sanitized diagnostic row / plain-mode stderr (never RPC records)
 ```
 
 `pi/rpc.rs` assigns IDs to commands and matches their `response` records. During full-screen runs it polls composer input alongside Pi stdout, sending additional prompts with explicit `streamingBehavior: "steer"` or `"followUp"`, distinct IDs, and optional images. Their responses acknowledge acceptance only. Pi's `queue_update` supplies queue counts and pending-message text, which Hibiscus docks above the composer (Waiting, then Sending if dequeued before delivery). The accepted message is not appended to chat until Pi emits `message_start` with `role: user`; skip the initial prompt's already-rendered user event. Since Pi queue events have no per-message IDs, match equal text by queue order and retain in-transit entries until delivery, cancellation, or settlement. Unsent or rejected drafts are preserved without overriding newer typing, and local slash commands are blocked during runs. A successful `prompt` response means **accepted**, not finished. It continues reading events through `agent_settled`; `agent_end` alone is not sufficient because Pi can retry or perform follow-up work. Records are framed by LF, not Unicode line separators. During a run, Esc sends `clear_queue` followed by `abort` and waits for their responses and settlement without discarding the RPC child.

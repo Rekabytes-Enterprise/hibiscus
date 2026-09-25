@@ -4,6 +4,12 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-25
+
+### Fixed
+
+- Route Pi stderr warnings to a bounded, sanitized diagnostic row below the full-screen composer/status instead of allowing raw output to overwrite it. Preserve drafts, cursor layout, dialog focus, reconnect routing and ordinary stderr in line/piped modes; provider settings are unchanged.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added
@@ -127,7 +133,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.0
 [0.1.7]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.7
 [0.1.6]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.6

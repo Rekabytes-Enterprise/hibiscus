@@ -1,4 +1,5 @@
 use super::{
+    diagnostics::Diagnostics,
     error::{self, ChatError, ErrorSource},
     run::{RunOutcome, RunState},
     transport::{self, Events, Inbox, Limits, PipeWriter, WireWrite},
@@ -38,6 +39,7 @@ pub(crate) struct Rpc {
     input: Option<PipeWriter<ChildStdin>>,
     output: Inbox,
     diagnostics: Option<JoinHandle<io::Result<u64>>>,
+    diagnostic_feed: Option<Diagnostics>,
     next_id: u64,
     resume: SessionStart,
     disconnected: bool,
@@ -45,6 +47,13 @@ pub(crate) struct Rpc {
 
 impl Rpc {
     pub(crate) fn start(start: SessionStart) -> Result<Self> {
+        Self::start_with_diagnostics(start, None)
+    }
+
+    pub(crate) fn start_with_diagnostics(
+        start: SessionStart,
+        diagnostic_feed: Option<Diagnostics>,
+    ) -> Result<Self> {
         let limits = Limits::from_env()?;
         let pi = env::var("HIBISCUS_PI").unwrap_or_else(|_| "pi".to_owned());
         let mut command = Command::new(&pi);
@@ -86,13 +95,17 @@ impl Rpc {
             }
         };
         let stderr = child.stderr.take().ok_or("pi stderr unavailable")?;
-        let diagnostics =
-            thread::spawn(move || io::copy(&mut BufReader::new(stderr), &mut io::stderr()));
+        let feed = diagnostic_feed.clone();
+        let diagnostics = thread::spawn(move || match feed {
+            Some(feed) => feed.drain(stderr),
+            None => io::copy(&mut BufReader::new(stderr), &mut io::stderr()),
+        });
         Ok(Self {
             child,
             input: Some(input),
             output,
             diagnostics: Some(diagnostics),
+            diagnostic_feed,
             next_id: 0,
             resume,
             disconnected: false,
@@ -216,7 +229,7 @@ impl Rpc {
         writer.flush().map_err(error::transport)?;
         let mut deadline = Instant::now() + std::time::Duration::from_secs(30);
         loop {
-            let mut record = receive_record(&self.output, deadline)?
+            let mut record = receive_record(&self.output, deadline, display)?
                 .ok_or_else(|| error::transport("stream ended before the command completed"))?;
             check_record(&record)?;
             if record["type"] == "response" && record["id"] == id {
@@ -287,7 +300,7 @@ impl Rpc {
     pub(crate) fn recover_connection(&mut self) -> Result<()> {
         let start = self.resume.clone();
         self.disconnect();
-        *self = Self::start(start)?;
+        *self = Self::start_with_diagnostics(start, self.diagnostic_feed.clone())?;
         Ok(())
     }
 
@@ -342,7 +355,7 @@ impl Rpc {
         if self.input.is_some() {
             return Err("pi RPC child must be closed before reopening".into());
         }
-        *self = Self::start(start)?;
+        *self = Self::start_with_diagnostics(start, self.diagnostic_feed.clone())?;
         Ok(())
     }
 
@@ -1006,20 +1019,27 @@ fn active_keys(events: &Receiver<u8>, display: &mut impl ScrollDisplay) -> Resul
     Ok(false)
 }
 
-fn receive_record(output: &impl Events, deadline: Instant) -> Result<Option<Value>> {
-    if Instant::now() >= deadline {
-        return Err(error::transport(
-            "Pi command response timed out; connection state is uncertain",
-        )
-        .into());
-    }
-    match output.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-        Ok(event) => event.map(Some),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Ok(None),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(error::transport(
-            "Pi command response timed out; connection state is uncertain",
-        )
-        .into()),
+fn receive_record(
+    output: &impl Events,
+    deadline: Instant,
+    display: &mut impl ScrollDisplay,
+) -> Result<Option<Value>> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err(error::transport(
+                "Pi command response timed out; connection state is uncertain",
+            )
+            .into());
+        }
+        // Startup/catalog requests can be quiet while stderr is active. Paint
+        // queued diagnostics without resetting the command's original deadline.
+        display.tick_work()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match output.recv_timeout(remaining.min(std::time::Duration::from_millis(40))) {
+            Ok(event) => return event.map(Some),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
     }
 }
 
@@ -1522,7 +1542,7 @@ mod tests {
     #[test]
     fn silent_command_deadline_and_invalid_records_require_reconnection() {
         let (_sender, receiver) = mpsc::channel();
-        let error = receive_record(&receiver, Instant::now()).unwrap_err();
+        let error = receive_record(&receiver, Instant::now(), &mut Vec::new()).unwrap_err();
         assert_eq!(
             error.downcast_ref::<ChatError>().unwrap().recovery(),
             super::error::RecoveryAction::Reconnect
