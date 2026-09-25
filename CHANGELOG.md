@@ -2,6 +2,33 @@
 
 All notable changes to Hibiscus are documented here.
 
+## [Unreleased]
+
+## [0.2.0] - 2026-09-25
+
+### Added
+
+- Standard MIT license with Rekabytes Enterprise attribution and a fork/feature-branch contribution guide targeting `dev`.
+- Repeatable formatter, allocation and session-list benchmarks, plus a large-history paste regression and performance review.
+- Correlate delayed steering acknowledgements after final settlement without hanging or replaying, while still waiting for nonempty Pi queues to drain.
+- Full-screen `/sessions` and `/continue` now scan Pi session files off the UI thread, showing a cancellable loading notice and buffering typing for the composer; line-mode/startup listing is unchanged.
+- Optional isolated Linux input-wake profiler and shared input/RPC activity notification, reducing quiet-run key-to-output latency while retaining the timed animation fallback.
+- Optional Linux-only synthetic memory profiler with per-process RSS/high-water counters, isolated mock Pi/clipboard fixtures, and logical live/peak heap-byte benchmarks. No runtime behavior changes are part of this profiling addition.
+
+### Changed
+
+- Guide identity answers to introduce Hibiscus as the terminal assistant powered by Pi, without replacing Pi's system prompt or misidentifying the model/provider.
+- Full-screen chat, composer, status and docked panels now grow with the terminal instead of remaining capped at 100 columns; drafts and cursor layout reflow on resize.
+- Validate but do not materialize incoming user image-echo base64 when only text and attachment counts are needed; leave Pi's saved messages and other RPC event payloads intact.
+- Validate but do not materialize the unused `partialResult` JSON subtree of `tool_execution_update`; preserve all other event fields, errors, approvals, queue ordering and settlement.
+- Share staged image values between the composer and recovery slot, avoiding a second base64 allocation on queued rejection while keeping Pi's JSONL wire format and explicit `/restore` behavior.
+- Bound RPC wire-record/backlog memory and record counts with explicit overload failure, nonblocking/deadline-controlled writes, partial-send cancellation and reviewable uncertain queued drafts. Add synthetic duplex/overload regressions and opt-in queue metrics.
+- Cache transcript layout independently of terminal row painting, reuse completed message blocks, and coalesce scrolled row counting.
+- Batch available printable input and read terminal bytes in chunks without changing control-key or UTF-8 handling.
+- Avoid per-character Markdown string allocations, repeated front-shifting during wrapping, and repeated failed link searches.
+- Cache unchanged session metadata with bounded memory, file-identity checks, invalidation and periodic expiry.
+- Borrow images during RPC serialization, move response data/base64 buffers, and queue compact raw incoming records for consumer-side parsing. Buffered output errors do not implicitly retry commands.
+
 ## [0.1.7] - 2026-09-25
 
 ### Added
@@ -100,7 +127,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.0
 [0.1.7]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.7
 [0.1.6]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.6
 [0.1.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.1.5

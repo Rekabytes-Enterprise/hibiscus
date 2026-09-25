@@ -2,7 +2,13 @@
 
 Hibiscus is a Rust CLI and terminal frontend for a **Pi RPC subprocess**. It does not implement its own agent, model catalog, credential manager, tool runtime, or session store.
 
-## Source layout
+## What runs where
+
+Hibiscus owns the terminal experience: CLI flags, chat commands, full-screen rendering, local image capture, update prompts, and recovery UI. Pi owns the agent: model access, authentication storage, tool execution, reasoning, retries, and saved session files. The main boundary is a long-lived `pi --mode rpc` child process using LF-delimited JSON records on stdin/stdout.
+
+That boundary is intentional. When adding behavior, prefer asking Pi through RPC or its SDK helpers over duplicating Pi's agent, credential, model, tool, or session logic in Rust.
+
+## Codebase map
 
 ```text
 src/
@@ -14,8 +20,9 @@ src/
     sessions.rs      Pi session discovery, picker fallback, recent-history display
   pi/
     mod.rs           Pi integration and explicit approval-extension staging
-    approval.mjs     Pre-execution bash approval and explicit goal checklist tool
-    rpc.rs           Child process, JSONL transport, events, interrupts, progress
+    approval.mjs     Pre-execution approval, goal checklist and Hibiscus identity guidance
+    rpc.rs           Child lifecycle, correlated RPC events, interrupts, progress
+    transport.rs     Bounded raw inbox, nonblocking writes, deadlines and metrics
     error.rs         Typed errors, recovery disposition, safe presentation
     run.rs           Final run outcome across Pi retries and compaction
     auth.rs          Codex SDK helper discovery and OAuth UI bridge
@@ -36,7 +43,24 @@ src/
     ui.rs            Labels/help and line-mode presentation
 ```
 
-`tests/` contains mock Pi subprocess and PTY integration tests; unit tests live alongside the modules they cover. The split keeps chat workflows separate from Pi protocol handling and terminal rendering. `modal.rs` renders the common panel used by model/session pickers and Pi dialogs. `Dialogs` asks the `ScrollDisplay` interface for a full-screen dialog response before falling back to line-mode terminal prompts; Screen owns modal focus and never mixes raw approval output with its composer.
+`tests/` contains mock Pi subprocess and PTY integration tests; unit tests live alongside the modules they cover. `benches/` contains repeatable formatter, session-list, and allocation benchmarks. Top-level scripts and docs cover installation, version bumps, development, release notes, and public contributor guidance.
+
+The split keeps chat workflows separate from Pi protocol handling and terminal rendering. `modal.rs` renders the common panel used by model/session pickers and Pi dialogs. `Dialogs` asks the `ScrollDisplay` interface for a full-screen dialog response before falling back to line-mode terminal prompts; Screen owns modal focus and never mixes raw approval output with its composer.
+
+## Runtime flow
+
+A typical full-screen chat follows this path:
+
+1. `main.rs` parses CLI flags and stages the bundled approval extension before launching Pi.
+2. `chat::start_chat` opens a Pi RPC child, prepares terminal raw mode when available, creates a `Screen`, optionally restores session status/history, and enters the chat loop.
+3. User input is handled as a local slash command or sent to Pi as a `prompt` command with optional image parts.
+4. `pi/rpc.rs` writes JSONL commands to Pi, correlates responses by ID, and keeps reading events until the run settles.
+5. TUI modules render assistant text, tool activity, approvals, model/session pickers, queued follow-ups, images, and recovery notices.
+6. On exit or handoff to Pi's TUI, Hibiscus restores terminal state and closes/reopens RPC children deliberately to avoid concurrent session writers.
+
+One-shot and piped modes use the same Pi RPC boundary but avoid the full-screen UI so stdout remains script-friendly.
+
+The RPC transport now uses a bounded raw-record inbox and nonblocking, deadline-controlled stdin writes in `src/pi/transport.rs`. Overload invalidates the connection explicitly rather than blocking the reader or silently dropping events. See [RPC transport limits](rpc-transport.md) for budgets, partial-send cancellation and recovery semantics.
 
 ## RPC data flow
 
@@ -53,7 +77,7 @@ Pi events supply progress and tool activity. Hibiscus correlates `tool_execution
 
 ## Tool approvals
 
-Hibiscus stages its bundled `approval.mjs` in a private temporary directory and launches Pi with `--no-extensions --extension <trusted-file> --tools read,bash,edit,write`. Pi's installed extensions are still disabled. Pi's `tool_call` event blocks a classified dangerous `bash` command until RPC `ctx.ui.select()` returns an explicit Allow or Always Allow. Approval is exact `(cwd, command)` and session-scoped. The existing extension UI subprotocol correlates responses by ID; empty/noninteractive/timeout/Esc deny. This is a best-effort policy for common commands, not a sandbox or guarantee that apparently safe shell commands cannot have side effects.
+Hibiscus stages its bundled `approval.mjs` in a private temporary directory and launches Pi with `--no-extensions --extension <trusted-file> --tools read,bash,edit,write,goal`. The same explicit extension adds a small `before_agent_start` prompt section asking the assistant to identify itself as Hibiscus while accurately disclosing Pi and the selected model/provider when relevant; it does not replace Pi's system prompt, agent or execution tools. Pi's installed extensions are still disabled. Pi's `tool_call` event blocks a classified dangerous `bash` command until RPC `ctx.ui.select()` returns an explicit Allow or Always Allow. Approval is exact `(cwd, command)` and session-scoped. The existing extension UI subprotocol correlates responses by ID; empty/noninteractive/timeout/Esc deny. This is a best-effort policy for common commands, not a sandbox or guarantee that apparently safe shell commands cannot have side effects.
 
 ## Failure boundaries
 
@@ -77,4 +101,24 @@ For other-provider login, line-mode login, or login with an unavailable Node/SDK
 
 Interactive chat with compatible stdin/stdout uses a full-screen renderer with a fixed composer, transcript, and inline pickers. Pi still provides agent/tool behavior; Hibiscus formats the display only. Small or `TERM=dumb` terminals fall back to line mode. Piped input stays plain and script-friendly. The alternate screen and mouse reporting are disabled on exit and during the Pi TUI authentication fallback.
 
-Read [Development](development.md) before modifying the RPC protocol or terminal lifecycle; both have mock subprocess and PTY regression tests.
+## Where to make changes
+
+| If you are changing... | Start in... |
+| --- | --- |
+| CLI flags, one-shot prompts, top-level modes | `src/main.rs` |
+| Interactive chat flow or slash-command behavior | `src/chat/mod.rs`, `src/chat/commands.rs` |
+| Model selection | `src/chat/models.rs` |
+| Session discovery, resume, or recent-history display | `src/chat/sessions.rs` |
+| Pi RPC transport, event handling, steering, aborts, settlement | `src/pi/rpc.rs`, `src/pi/run.rs` |
+| Error classification and recovery hints | `src/pi/error.rs`, `docs/error-handling.md` |
+| Tool approval policy or Pi dialog bridging | `src/pi/approval.mjs`, `src/pi/dialog.rs` |
+| Codex login or provider logout | `src/pi/auth.rs`, `src/pi/logout.rs`, `src/pi/*.mjs` helpers |
+| Full-screen rendering, composer, queues, modals | `src/tui/screen.rs`, `src/tui/modal.rs`, `src/tui/paint.rs` |
+| Tool/activity display | `src/tui/activity.rs` |
+| Markdown/diff formatting | `src/tui/markdown.rs` |
+| Clipboard image paste | `src/tui/clipboard.rs` |
+| Raw terminal lifecycle and input reader | `src/tui/terminal.rs` |
+| Self-update behavior | `src/update.rs`, `install.sh` |
+| Installer/version bump/release process | `install.sh`, `scripts/bump-version.sh`, `.github/workflows/` |
+
+Read [Development](development.md) before modifying the RPC protocol or terminal lifecycle; both have mock subprocess and PTY regression tests. Add or update targeted tests when changing protocol, recovery, session, approval, or terminal behavior.

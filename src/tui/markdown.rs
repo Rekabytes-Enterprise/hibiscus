@@ -31,10 +31,71 @@ pub(crate) struct Cell {
     pub(crate) tone: Tone,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Row {
     pub(crate) role: Role,
     pub(crate) cells: Vec<Cell>,
+}
+
+/// Cache at explicit role-reset boundaries, not arbitrary lines: fences and
+/// table lookahead can change the interpretation of previously received text.
+#[derive(Default)]
+pub(crate) struct Layout {
+    width: usize,
+    blocks: Vec<(String, Vec<std::rc::Rc<Row>>)>,
+    rows: std::rc::Rc<Vec<std::rc::Rc<Row>>>,
+}
+
+impl Layout {
+    pub(crate) fn len(&self) -> usize {
+        self.rows.len()
+    }
+    pub(crate) fn rows(&self) -> std::rc::Rc<Vec<std::rc::Rc<Row>>> {
+        self.rows.clone()
+    }
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+    pub(crate) fn update(&mut self, text: &str, width: usize) {
+        if self.width != width {
+            self.blocks.clear();
+        }
+        self.width = width;
+        let mut boundaries = vec![0];
+        let mut offset = 0;
+        for line in text.split_inclusive('\n') {
+            if offset > 0
+                && (line.starts_with("you › ")
+                    || line.starts_with("hibi › ")
+                    || line.starts_with("hibiscus › "))
+            {
+                boundaries.push(offset);
+            }
+            offset += line.len();
+        }
+        boundaries.push(text.len());
+        let mut rows = Vec::new();
+        for (index, range) in boundaries.windows(2).enumerate() {
+            let source = &text[range[0]..range[1]];
+            if self.blocks.get(index).is_none_or(|(old, _)| old != source) {
+                let block = (
+                    source.to_owned(),
+                    format(source, width)
+                        .into_iter()
+                        .map(std::rc::Rc::new)
+                        .collect(),
+                );
+                if index < self.blocks.len() {
+                    self.blocks[index] = block;
+                } else {
+                    self.blocks.push(block);
+                }
+            }
+            rows.extend(self.blocks[index].1.iter().cloned());
+        }
+        self.blocks.truncate(boundaries.len() - 1);
+        self.rows = std::rc::Rc::new(rows);
+    }
 }
 
 fn push(cells: &mut Vec<Cell>, text: &str, tone: Tone) {
@@ -47,6 +108,8 @@ fn inline(text: &str, default: Tone) -> Vec<Cell> {
     let mut strong = false;
     let mut emphasis = false;
     let mut code = false;
+    // A failed link search cannot succeed in a shorter suffix of this line.
+    let mut links_exhausted = false;
     while !rest.is_empty() {
         let tone = if code {
             Tone::Code
@@ -61,7 +124,7 @@ fn inline(text: &str, default: Tone) -> Vec<Cell> {
             let escaped = &rest[1..];
             if let Some(ch) = escaped.chars().next() {
                 if "\\*`_[]".contains(ch) {
-                    push(&mut cells, &ch.to_string(), tone);
+                    cells.push(Cell { ch, tone });
                     rest = &escaped[ch.len_utf8()..];
                     continue;
                 }
@@ -102,7 +165,7 @@ fn inline(text: &str, default: Tone) -> Vec<Cell> {
                 rest = &rest[1..];
                 continue;
             }
-            if rest.starts_with('[') {
+            if !links_exhausted && rest.starts_with('[') {
                 if let Some(end) = rest.find("](") {
                     if let Some(close) = rest[end + 2..].find(')') {
                         push(&mut cells, &rest[1..end], Tone::Link);
@@ -110,10 +173,11 @@ fn inline(text: &str, default: Tone) -> Vec<Cell> {
                         continue;
                     }
                 }
+                links_exhausted = true;
             }
         }
         let ch = rest.chars().next().expect("nonempty text");
-        push(&mut cells, &ch.to_string(), tone);
+        cells.push(Cell { ch, tone });
         rest = &rest[ch.len_utf8()..];
     }
     cells
@@ -277,11 +341,12 @@ fn ordered_item(text: &str) -> Option<(&str, &str)> {
     Some((number, rest.strip_prefix(". ")?))
 }
 
-fn wrap_cells(mut cells: Vec<Cell>, width: usize, role: Role) -> Vec<Row> {
+fn wrap_cells(cells: Vec<Cell>, width: usize, role: Role) -> Vec<Row> {
     if cells.is_empty() {
         return vec![Row { role, cells }];
     }
     let mut result = Vec::new();
+    let mut cells = cells.as_slice();
     while !cells.is_empty() {
         let continuation = !result.is_empty() && width > 4;
         let capacity = width - usize::from(continuation) * 2;
@@ -298,13 +363,14 @@ fn wrap_cells(mut cells: Vec<Cell>, width: usize, role: Role) -> Vec<Row> {
         if continuation {
             push(&mut row, "  ", Tone::Plain);
         }
-        row.extend(cells.drain(..take));
+        row.extend_from_slice(&cells[..take]);
+        cells = &cells[take..];
         if !cells.is_empty() {
             while row.last().is_some_and(|cell| cell.ch.is_whitespace()) {
                 row.pop();
             }
             while cells.first().is_some_and(|cell| cell.ch.is_whitespace()) {
-                cells.remove(0);
+                cells = &cells[1..];
             }
         }
         result.push(Row { role, cells: row });
@@ -317,6 +383,54 @@ mod tests {
     use super::*;
     fn text(row: &Row) -> String {
         row.cells.iter().map(|cell| cell.ch).collect()
+    }
+
+    #[test]
+    fn layout_matches_full_format_across_streaming_resize_and_replacement() {
+        let mut layout = Layout::default();
+        let text = "you › literal **text**\n\nhibi › ## Title\n| A | B |\n| --- | --- |\n```rust\nlet x = 1;\n```\n\nyou › next\nhibi › [link](url)";
+        for width in [73, 12, 1, 73] {
+            for end in (0..=text.len()).filter(|&i| text.is_char_boundary(i)) {
+                layout.update(&text[..end], width);
+                assert_eq!(
+                    layout
+                        .rows()
+                        .iter()
+                        .map(|r| (**r).clone())
+                        .collect::<Vec<_>>(),
+                    format(&text[..end], width)
+                );
+            }
+        }
+        let first = layout.rows()[0].clone();
+        layout.update(&format!("{text} more"), 73);
+        assert!(std::rc::Rc::ptr_eq(&first, &layout.rows()[0]));
+        layout.update("hibi › replacement", 73);
+        assert_eq!(
+            layout
+                .rows()
+                .iter()
+                .map(|r| (**r).clone())
+                .collect::<Vec<_>>(),
+            format("hibi › replacement", 73)
+        );
+    }
+
+    #[test]
+    fn long_lines_and_unmatched_links_remain_literal() {
+        for source in ["[".repeat(65536), "x".repeat(65536), " ".repeat(65536)] {
+            let rows = format(&source, 73);
+            assert!(rows.iter().all(|r| r.cells.len() <= 73));
+            if !source.starts_with(' ') {
+                assert_eq!(
+                    rows.iter()
+                        .map(|r| text(r).trim_start().to_owned())
+                        .collect::<String>(),
+                    source
+                );
+            }
+        }
+        assert_eq!(text(&format("[no closing](", 73)[0]), "[no closing](");
     }
 
     #[test]

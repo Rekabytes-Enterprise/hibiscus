@@ -1,10 +1,17 @@
 use crate::{tui::ui::Ui, Result};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, RecvTimeoutError},
+    Arc, Mutex, OnceLock,
+};
+use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) struct SessionInfo {
     pub(crate) path: PathBuf,
@@ -53,42 +60,195 @@ fn resolve(path: PathBuf, cwd: &Path) -> PathBuf {
 }
 
 pub(crate) fn list(cwd: &Path) -> Result<Vec<SessionInfo>> {
-    list_in_dir(cwd, &session_dir(cwd)?)
+    list_cancelled(cwd, &AtomicBool::new(false))
 }
 
-fn list_in_dir(cwd: &Path, dir: &Path) -> Result<Vec<SessionInfo>> {
-    let mut sessions = Vec::new();
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(sessions),
-        Err(error) => return Err(error.into()),
-    };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "jsonl") || !entry.file_type()?.is_file() {
-            continue;
-        }
-        // List only sessions with a valid header for this workspace, even when
-        // the session directory is shared by multiple projects.
-        if let Some(title) = inspect(&path, cwd)? {
-            let modified = entry.metadata()?.modified()?;
-            sessions.push(SessionInfo {
-                path,
-                title,
-                modified,
-            });
+fn list_cancelled(cwd: &Path, cancelled: &AtomicBool) -> Result<Vec<SessionInfo>> {
+    list_in_dir_cancelled(cwd, &session_dir(cwd)?, cancelled)
+}
+
+/// Scan on a worker only for full-screen /sessions and /continue. No second
+/// session index: Pi's files and the same disposable display cache are used.
+pub(crate) struct Scan {
+    receiver: Receiver<Result<Vec<SessionInfo>>>,
+    cancelled: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl Scan {
+    pub(crate) fn start(cwd: PathBuf) -> Self {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&cancelled);
+        let (sender, receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = list_cancelled(&cwd, &stop);
+            if !stop.load(Ordering::Relaxed) {
+                let _ = sender.send(result);
+            }
+        });
+        Self {
+            receiver,
+            cancelled,
+            worker: Some(worker),
         }
     }
-    sessions.sort_by(|a, b| {
-        b.modified
-            .cmp(&a.modified)
-            .then_with(|| a.path.cmp(&b.path))
-    });
-    Ok(sessions)
+    pub(crate) fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> std::result::Result<Result<Vec<SessionInfo>>, RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
+}
+impl Drop for Scan {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            if worker.is_finished() {
+                let _ = worker.join();
+            }
+            // Otherwise detach. It checks cancellation on each record and the
+            // next operation never reuses this result or waits for the worker.
+        }
+    }
 }
 
-fn inspect(path: &Path, cwd: &Path) -> Result<Option<String>> {
+// Disposable, process-local presentation cache. Pi's files remain authoritative.
+// Include inode and ctime as well as size/mtime: equal-size edits, replacements
+// and restored mtimes must not silently reuse an old title.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+impl Stamp {
+    fn of(meta: &fs::Metadata) -> Self {
+        Self {
+            device: meta.dev(),
+            inode: meta.ino(),
+            size: meta.len(),
+            modified: (meta.mtime(), meta.mtime_nsec()),
+            changed: (meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
+#[derive(Default)]
+struct SessionCache {
+    scope: Option<(PathBuf, PathBuf)>,
+    entries: HashMap<PathBuf, (Stamp, Instant, Option<String>)>,
+    #[cfg(test)]
+    scans: usize,
+}
+
+#[cfg(test)]
+fn list_in_dir(cwd: &Path, dir: &Path) -> Result<Vec<SessionInfo>> {
+    list_in_dir_cancelled(cwd, dir, &AtomicBool::new(false))
+}
+
+fn list_in_dir_cancelled(
+    cwd: &Path,
+    dir: &Path,
+    cancelled: &AtomicBool,
+) -> Result<Vec<SessionInfo>> {
+    static CACHE: OnceLock<Mutex<SessionCache>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| Mutex::new(SessionCache::default()))
+        .lock()
+        .map_err(|_| "session display cache unavailable")?
+        .list_cancelled(cwd, dir, cancelled)
+}
+
+impl SessionCache {
+    #[cfg(test)]
+    fn list(&mut self, cwd: &Path, dir: &Path) -> Result<Vec<SessionInfo>> {
+        self.list_cancelled(cwd, dir, &AtomicBool::new(false))
+    }
+    fn list_cancelled(
+        &mut self,
+        cwd: &Path,
+        dir: &Path,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<SessionInfo>> {
+        let scope = (
+            cwd.to_path_buf(),
+            dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()),
+        );
+        if self.scope.as_ref() != Some(&scope) {
+            self.entries.clear();
+            self.scope = Some(scope);
+        }
+        let mut seen = HashSet::new();
+        let mut sessions = Vec::new();
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.entries.clear();
+                return Ok(sessions);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("session scan cancelled".into());
+            }
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "jsonl") || !entry.file_type()?.is_file() {
+                continue;
+            }
+            // List only sessions with a valid header for this workspace, even when
+            // the session directory is shared by multiple projects.
+            let meta = entry.metadata()?;
+            let stamp = Stamp::of(&meta);
+            seen.insert(path.clone());
+            // Periodic rescanning bounds staleness on coarse-timestamp filesystems.
+            let title = match self.entries.get(&path).filter(|(old, checked, _)| {
+                *old == stamp && checked.elapsed() < Duration::from_secs(30)
+            }) {
+                Some((_, _, title)) => title.clone(),
+                None => {
+                    #[cfg(test)]
+                    {
+                        self.scans += 1;
+                    }
+                    let title = inspect(&path, cwd, cancelled)?;
+                    // Don't cache a file observed changing during the scan. Bound
+                    // cache memory independently of how many sessions Pi retains.
+                    if path
+                        .metadata()
+                        .is_ok_and(|after| Stamp::of(&after) == stamp)
+                        && (self.entries.len() < 1024 || self.entries.contains_key(&path))
+                        && title.as_ref().is_none_or(|s| s.len() <= 8192)
+                    {
+                        self.entries
+                            .insert(path.clone(), (stamp, Instant::now(), title.clone()));
+                    } else {
+                        self.entries.remove(&path);
+                    }
+                    title
+                }
+            };
+            if let Some(title) = title {
+                let modified = meta.modified()?;
+                sessions.push(SessionInfo {
+                    path,
+                    title,
+                    modified,
+                });
+            }
+        }
+        self.entries.retain(|path, _| seen.contains(path));
+        sessions.sort_by(|a, b| {
+            b.modified
+                .cmp(&a.modified)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        Ok(sessions)
+    }
+}
+
+fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<String>> {
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
     let Some(header) = lines.next() else {
@@ -108,6 +268,9 @@ fn inspect(path: &Path, cwd: &Path) -> Result<Option<String>> {
     let mut first = None;
     let mut message_count = 0;
     for line in lines {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("session scan cancelled".into());
+        }
         let line = line?;
         let Ok(record) = serde_json::from_str::<Value>(&line) else {
             continue;
@@ -259,6 +422,66 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn cache_reuses_unchanged_files_and_invalidates_rename_replace_delete_and_scope() {
+        let root = std::env::temp_dir().join(format!(
+            "hibiscus-cache-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let file = root.join("a.jsonl");
+        let initial = format!(
+            "{}\n{}\n",
+            json!({"type":"session","id":"a","cwd":root}),
+            json!({"type":"message","message":{"role":"user","content":"first"}})
+        );
+        fs::write(&file, &initial).unwrap();
+        let mut cache = SessionCache::default();
+        assert_eq!(cache.list(&root, &root).unwrap()[0].title, "first");
+        assert_eq!(cache.list(&root, &root).unwrap()[0].title, "first");
+        assert_eq!(cache.scans, 1);
+        let renamed = format!(
+            "{initial}{}\n",
+            json!({"type":"session_info","name":"renamed"})
+        );
+        fs::write(&file, &renamed).unwrap();
+        assert_eq!(cache.list(&root, &root).unwrap()[0].title, "renamed");
+        // A same-size replacement must invalidate even if its mtime is restored.
+        let modified = file.metadata().unwrap().modified().unwrap();
+        let replacement = root.join("replacement");
+        fs::write(&replacement, renamed.replace("renamed", "changed")).unwrap();
+        File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        fs::rename(&replacement, &file).unwrap();
+        assert_eq!(cache.list(&root, &root).unwrap()[0].title, "changed");
+        assert_eq!(cache.scans, 3);
+        cache.entries.get_mut(&file).unwrap().1 = Instant::now() - Duration::from_secs(31);
+        assert_eq!(cache.list(&root, &root).unwrap()[0].title, "changed");
+        assert_eq!(cache.scans, 4, "expired entries must be rescanned");
+        fs::write(&file, "").unwrap();
+        assert!(cache.list(&root, &root).unwrap().is_empty());
+        fs::write(&file, &initial).unwrap();
+        assert_eq!(cache.list(&root, &root).unwrap().len(), 1);
+        assert!(cache
+            .list(&root.join("other-workspace"), &root)
+            .unwrap()
+            .is_empty());
+        assert_eq!(cache.list(&root, &root).unwrap().len(), 1);
+        fs::remove_file(&file).unwrap();
+        assert!(cache.list(&root, &root).unwrap().is_empty());
+        assert!(cache.entries.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn history_shows_image_placeholders_without_base64() {
         let mut output = Vec::new();
         show_recent(&[json!({"role":"user","content":[{"type":"image","mimeType":"image/png","data":"private-image-bytes"}]})], &mut output).unwrap();
@@ -350,6 +573,13 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].title, "second");
         assert_eq!(found[1].title, "first");
+        let stopped = AtomicBool::new(true);
+        assert!(list_in_dir_cancelled(&cwd, &dir, &stopped).is_err());
+        assert_eq!(
+            list_in_dir(&cwd, &dir).unwrap().len(),
+            2,
+            "cancelled scan cannot poison later discovery"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

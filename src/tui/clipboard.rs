@@ -32,7 +32,7 @@ pub(super) fn paste_key() -> &'static str {
 }
 
 pub(super) struct Job {
-    pub(super) receiver: Receiver<Result<Value, String>>,
+    pub(super) receiver: Receiver<Result<super::screen::SharedImage, String>>,
     cancelled: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -62,7 +62,7 @@ impl Drop for Job {
     }
 }
 
-fn read_image(cancelled: &AtomicBool) -> Result<Value, String> {
+fn read_image(cancelled: &AtomicBool) -> Result<super::screen::SharedImage, String> {
     let capture =
         |command: &mut Command, timeout, limit| capture(command, timeout, limit, cancelled);
     let bytes = if cfg!(target_os = "macos") {
@@ -146,7 +146,7 @@ fn preferred_type(types: &[u8]) -> Option<&'static str> {
         .find(|mime| types.lines().any(|line| line.trim() == *mime))
 }
 
-fn image_content(bytes: &[u8]) -> Result<Value, String> {
+fn image_content(bytes: &[u8]) -> Result<super::screen::SharedImage, String> {
     if bytes.is_empty() {
         return Err("No image in clipboard".into());
     }
@@ -164,7 +164,11 @@ fn image_content(bytes: &[u8]) -> Result<Value, String> {
     } else {
         return Err("Clipboard does not contain a PNG, JPEG, GIF, or WebP image".into());
     };
-    Ok(json!({"type":"image", "mimeType":mime, "data":super::screen::base64(bytes)}))
+    let mut image = json!({"type":"image", "mimeType":mime});
+    // Move the encoded buffer into the value; json!(base64(bytes)) serializes
+    // the temporary String by reference and allocates another full copy.
+    image["data"] = Value::String(super::screen::base64(bytes));
+    Ok(Arc::new(image))
 }
 
 fn capture(
@@ -257,7 +261,7 @@ mod tests {
                 100,
                 &stop,
             );
-            let _ = sender.send(result.map(|_| Value::Null));
+            let _ = sender.send(result.map(|_| Arc::new(Value::Null)));
         });
         let job = Job {
             receiver,

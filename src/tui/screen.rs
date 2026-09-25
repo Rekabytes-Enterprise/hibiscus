@@ -1,9 +1,9 @@
 use serde_json::Value;
-use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsRawFd;
-use std::sync::mpsc::Receiver;
+use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
+use std::{collections::VecDeque, env};
 
 use super::{
     activity::Timeline,
@@ -26,9 +26,13 @@ pub(crate) enum QueueMode {
     FollowUp,
 }
 
+/// A staged attachment can be owned by both the composer and the explicit
+/// recovery slot without copying its base64 payload. Pi wire shape is unchanged.
+pub(crate) type SharedImage = Arc<Value>;
+
 pub(crate) struct DraftSubmission {
     pub(crate) text: String,
-    pub(crate) images: Vec<Value>,
+    pub(crate) images: Vec<SharedImage>,
     pub(crate) mode: QueueMode,
 }
 
@@ -194,6 +198,13 @@ const FLOWERS: [&str; 4] = ["✿", "❀", "✾", "❁"];
 // screen; never change the terminal's configured background with OSC 11.
 const BASE_BACKGROUND: &str = "\x1b[48;2;48;10;36m";
 
+// Keep two columns on either side, including on wide/ultrawide terminals.
+// A single source of truth keeps Markdown, composer movement, modals and
+// cursor placement aligned when the terminal is resized.
+fn content_width(columns: usize) -> usize {
+    columns.saturating_sub(4).max(1)
+}
+
 fn paint_background(frame: &str, color: bool) -> String {
     if color {
         // The theme's accent and Markdown renderers reset foreground styles.
@@ -227,13 +238,17 @@ pub(crate) struct Screen {
     last_paint: Option<Instant>,
     paint_pending: bool,
     transcript: Vec<u8>,
+    layout: markdown::Layout,
+    layout_dirty: bool,
+    scroll_anchor: Option<usize>,
+    workspace: String,
     draft: String,
     draft_cursor: usize,
     preferred_column: Option<usize>,
-    restored_draft: Option<(String, Vec<Value>)>,
+    restored_draft: Option<(String, Vec<SharedImage>)>,
     disconnected: bool,
     draft_scroll: usize,
-    images: Vec<Value>,
+    images: Vec<SharedImage>,
     clipboard: Option<super::clipboard::Job>,
     clipboard_notice: String,
     input_notice: Option<String>,
@@ -242,7 +257,7 @@ pub(crate) struct Screen {
     pending_queue: Vec<PendingQueue>,
     delivered_before_ack: Vec<String>,
     initial_user_pending: Option<String>,
-    rejected_queued: Option<(String, Vec<Value>)>,
+    rejected_queued: Option<(String, Vec<SharedImage>)>,
     active_utf8: Vec<u8>,
     model: String,
     session: String,
@@ -252,6 +267,7 @@ pub(crate) struct Screen {
     suggestions: Option<Picker>,
     suggestions_dismissed: bool,
     pending_input: Option<u8>,
+    deferred_input: VecDeque<u8>,
     secret_input: bool,
     auth_url: Option<String>,
     activity: Option<Activity>,
@@ -276,6 +292,13 @@ impl Screen {
             last_paint: None,
             paint_pending: false,
             transcript: Vec::new(),
+            layout: markdown::Layout::default(),
+            layout_dirty: true,
+            scroll_anchor: None,
+            workspace: env::current_dir()
+                .ok()
+                .and_then(|path| path.file_name().map(|part| clean(&part.to_string_lossy())))
+                .unwrap_or_else(|| "workspace".into()),
             draft: String::new(),
             draft_cursor: 0,
             preferred_column: None,
@@ -301,6 +324,7 @@ impl Screen {
             suggestions: None,
             suggestions_dismissed: false,
             pending_input: None,
+            deferred_input: VecDeque::new(),
             secret_input: false,
             auth_url: None,
             activity: None,
@@ -412,6 +436,7 @@ impl Screen {
         self.preferred_column = None;
         self.suggestions = None;
         if self.full {
+            self.dirty_transcript();
             while self.transcript.last() == Some(&b'\n') {
                 self.transcript.pop();
             }
@@ -435,6 +460,7 @@ impl Screen {
     /// Reset only the local view after Pi has created a new session. Persisted
     /// history belongs to Pi and is not deleted by clearing the screen.
     pub(crate) fn clear_session(&mut self) -> io::Result<()> {
+        self.dirty_transcript();
         self.transcript.clear();
         self.draft.clear();
         self.draft_cursor = 0;
@@ -461,6 +487,7 @@ impl Screen {
         self.initial_user_pending = None;
         self.rejected_queued = None;
         self.active_utf8.clear();
+        self.deferred_input.clear();
         self.input_notice = None;
         self.session = "new chat".into();
         self.render()
@@ -470,11 +497,32 @@ impl Screen {
         self.pending_input = Some(byte);
     }
 
-    pub(crate) fn take_rejected_queue(&mut self) -> Option<(String, Vec<Value>)> {
+    /// Preserve typing collected while an asynchronous session scan completes.
+    /// Enter/Esc are handled during the scan and are never replayed as sends.
+    pub(crate) fn defer_session_typing(&mut self, bytes: impl IntoIterator<Item = u8>) {
+        self.deferred_input.extend(bytes);
+    }
+
+    pub(crate) fn start_session_scan(&mut self) -> io::Result<Option<String>> {
+        let old = self
+            .input_notice
+            .replace("Loading saved sessions… · Esc cancel".into());
+        self.render()?;
+        Ok(old)
+    }
+
+    pub(crate) fn end_session_scan(&mut self, old: Option<String>) -> io::Result<()> {
+        if self.input_notice.as_deref() == Some("Loading saved sessions… · Esc cancel") {
+            self.input_notice = old;
+        }
+        self.render()
+    }
+
+    pub(crate) fn take_rejected_queue(&mut self) -> Option<(String, Vec<SharedImage>)> {
         self.rejected_queued.take()
     }
 
-    pub(crate) fn restore_draft(&mut self, text: String, images: Vec<Value>) {
+    pub(crate) fn restore_draft(&mut self, text: String, images: Vec<SharedImage>) {
         self.restored_draft = Some((text, images));
     }
 
@@ -503,6 +551,28 @@ impl Screen {
         }
     }
 
+    fn dirty_transcript(&mut self) {
+        if self.scroll > 0 && self.scroll_anchor.is_none() {
+            self.scroll_anchor = Some(self.layout.len());
+        }
+        self.layout_dirty = true;
+    }
+
+    fn transcript_layout(&mut self, width: usize) -> std::rc::Rc<Vec<std::rc::Rc<markdown::Row>>> {
+        if self.layout_dirty || self.layout.width() != width {
+            self.layout.update(&self.rendered_transcript(), width);
+            self.layout_dirty = false;
+            if let Some(before) = self.scroll_anchor.take() {
+                if self.scroll > 0 {
+                    self.scroll = self
+                        .scroll
+                        .saturating_add(self.layout.len().saturating_sub(before));
+                }
+            }
+        }
+        self.layout.rows()
+    }
+
     fn rendered_transcript(&self) -> String {
         let mut text = strip_ansi(&String::from_utf8_lossy(&self.transcript));
         for (index, timeline) in self.timelines.iter().enumerate() {
@@ -515,6 +585,9 @@ impl Screen {
     }
 
     fn freeze_timeline(&mut self) {
+        if !self.timelines.is_empty() {
+            self.dirty_transcript();
+        }
         if let Some(index) = self.current_timeline {
             self.timelines[index].finish();
         }
@@ -530,12 +603,7 @@ impl Screen {
         if !self.full {
             return Ok(());
         }
-        let width = self.size().0.saturating_sub(7).clamp(1, 97);
-        let before = if self.scroll > 0 {
-            markdown::format(&self.rendered_transcript(), width).len()
-        } else {
-            0
-        };
+        self.dirty_transcript();
         let index = match self.current_timeline {
             Some(index) => index,
             None => {
@@ -551,10 +619,6 @@ impl Screen {
             self.transcript
                 .extend_from_slice(format!("\n· __hibiscus_activity_{index}__\n").as_bytes());
             self.timeline_marked = true;
-        }
-        if before > 0 {
-            let after = markdown::format(&self.rendered_transcript(), width).len();
-            self.scroll = self.scroll.saturating_add(after.saturating_sub(before));
         }
         self.render()
     }
@@ -704,7 +768,7 @@ impl Screen {
         result
     }
 
-    pub(crate) fn take_images(&mut self) -> Vec<Value> {
+    pub(crate) fn take_images(&mut self) -> Vec<SharedImage> {
         self.clipboard_notice.clear();
         std::mem::take(&mut self.images)
     }
@@ -768,6 +832,42 @@ impl Screen {
         };
     }
 
+    // Only batch already available printable bytes. Control/escape sequences
+    // stay ordered and are handled by the existing input state machine.
+    fn insert_input_batch(&mut self, first: u8, events: &Receiver<u8>, pending: &mut Vec<u8>) {
+        let mut text = String::new();
+        for index in 0..128 {
+            let byte = if index == 0 {
+                first
+            } else {
+                let Some(byte) = self
+                    .deferred_input
+                    .pop_front()
+                    .or_else(|| events.try_recv().ok())
+                else {
+                    break;
+                };
+                if !matches!(byte, 32..=126 | 128..=255) {
+                    self.pending_input = Some(byte);
+                    break;
+                }
+                byte
+            };
+            pending.push(byte);
+            match std::str::from_utf8(pending) {
+                Ok(value) => {
+                    text.push_str(value);
+                    pending.clear();
+                }
+                Err(error) if error.error_len().is_some() => pending.clear(),
+                Err(_) => {}
+            }
+        }
+        if !text.is_empty() {
+            self.insert_draft(&text);
+        }
+    }
+
     fn insert_draft(&mut self, text: &str) {
         self.input_notice = None;
         self.draft.insert_str(self.draft_cursor, text);
@@ -777,13 +877,7 @@ impl Screen {
     }
 
     fn ensure_cursor_visible(&mut self) {
-        let width = self
-            .size()
-            .0
-            .saturating_sub(4)
-            .clamp(1, 100)
-            .saturating_sub(5)
-            .max(1);
+        let width = content_width(self.size().0).saturating_sub(5).max(1);
         let total = draft_lines(&self.draft, width).len();
         let visible = total.min(5);
         let row = draft_cursor_position(&self.draft, width, self.draft_cursor).0;
@@ -798,13 +892,7 @@ impl Screen {
     }
 
     fn move_draft(&mut self, key: Navigation) -> io::Result<()> {
-        let width = self
-            .size()
-            .0
-            .saturating_sub(4)
-            .clamp(1, 100)
-            .saturating_sub(5)
-            .max(1);
+        let width = content_width(self.size().0).saturating_sub(5).max(1);
         match key {
             Navigation::Left => {
                 if let Some(ch) = self.draft[..self.draft_cursor].chars().next_back() {
@@ -923,10 +1011,7 @@ impl Screen {
             return self.move_draft(key);
         }
         let (columns, height) = self.size();
-        let layout = draft_lines(
-            &self.draft,
-            columns.saturating_sub(4).clamp(1, 100).saturating_sub(5),
-        );
+        let layout = draft_lines(&self.draft, content_width(columns).saturating_sub(5).max(1));
         let visible = layout.len().min(5);
         let key = match key {
             Navigation::MouseScroll(lines, row)
@@ -1070,6 +1155,7 @@ impl Screen {
                 && self.clipboard.is_none()
                 && pending.is_empty()
                 && queued.is_none()
+                && self.deferred_input.is_empty()
             {
                 // Give already queued typing priority over an update notice.
                 queued = events.try_recv().ok();
@@ -1085,7 +1171,11 @@ impl Screen {
                     }
                 }
             }
-            let byte = match queued.take() {
+            let byte = match queued
+                .take()
+                .or_else(|| self.pending_input.take())
+                .or_else(|| self.deferred_input.pop_front())
+            {
                 Some(byte) => byte,
                 None => {
                     if !self.full && updates.is_none() && self.clipboard.is_none() {
@@ -1191,18 +1281,10 @@ impl Screen {
                     key => self.input_navigation(key)?,
                 },
                 32..=126 | 128..=255 => {
-                    pending.push(byte);
-                    match std::str::from_utf8(&pending) {
-                        Ok(s) => {
-                            self.insert_draft(s);
-                            pending.clear();
-                            self.suggestions_dismissed = false;
-                            self.refresh_suggestions();
-                            self.render()?;
-                        }
-                        Err(error) if error.error_len().is_some() => pending.clear(),
-                        Err(_) => {}
-                    }
+                    self.insert_input_batch(byte, events, &mut pending);
+                    self.suggestions_dismissed = false;
+                    self.refresh_suggestions();
+                    self.render()?;
                 }
                 _ => {}
             }
@@ -1366,12 +1448,9 @@ impl Screen {
         if self.painter.resized((columns, rows)) && !self.secret_input {
             self.ensure_cursor_visible();
         }
-        let width = columns.saturating_sub(4).clamp(1, 100);
+        let width = content_width(columns);
         let left = " ".repeat(columns.saturating_sub(width) / 2);
-        let workspace = env::current_dir()
-            .ok()
-            .and_then(|path| path.file_name().map(|part| clean(&part.to_string_lossy())))
-            .unwrap_or_else(|| "workspace".into());
+        let workspace = &self.workspace;
         let flower = self
             .activity
             .as_ref()
@@ -1379,8 +1458,7 @@ impl Screen {
         let title = clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width);
         let metadata = format!("{}  ·  {}", self.model, self.session);
         let header = clip(&metadata, width);
-        let text = self.rendered_transcript();
-        let lines = markdown::format(&text, width.saturating_sub(3).max(1));
+        let lines = self.transcript_layout(width.saturating_sub(3).max(1));
         let draft_width = width.saturating_sub(5).max(1);
         let draft_rows = if self.modal.is_some() {
             vec![clip("Respond in the dialog above", draft_width)]
@@ -1711,7 +1789,10 @@ impl ScrollDisplay for Screen {
                 activity.flower_frame = (activity.flower_frame + 1) % FLOWERS.len();
                 changed = true;
                 if let Some(index) = self.current_timeline {
-                    changed |= self.timelines[index].advance_explore();
+                    if self.timelines[index].advance_explore() {
+                        self.dirty_transcript();
+                        changed = true;
+                    }
                 }
             }
         }
@@ -1742,6 +1823,7 @@ impl ScrollDisplay for Screen {
             self.input_notice = None;
         }
         if self.full && self.transcript.len() > 256 * 1024 {
+            self.dirty_transcript();
             let excess = self.transcript.len() - 256 * 1024;
             let cut = self.transcript[excess..]
                 .iter()
@@ -1828,17 +1910,10 @@ impl ScrollDisplay for Screen {
                 nav => self.input_navigation(nav)?,
             },
             32..=126 | 128..=255 => {
-                self.active_utf8.push(byte);
-                match std::str::from_utf8(&self.active_utf8) {
-                    Ok(value) => {
-                        let text = value.to_owned();
-                        self.active_utf8.clear();
-                        self.insert_draft(&text);
-                        self.render()?;
-                    }
-                    Err(error) if error.error_len().is_some() => self.active_utf8.clear(),
-                    Err(_) => {}
-                }
+                let mut pending = std::mem::take(&mut self.active_utf8);
+                self.insert_input_batch(byte, events, &mut pending);
+                self.active_utf8 = pending;
+                self.render()?;
             }
             _ => {}
         }
@@ -1918,6 +1993,7 @@ impl ScrollDisplay for Screen {
         };
         let shown = format!("\nyou › {}{image_note}\n", text.trim_start_matches('\n'));
         if self.suspended {
+            self.dirty_transcript();
             self.transcript.extend_from_slice(shown.as_bytes());
         } else {
             self.write_all(shown.as_bytes())?;
@@ -1938,8 +2014,13 @@ impl ScrollDisplay for Screen {
             self.ensure_cursor_visible();
         }
         self.rejected_queued = Some((submission.text, submission.images));
+        let label = if error.contains("uncertain") {
+            "Queued delivery uncertain"
+        } else {
+            "Pi rejected queued message"
+        };
         self.input_notice = Some(format!(
-            "Pi rejected queued message: {} · /restore after run",
+            "{label}: {} · /restore after run",
             crate::pi::error::safe_message(error)
         ));
         self.render()
@@ -2079,32 +2160,8 @@ fn goal_line(width: usize, completed: usize, total: usize) -> String {
 impl Write for Screen {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.full && !self.suspended {
-            let old_lines = if self.scroll > 0 {
-                let width = self
-                    .size()
-                    .0
-                    .saturating_sub(4)
-                    .clamp(1, 100)
-                    .saturating_sub(3)
-                    .max(1);
-                markdown::format(&self.rendered_transcript(), width).len()
-            } else {
-                0
-            };
+            self.dirty_transcript();
             self.transcript.extend_from_slice(buf);
-            if old_lines > 0 {
-                let width = self
-                    .size()
-                    .0
-                    .saturating_sub(4)
-                    .clamp(1, 100)
-                    .saturating_sub(3)
-                    .max(1);
-                let new_lines = markdown::format(&self.rendered_transcript(), width).len();
-                self.scroll = self
-                    .scroll
-                    .saturating_add(new_lines.saturating_sub(old_lines));
-            }
             // Rendering always reflows the visible transcript; bound retained
             // screen text independently of Pi's persistent session history.
             const MAX_TRANSCRIPT: usize = 256 * 1024;
@@ -2301,15 +2358,88 @@ fn draft_lines(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     #[test]
+    fn layout_reuses_rows_for_typing_and_coalesces_scrolled_changes() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.transcript = "hibi › first\nsecond\nthird\n".as_bytes().to_vec();
+        let original = screen.transcript_layout(73);
+        screen.insert_draft("typing does not change transcript");
+        assert!(std::rc::Rc::ptr_eq(
+            &original,
+            &screen.transcript_layout(73)
+        ));
+        screen.scroll = 2;
+        for line in ["fourth\n", "fifth\n"] {
+            screen.dirty_transcript();
+            screen.transcript.extend_from_slice(line.as_bytes());
+        }
+        assert_eq!(screen.scroll, 2, "scroll counting is deferred until layout");
+        assert_eq!(screen.transcript_layout(73).len(), original.len() + 2);
+        assert_eq!(screen.scroll, 4);
+        screen.transcript_layout(73);
+        assert_eq!(screen.scroll, 4, "do not apply an anchor twice");
+        screen.clear_session().unwrap();
+        assert!(screen.transcript_layout(73).is_empty());
+        assert_eq!(screen.scroll, 0);
+    }
+
+    #[test]
+    fn printable_batches_are_bounded_utf8_safe_and_stop_before_control_keys() {
+        let mut screen = Screen::new(false).unwrap();
+        let (send, events) = std::sync::mpsc::channel();
+        let text = "é".repeat(70);
+        for byte in text.as_bytes().iter().skip(1).chain(b"\rMORE") {
+            send.send(*byte).unwrap();
+        }
+        let mut pending = Vec::new();
+        screen.insert_input_batch(text.as_bytes()[0], &events, &mut pending);
+        assert_eq!(screen.draft.chars().count(), 64);
+        screen.insert_input_batch(events.recv().unwrap(), &events, &mut pending);
+        assert_eq!(screen.draft, text);
+        assert!(pending.is_empty());
+        assert_eq!(screen.pending_input.take(), Some(b'\r'));
+        assert_eq!(events.recv().unwrap(), b'M');
+    }
+
+    #[test]
+    fn wide_layout_uses_terminal_width_for_composer_and_cursor() {
+        for (columns, expected) in [(40, 36), (80, 76), (160, 156), (200, 196)] {
+            assert_eq!(content_width(columns), expected);
+        }
+        let draft = "x".repeat(180);
+        assert_eq!(
+            draft_cursor_position(&draft, content_width(200) - 5, draft.len()),
+            (0, 180)
+        );
+        assert!(draft_cursor_position(&draft, content_width(80) - 5, draft.len()).0 > 0);
+    }
+
+    #[test]
+    fn session_scan_typing_replays_before_new_keys_without_auto_submission() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.defer_session_typing(b"old".iter().copied());
+        let (send, events) = std::sync::mpsc::channel();
+        for byte in b" new\r" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(screen.prompt(&events).unwrap().as_deref(), Some("old new"));
+        assert!(screen.deferred_input.is_empty());
+        screen.defer_session_typing(b"stale".iter().copied());
+        screen.clear_session().unwrap();
+        assert!(screen.deferred_input.is_empty());
+    }
+
+    #[test]
     fn new_session_clears_transcript_and_transient_input_but_keeps_model() {
         let mut screen = Screen::new(false).unwrap();
         screen.transcript = b"old conversation".to_vec();
         screen.draft = "old draft".into();
         screen.restore_draft(
             "failed prompt".into(),
-            vec![serde_json::json!({"type":"image"})],
+            vec![Arc::new(serde_json::json!({"type":"image"}))],
         );
-        screen.images.push(serde_json::json!({"type":"image"}));
+        screen
+            .images
+            .push(Arc::new(serde_json::json!({"type":"image"})));
         screen.clipboard_notice = "old clipboard notice".into();
         screen.auth_url = Some("https://example.invalid".into());
         screen.scroll = 20;
@@ -2334,9 +2464,56 @@ mod tests {
     }
 
     #[test]
+    fn rejected_image_is_shared_between_live_draft_and_restore_slot() {
+        let mut screen = Screen::new(false).unwrap();
+        let image: SharedImage = Arc::new(serde_json::json!({
+            "type": "image", "mimeType": "image/png", "data": "x".repeat(1024 * 1024)
+        }));
+        screen
+            .rejected_queue(
+                DraftSubmission {
+                    text: "review".into(),
+                    images: vec![image.clone()],
+                    mode: QueueMode::Steer,
+                },
+                "queue denied",
+            )
+            .unwrap();
+        let (_, saved) = screen.take_rejected_queue().unwrap();
+        assert!(Arc::ptr_eq(&image, &screen.images[0]));
+        assert!(Arc::ptr_eq(&screen.images[0], &saved[0]));
+        // Clearing live input must not discard the recovery copy.
+        screen.clear_images();
+        screen.draft.clear();
+        assert!(screen.images.is_empty());
+        screen.restore_draft("review".into(), saved);
+        let (tx, keys) = std::sync::mpsc::channel();
+        tx.send(b'\r').unwrap();
+        assert_eq!(screen.prompt(&keys).unwrap().as_deref(), Some("review"));
+        assert!(Arc::ptr_eq(&image, &screen.take_images()[0]));
+        // An unrelated draft must not be overwritten by a rejected queue.
+        screen.draft = "newer".into();
+        screen
+            .rejected_queue(
+                DraftSubmission {
+                    text: "old".into(),
+                    images: vec![image.clone()],
+                    mode: QueueMode::FollowUp,
+                },
+                "queue denied",
+            )
+            .unwrap();
+        assert_eq!(screen.draft, "newer");
+        let (_, saved) = screen.take_rejected_queue().unwrap();
+        assert!(Arc::ptr_eq(&image, &saved[0]));
+    }
+
+    #[test]
     fn restored_failed_draft_keeps_images_and_waits_for_explicit_submission() {
         let mut screen = Screen::new(false).unwrap();
-        let images = vec![serde_json::json!({"type":"image","data":"test","mimeType":"image/png"})];
+        let images = vec![Arc::new(
+            serde_json::json!({"type":"image","data":"test","mimeType":"image/png"}),
+        )];
         screen.restore_draft("original\ntext".into(), images.clone());
         let (send, recv) = std::sync::mpsc::channel();
         for byte in b" edited\r" {
@@ -2431,7 +2608,7 @@ mod tests {
         assert!(screen.pending_queue.iter().all(|item| !item.sending));
         let first = DraftSubmission {
             text: "same".into(),
-            images: vec![serde_json::json!({"type":"image"})],
+            images: vec![Arc::new(serde_json::json!({"type":"image"}))],
             mode: QueueMode::Steer,
         };
         screen.queued(&first).unwrap();
@@ -2528,9 +2705,9 @@ mod tests {
         }
         screen.input_navigation(Navigation::Left).unwrap();
         screen.active_key(b'!', &events).unwrap();
-        screen
-            .images
-            .push(serde_json::json!({"type":"image","mimeType":"image/png","data":"test"}));
+        screen.images.push(Arc::new(
+            serde_json::json!({"type":"image","mimeType":"image/png","data":"test"}),
+        ));
         let ActiveAction::Submit(submission) = screen.active_key(17, &events).unwrap() else {
             panic!("Ctrl+Q should queue a follow-up");
         };
@@ -2600,7 +2777,8 @@ mod tests {
     #[test]
     fn attachment_cancellation_limits_and_command_guard_preserve_drafts() {
         let mut screen = Screen::new(false).unwrap();
-        let image = serde_json::json!({"type":"image","mimeType":"image/png","data":"test"});
+        let image =
+            Arc::new(serde_json::json!({"type":"image","mimeType":"image/png","data":"test"}));
         screen.images = vec![image.clone(); 4];
         screen.paste_image().unwrap();
         assert!(screen.clipboard.is_none());

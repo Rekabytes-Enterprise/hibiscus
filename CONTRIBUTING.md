@@ -6,6 +6,30 @@ Thanks for helping improve Hibiscus. Start with the [architecture](docs/architec
 
 Hibiscus owns the Rust CLI, terminal presentation, and Pi RPC integration. Pi owns agent behavior, model metadata, tool execution, authentication, and session persistence. Prefer calling Pi through RPC to reimplementing any of these in Hibiscus. Do not add a second credential store or silently install Pi.
 
+## Fork, branch, and open a pull request
+
+1. On GitHub, **fork** [Rekabytes-Enterprise/hibiscus](https://github.com/Rekabytes-Enterprise/hibiscus) to your account.
+2. Clone **your fork**, add the original repository as `upstream`, and create **your own branch from the latest `dev`** (replace `your-username` and `your-feature`):
+
+   ```sh
+   git clone https://github.com/your-username/hibiscus.git
+   cd hibiscus
+   git remote add upstream https://github.com/Rekabytes-Enterprise/hibiscus.git
+   git fetch upstream dev
+   git switch -c your-feature upstream/dev
+   ```
+
+3. Make a focused change and run the checks below. Commit and push **your branch to your fork**, not to the project's `dev` branch:
+
+   ```sh
+   git add .
+   git commit -m "Describe your change"
+   git push -u origin your-feature
+   ```
+
+   Before `git add .`, check `git status` and exclude credentials, private sessions, and generated files.
+4. On GitHub, open a pull request with **base repository** `Rekabytes-Enterprise/hibiscus`, **base branch** `dev`, and **head branch** `your-username:your-feature`. **Do not target `main`**; CI runs for PRs targeting `dev`. Describe the change, reproduction steps, expected/actual results, and what you tested (including any manual checks or blockers). Address review feedback on the same branch; the PR updates automatically when you push.
+
 ## Making a change
 
 1. Keep the change focused and put it in the relevant `src/chat/`, `src/pi/`, or `src/tui/` module. Update docs when usage, layout, or behavior changes.
@@ -13,9 +37,9 @@ Hibiscus owns the Rust CLI, terminal presentation, and Pi RPC integration. Pi ow
 3. Run:
 
    ```sh
-   cargo fmt --check
-   cargo test
-   cargo clippy --all-targets -- -D warnings
+   cargo fmt --all -- --check
+   cargo test --locked
+   cargo clippy --locked --all-targets -- -D warnings
    ```
 
 4. Pushes and pull requests to `dev` must pass `.github/workflows/ci.yml`: formatting, Clippy with warnings denied, installer checks, and Rust tests on Ubuntu and macOS. If behavior depends on Pi or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.

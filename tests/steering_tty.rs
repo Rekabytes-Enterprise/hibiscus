@@ -115,6 +115,8 @@ while IFS= read -r line; do
     *'"streamingBehavior":"followUp"'*)
      printf '{"type":"response","id":"%s","success":true}\n{"type":"queue_update","steering":["steer one"],"followUp":["later"]}\n' "$id"
      sleep 1
+     # A new queued run after an earlier settlement announces agent_start.
+     if [ "$STEERING_SCENARIO" = early_settled ]; then printf '%s\n' '{"type":"agent_start"}'; fi
      printf '%s\n' '{"type":"queue_update","steering":[],"followUp":["later"]}'
      printf '%s\n' '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"steer one"},{"type":"image","data":"FAKE_PRIVATE_IMAGE","mimeType":"image/png"}]}}'
      printf '%s\n' '{"type":"queue_update","steering":[],"followUp":[]}'

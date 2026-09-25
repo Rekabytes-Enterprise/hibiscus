@@ -58,7 +58,7 @@ impl Terminal {
         let stopped = stop.clone();
         let reader = thread::spawn(move || {
             let mut tty = tty;
-            let mut byte = [0];
+            let mut bytes = [0; 4096];
             while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
                 // SAFETY: fd is owned here and checked against FD_SETSIZE.
                 let ready = unsafe {
@@ -89,12 +89,15 @@ impl Terminal {
                 if stopped.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                match tty.read(&mut byte) {
+                match tty.read(&mut bytes) {
                     Ok(0) => break,
-                    Ok(_) => {
-                        if sender.send(byte[0]).is_err() {
-                            break;
+                    Ok(n) => {
+                        for byte in &bytes[..n] {
+                            if sender.send(*byte).is_err() {
+                                return;
+                            }
                         }
+                        crate::pi::transport::signal_activity();
                     }
                     Err(error)
                         if matches!(

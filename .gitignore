@@ -12,6 +12,9 @@
 .DS_Store
 Thumbs.db
 
+# Python profiling-tool caches
+__pycache__/
+
 # Logs and temporary files
 *.log
 *.tmp
