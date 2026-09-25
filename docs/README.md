@@ -8,5 +8,6 @@
 - [Development](development.md) — build, tests, manual checks, and project records.
 - [Performance review](performance-review.md) — measured bottlenecks, implemented optimizations, repeatable benchmarks, and remaining work.
 - [Memory profiling](memory-profiling.md) — synthetic Linux RSS/heap measurements, isolated test helper, and evidence-based next steps.
+- [Input wake profiling](wake-profiling.md) — quiet-run key-to-output measurements and notification design.
 
 For installation and a quick start, see the repository [README](../README.md). For contribution guidelines, see [CONTRIBUTING.md](../CONTRIBUTING.md).

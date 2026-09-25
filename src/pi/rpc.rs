@@ -1,7 +1,7 @@
 use super::{
     error::{self, ChatError, ErrorSource},
     run::{RunOutcome, RunState},
-    transport::{Events, Inbox, Limits, PipeWriter, WireWrite},
+    transport::{self, Events, Inbox, Limits, PipeWriter, WireWrite},
 };
 use crate::{
     pi::{configure_builtin_tools, dialog::Dialogs},
@@ -417,6 +417,9 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
     let mut next_queue_id = 0;
     let mut queued_count = 0;
     loop {
+        // Capture before polling both sources so a notification arriving
+        // between the polls and sleep cannot be lost.
+        let generation = transport::activity_generation();
         if kind == "prompt" {
             display.tick_work()?;
         }
@@ -448,13 +451,18 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             )
             .into());
         }
-        let event = match output.recv_timeout(std::time::Duration::from_millis(40)) {
+        let event = match output.recv_timeout(std::time::Duration::ZERO) {
             Ok(Ok(event)) => event,
             Ok(Err(error)) => {
                 preserve_uncertain_queue(display, &mut pending_queued)?;
                 return Err(error);
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Timed fallback still drives flower/Explore, elapsed status,
+                // pending text frames and cancellation deadlines.
+                transport::wait_activity(generation, std::time::Duration::from_millis(40));
+                continue;
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 preserve_uncertain_queue(display, &mut pending_queued)?;
                 return Err(error::transport("stream ended before the command completed").into());

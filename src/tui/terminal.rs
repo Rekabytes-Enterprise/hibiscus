@@ -97,6 +97,7 @@ impl Terminal {
                                 return;
                             }
                         }
+                        crate::pi::transport::signal_activity();
                     }
                     Err(error)
                         if matches!(

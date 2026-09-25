@@ -8,10 +8,43 @@ use std::{
     collections::VecDeque,
     io::{self, BufRead, BufReader, Read, Write},
     os::fd::AsRawFd,
-    sync::{mpsc::RecvTimeoutError, Arc, Condvar, Mutex},
+    sync::{mpsc::RecvTimeoutError, Arc, Condvar, Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
+
+// A notification is only a hint to re-poll the queues. Their FIFO/order and
+// completion boundaries remain authoritative. The generation prevents a lost
+// wake between try_recv and waiting. Spurious cross-session wakes are harmless.
+struct ActivityWake {
+    generation: Mutex<u64>,
+    ready: Condvar,
+}
+fn activity_wake() -> &'static ActivityWake {
+    static WAKE: OnceLock<ActivityWake> = OnceLock::new();
+    WAKE.get_or_init(|| ActivityWake {
+        generation: Mutex::new(0),
+        ready: Condvar::new(),
+    })
+}
+pub(crate) fn signal_activity() {
+    let wake = activity_wake();
+    let mut generation = wake.generation.lock().unwrap();
+    *generation = generation.wrapping_add(1);
+    wake.ready.notify_all();
+}
+pub(super) fn activity_generation() -> u64 {
+    *activity_wake().generation.lock().unwrap()
+}
+pub(super) fn wait_activity(since: u64, timeout: Duration) {
+    let wake = activity_wake();
+    let _guard = wake
+        .ready
+        .wait_timeout_while(wake.generation.lock().unwrap(), timeout, |generation| {
+            *generation == since
+        })
+        .unwrap();
+}
 
 const SEND_FAILURE: &str = "Pi RPC stream closed or receive limit/failure interrupted command delivery; outcome is uncertain";
 
@@ -65,6 +98,7 @@ impl Shared {
         state.frames.clear();
         state.bytes = 0;
         self.ready.notify_all();
+        signal_activity();
     }
     fn push(&self, frame: Vec<u8>, limits: Limits) -> bool {
         let mut state = self.state.lock().unwrap();
@@ -84,6 +118,7 @@ impl Shared {
         state.peak_bytes = state.peak_bytes.max(state.bytes);
         state.peak_records = state.peak_records.max(state.frames.len());
         self.ready.notify_one();
+        signal_activity();
         true
     }
 }
@@ -126,6 +161,7 @@ impl Inbox {
                     Ok(None) => {
                         worker.state.lock().unwrap().closed = true;
                         worker.ready.notify_all();
+                        signal_activity();
                         break;
                     }
                     Err(message) => {
@@ -842,6 +878,15 @@ mod tests {
             inbox.recv_timeout(Duration::ZERO),
             Err(RecvTimeoutError::Disconnected)
         ));
+    }
+
+    #[test]
+    fn activity_notification_before_wait_is_not_lost() {
+        let before = activity_generation();
+        signal_activity();
+        let start = Instant::now();
+        wait_activity(before, Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_millis(100));
     }
 
     #[test]

@@ -55,6 +55,6 @@ Orderly shutdown closes stdin, observes receiver failure, and bounds waiting for
 - Esc during a blocked large initial-image send; `/restore` retains the attachment without resending.
 - Esc during a blocked queued-image send; the uncertain queued submission remains reviewable.
 
-The existing steering, settlement, error-recovery, auth-handoff, image and terminal suites remain required. These checks establish their simulated scenarios, not every real provider/event ordering or macOS behavior. Synthetic per-process RSS and allocation measurements are now available in [Memory profiling](memory-profiling.md). Call-stack heap attribution, real-provider memory measurements and a shared wake-driven event loop remain follow-up work.
+The existing steering, settlement, error-recovery, auth-handoff, image and terminal suites remain required. These checks establish their simulated scenarios, not every real provider/event ordering or macOS behavior. Synthetic per-process RSS and allocation measurements are now available in [Memory profiling](memory-profiling.md). Call-stack heap attribution and real-provider memory measurements remain follow-up work. An independent shared wake for input and stdout has been added; see [Input wake profiling](wake-profiling.md).
 
 Reference: Pi 0.87.1 [RPC framing](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md#framing). The installed-version docs were checked; the linked upstream page can evolve.
