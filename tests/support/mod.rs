@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+pub mod screen;
+
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -42,6 +45,10 @@ pub struct Pty {
 
 impl Pty {
     pub fn spawn(command: &mut Command) -> Self {
+        Self::spawn_with_color(command, false)
+    }
+
+    pub fn spawn_with_color(command: &mut Command, color: bool) -> Self {
         let mut master = -1;
         let mut slave = -1;
         let mut size = libc::winsize {
@@ -78,7 +85,13 @@ impl Pty {
         );
         command
             .env("TERM", "xterm-256color")
-            .env("NO_COLOR", "1")
+            .env_remove("HIBISCUS_NO_SYNC_UPDATE");
+        if color {
+            command.env_remove("NO_COLOR");
+        } else {
+            command.env("NO_COLOR", "1");
+        }
+        command
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap()))
             .stderr(Stdio::from(slave));
@@ -124,6 +137,22 @@ impl Pty {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn resize(&mut self, columns: u16, rows: u16) {
+        let size = libc::winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: master is live and ioctl reads the supplied winsize.
+        assert_eq!(
+            unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+            0
+        );
+        self.cursor = self.output.len();
+    }
+
     pub fn send(&mut self, mut bytes: &[u8]) {
         self.pump();
         self.cursor = self.output.len();
@@ -155,6 +184,20 @@ impl Pty {
                 .position(|w| w == text.as_bytes())
             {
                 self.cursor += pos + text.len();
+                return;
+            }
+            // A row-diff frame can update the header before an error/notice
+            // we're awaiting. Search its reconstructed view too, but only if
+            // that complete frame is newer than our input/match cursor.
+            let captured = String::from_utf8_lossy(&self.output);
+            let end = captured
+                .rfind("\x1b[?2026l")
+                .map(|at| at + "\x1b[?2026l".len());
+            if end.is_some_and(|end| end > self.cursor)
+                && screen::snapshots(&captured)
+                    .last()
+                    .is_some_and(|view| view.contains(text))
+            {
                 return;
             }
             if let Some(status) = self.child.try_wait().unwrap() {

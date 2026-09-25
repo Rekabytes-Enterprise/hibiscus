@@ -18,7 +18,55 @@ export function reasonFor(command) {
 
 export default function (pi) {
   const grants = new Set();
-  pi.on('session_start', () => grants.clear());
+  let steps = [];
+  pi.on('session_start', (_event, ctx) => {
+    grants.clear();
+    steps = [];
+    // Pi's branch is authoritative when a session is resumed or switched.
+    for (const entry of ctx.sessionManager.getBranch()) {
+      const message = entry.type === 'message' ? entry.message : undefined;
+      const snapshot = message?.role === 'toolResult' && message.toolName === 'goal'
+        ? message.details?.hibiscusGoal : undefined;
+      if (Array.isArray(snapshot?.steps)) steps = snapshot.steps;
+    }
+  });
+  pi.registerTool({
+    name: 'goal', label: 'Goal',
+    description: 'Track a task with an explicit numbered checklist. Set the complete list before work; mark a step done only after it is actually finished. Do not infer progress from tool calls. Use clear to remove the checklist.',
+    parameters: {
+      type: 'object', properties: {
+        action: { type: 'string', enum: ['set', 'complete', 'clear'] },
+        steps: { type: 'array', items: { type: 'string' }, description: 'Full checklist for set, 1–50 distinct steps' },
+        id: { type: 'integer', description: 'One-based step number to complete' },
+      }, required: ['action'], additionalProperties: false,
+    },
+    async execute(_id, params) {
+      let error;
+      if (params.action === 'set') {
+        if (!Array.isArray(params.steps) || !params.steps.length || params.steps.length > 50 ||
+          params.steps.some(s => typeof s !== 'string' || !s.trim() || s.length > 200)) {
+          error = 'Set requires 1–50 named steps (max 200 characters each).';
+        } else {
+          steps = params.steps.map(label => ({ label, done: false }));
+        }
+      } else if (params.action === 'complete') {
+        if (!Number.isInteger(params.id) || params.id < 1 || params.id > steps.length) {
+          error = 'Step number not in the current checklist.';
+        } else if (steps[params.id - 1].done) {
+          error = 'Step already complete.';
+        } else {
+          steps = steps.map((step, index) => index === params.id - 1 ? { ...step, done: true } : step);
+        }
+      } else if (params.action === 'clear') {
+        steps = [];
+      } else {
+        error = 'Unknown goal action.';
+      }
+      const completed = steps.filter(step => step.done).length;
+      return { content: [{ type: 'text', text: error ?? `Goal: ${completed}/${steps.length} steps completed.` }],
+        details: { hibiscusGoal: { steps: steps.map(step => ({ ...step })), completed, total: steps.length, ...(error ? { error } : {}) } } };
+    },
+  });
   pi.on('tool_call', async (event, ctx) => {
     if (event.toolName !== 'bash') return;
     const command = event.input?.command;

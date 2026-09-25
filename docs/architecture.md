@@ -14,7 +14,7 @@ src/
     sessions.rs      Pi session discovery, picker fallback, recent-history display
   pi/
     mod.rs           Pi integration and explicit approval-extension staging
-    approval.mjs     Pre-execution bash tool-call approval policy
+    approval.mjs     Pre-execution bash approval and explicit goal checklist tool
     rpc.rs           Child process, JSONL transport, events, interrupts, progress
     error.rs         Typed errors, recovery disposition, safe presentation
     run.rs           Final run outcome across Pi retries and compaction
@@ -25,15 +25,18 @@ src/
     dialog.rs        Pi extension UI requests and responses
   tui/
     mod.rs           Terminal UI modules
-    screen.rs        Alternate-screen renderer, composer, menus, activity
+    screen.rs        Alternate-screen view, composer, menus, frame scheduling
+    paint.rs         Cached row-diff output, synchronized frames, cursor state
+    activity.rs      Mutable display-only grouped tool/think timeline
     clipboard.rs     Bounded, cancellable local clipboard image reads
     terminal.rs      /dev/tty raw mode and input reader
     picker.rs        Shared bounded picker/scroll state
+    modal.rs         Shared panel chrome, dialog focus/input/details and deadlines
     markdown.rs      Display-only Markdown and edit-diff formatting
     ui.rs            Labels/help and line-mode presentation
 ```
 
-`tests/` contains mock Pi subprocess and PTY integration tests; unit tests live alongside the modules they cover. The split keeps chat workflows separate from Pi protocol handling and terminal rendering.
+`tests/` contains mock Pi subprocess and PTY integration tests; unit tests live alongside the modules they cover. The split keeps chat workflows separate from Pi protocol handling and terminal rendering. `modal.rs` renders the common panel used by model/session pickers and Pi dialogs. `Dialogs` asks the `ScrollDisplay` interface for a full-screen dialog response before falling back to line-mode terminal prompts; Screen owns modal focus and never mixes raw approval output with its composer.
 
 ## RPC data flow
 
@@ -44,7 +47,7 @@ terminal input → chat commands → Pi RPC stdin (JSONL)
 Pi stderr → diagnostics (never parsed as protocol records)
 ```
 
-`pi/rpc.rs` assigns IDs to commands and matches their `response` records. A successful `prompt` response means **accepted**, not finished. It continues reading events through `agent_settled`; `agent_end` alone is not sufficient because Pi can retry or perform follow-up work. Records are framed by LF, not Unicode line separators. During a run, Esc sends `clear_queue` followed by `abort` and waits for their responses and settlement without discarding the RPC child.
+`pi/rpc.rs` assigns IDs to commands and matches their `response` records. During full-screen runs it polls composer input alongside Pi stdout, sending additional prompts with explicit `streamingBehavior: "steer"` or `"followUp"`, distinct IDs, and optional images. Their responses acknowledge acceptance only. Pi's `queue_update` supplies queue counts and pending-message text, which Hibiscus docks above the composer (Waiting, then Sending if dequeued before delivery). The accepted message is not appended to chat until Pi emits `message_start` with `role: user`; skip the initial prompt's already-rendered user event. Since Pi queue events have no per-message IDs, match equal text by queue order and retain in-transit entries until delivery, cancellation, or settlement. Unsent or rejected drafts are preserved without overriding newer typing, and local slash commands are blocked during runs. A successful `prompt` response means **accepted**, not finished. It continues reading events through `agent_settled`; `agent_end` alone is not sufficient because Pi can retry or perform follow-up work. Records are framed by LF, not Unicode line separators. During a run, Esc sends `clear_queue` followed by `abort` and waits for their responses and settlement without discarding the RPC child.
 
 Pi events supply progress and tool activity. Hibiscus correlates `tool_execution_start` and `tool_execution_end` by `toolCallId`. Successful built-in `edit` results may include `result.details.diff`; the UI displays a bounded preview of that authoritative diff, not a re-created diff or an inferred write. The display never prints raw reasoning deltas or full tool results by default.
 

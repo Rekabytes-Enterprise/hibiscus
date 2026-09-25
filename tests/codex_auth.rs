@@ -180,7 +180,9 @@ export class ModelRuntime {
         let launch = fs::read_to_string(pi_log).unwrap();
         let extension = launch
             .trim()
-            .strip_prefix("--mode rpc --no-extensions --tools read,bash,edit,write --extension ")
+            .strip_prefix(
+                "--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension ",
+            )
             .unwrap()
             .to_owned();
         assert!(extension.ends_with("/approval.mjs"));
@@ -267,7 +269,9 @@ export class ModelRuntime {
     assert_eq!(log.lines().count(), 2, "{log}");
     let base = log.lines().next().unwrap();
     assert!(
-        base.starts_with("--mode rpc --no-extensions --tools read,bash,edit,write --extension "),
+        base.starts_with(
+            "--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension "
+        ),
         "{log}"
     );
     assert!(base.ends_with("/approval.mjs"), "{log}");

@@ -12,7 +12,8 @@ for (const command of ['ls -la', 'cargo test', 'rg pattern src', 'git status', '
 }
 
 const handlers = {};
-approve({ on(name, fn) { handlers[name] = fn; } });
+const tools = {};
+approve({ on(name, fn) { handlers[name] = fn; }, registerTool(tool) { tools[tool.name] = tool; } });
 let asks = 0;
 let response;
 const ctx = {
@@ -48,7 +49,7 @@ ctx.cwd = '/workspace/first';
 event.input.command = 'rm -rf other';
 assert.equal((await request()).block, true, 'different command requires approval');
 event.input.command = 'rm -rf build';
-handlers.session_start();
+handlers.session_start({}, { sessionManager: { getBranch() { return []; } } });
 assert.equal((await request()).block, true, 'new session clears grants');
 ctx.hasUI = false;
 assert.equal((await request()).block, true, 'headless denies');
@@ -65,4 +66,18 @@ assert.equal(await request(), undefined, 'safe bash stays frictionless');
 ctx.ui.select = () => { throw Error('UI failed'); };
 event.input.command = 'rm -rf build';
 assert.equal((await request()).block, true, 'UI errors fail closed');
-console.log('approval policy tests passed');
+assert.equal(tools.goal.parameters.properties.action.type, 'string');
+const steps = Array.from({ length: 20 }, (_, i) => `Step ${i+1}`);
+const set = await tools.goal.execute('g1', { action: 'set', steps });
+assert.equal(set.details.hibiscusGoal.total, 20);
+let latest;
+for (let id = 1; id <= 12; id++) latest = await tools.goal.execute(`g${id+1}`, { action: 'complete', id });
+assert.equal(latest.details.hibiscusGoal.completed, 12);
+assert.equal((await tools.goal.execute('bad', { action: 'complete', id: 12 })).details.hibiscusGoal.error, 'Step already complete.');
+assert.equal((await tools.goal.execute('bad', { action: 'complete', id: 21 })).details.hibiscusGoal.completed, 12);
+handlers.session_start({}, { sessionManager: { getBranch() { return [{type:'message',message:{role:'toolResult',toolName:'goal',details: latest.details}}]; } } });
+assert.equal((await tools.goal.execute('next', { action: 'complete', id: 13 })).details.hibiscusGoal.completed, 13);
+handlers.session_start({}, { sessionManager: { getBranch() { return []; } } });
+assert.equal((await tools.goal.execute('empty', { action: 'complete', id: 1 })).details.hibiscusGoal.total, 0);
+assert.equal((await tools.goal.execute('clear', { action: 'clear' })).details.hibiscusGoal.total, 0);
+console.log('approval and explicit goal policy tests passed');

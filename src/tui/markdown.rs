@@ -228,6 +228,7 @@ pub(crate) fn format(text: &str, width: usize) -> Vec<Row> {
                 } else if trimmed.starts_with("· ✗") {
                     Tone::Error
                 } else if trimmed.starts_with("· reasoning")
+                    || trimmed.starts_with("· ◌")
                     || trimmed.starts_with("· ↳")
                     || trimmed.starts_with("· diff · ")
                 {
