@@ -1983,8 +1983,13 @@ impl ScrollDisplay for Screen {
             self.ensure_cursor_visible();
         }
         self.rejected_queued = Some((submission.text, submission.images));
+        let label = if error.contains("uncertain") {
+            "Queued delivery uncertain"
+        } else {
+            "Pi rejected queued message"
+        };
         self.input_notice = Some(format!(
-            "Pi rejected queued message: {} · /restore after run",
+            "{label}: {} · /restore after run",
             crate::pi::error::safe_message(error)
         ));
         self.render()

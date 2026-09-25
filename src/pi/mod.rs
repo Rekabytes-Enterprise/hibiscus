@@ -4,6 +4,7 @@ pub(crate) mod error;
 pub(crate) mod logout;
 pub(crate) mod rpc;
 mod run;
+mod transport;
 
 use std::{fs, io, os::unix::fs::DirBuilderExt, path::PathBuf, sync::OnceLock};
 

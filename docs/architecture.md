@@ -21,7 +21,8 @@ src/
   pi/
     mod.rs           Pi integration and explicit approval-extension staging
     approval.mjs     Pre-execution bash approval and explicit goal checklist tool
-    rpc.rs           Child process, JSONL transport, events, interrupts, progress
+    rpc.rs           Child lifecycle, correlated RPC events, interrupts, progress
+    transport.rs     Bounded raw inbox, nonblocking writes, deadlines and metrics
     error.rs         Typed errors, recovery disposition, safe presentation
     run.rs           Final run outcome across Pi retries and compaction
     auth.rs          Codex SDK helper discovery and OAuth UI bridge
@@ -58,6 +59,8 @@ A typical full-screen chat follows this path:
 6. On exit or handoff to Pi's TUI, Hibiscus restores terminal state and closes/reopens RPC children deliberately to avoid concurrent session writers.
 
 One-shot and piped modes use the same Pi RPC boundary but avoid the full-screen UI so stdout remains script-friendly.
+
+The RPC transport now uses a bounded raw-record inbox and nonblocking, deadline-controlled stdin writes in `src/pi/transport.rs`. Overload invalidates the connection explicitly rather than blocking the reader or silently dropping events. See [RPC transport limits](rpc-transport.md) for budgets, partial-send cancellation and recovery semantics.
 
 ## RPC data flow
 

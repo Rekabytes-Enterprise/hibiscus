@@ -2,30 +2,32 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — performance checkpoint, 2026-09-25 (UTC)
+## Snapshot — RPC dev push preparation, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: `0.1.7`; last pushed commit: `8616a00`. Pending local changes add the standard MIT license (`LICENSE`, `Cargo.toml` metadata, README link), owner attribution and a fork → feature branch from upstream `dev` → PR to `dev` walkthrough in `CONTRIBUTING.md`, plus a clearer `docs/architecture.md` overview/codebase map/runtime flow/change guide. The user identifies Hibiscus as a Reka Bytes project. Public `https://reka-bytes.my/about` identifies the trading name as Reka Bytes and the Malaysian business name as Rekabytes Enterprise, registration 202503277241 (IP0614333-M). These pages do not independently establish chain of title to Hibiscus. Standard MIT allows commercial use and resale. The user requested a local checkpoint commit before continuing RPC backpressure work, not a push.
-- Implemented locally: linear slice-based Markdown wrapping and failed-link search handling, direct character cells, cached completed transcript blocks/scroll row counts, bounded printable-input batching/chunked terminal reads, cached workspace text, bounded/expiring session metadata, borrowed image command serialization, moved response data, reusable RPC line buffers, and move-only clipboard base64 insertion. `docs/performance-review.md` records before/after evidence and remaining work. Prior licensing/contribution changes remain intact; the checkpoint has no version bump or release tag. Consult Git for its commit identifier.
+- Branch: `dev`; manifest version: `0.1.7`. Performance/license/contribution/architecture checkpoint: **`7c0f5e8`**. The user authorized proceeding with the proposed RPC commit/dev push and CI verification. Source fingerprint was rechecked against the tested snapshot below; use Git for the RPC commit identifier. No version bump or release tag is part of this task.
+- The checkpoint contains Markdown/layout/input/session-cache optimizations, lower-copy image/RPC serialization, benchmarks, MIT attribution and the contribution guide targeting `dev`. Those changes remain intact. `docs/performance-review.md` records their before/after evidence.
 - Added `benches/{formatter,allocations,session_list}.rs` and `tests/performance_tty.rs`, plus unit regressions. On the original local synthetic PTY harness, a 521-byte paste into a 256 KiB transcript changed from 2.3 s to 0.31 ms; the committed PTY harness reports about 10 ms including driver polling. These timings are host-specific; no real provider/session data or physical-terminal presentation was tested.
-- Deliberately deferred: 40 ms RPC wait/event-loop redesign, inbound queue backpressure/partial JSON decoding, background session scans, and remaining rejected-draft copies. No peak-RSS/backlog profile or duplex stress proof was obtained; blindly blocking the RPC reader risks cancellation/pipe deadlocks. First session listing still scans files synchronously. No sampling profiler was used (`perf` was unavailable).
-- The preceding macOS clipboard-fixture correction is pushed, but a macOS CI rerun has not been checked; no claim of macOS or real-provider verification follows from the Linux checks below.
-- The supplied macOS 0.1.7 CI log passes 80 unit tests and the preceding integration suites, then fails seven of eight steering cases while waiting for an image attachment. `tests/steering_tty.rs` mocked only `wl-paste`, whereas the compiled macOS backend in `src/tui/clipboard.rs` selects `osascript` first and ignores Wayland environment settings. The tests fell through to the runner clipboard instead of their image fixture; the no-image result precedes steering submission.
-- The pushed fixture now shadows all four platform reader names and logs helper invocations. A regression checks each fake reader's bytes/type-list response; steering cases assert the host's expected mock reader was used. **A macOS CI rerun is still required**. This fixture correction does not establish real macOS clipboard or provider support. Published releases/remaining CI jobs were not verified.
-- The user reports that the current work is working and authorized the next RPC-backpressure phase. No platform/build-specific reproduction details were supplied, so this does not close every outstanding verification item.
+- New `src/pi/transport.rs`: byte/count-bounded raw-record inbox, bounded record assembly, lazy consumer-side JSON parsing, explicit overload invalidation, nonblocking/deadline-controlled writes, and opt-in high-water counters. Defaults are 64 MiB allocated queued capacity and 4,096 records; limits are configurable. This is **fail-fast overload protection**, not transparent flow control or a total RSS cap. It intentionally avoids blocking the stdout reader on a full queue.
+- Initial/queued sends service keys/ticks; Esc on a partial record disconnects with uncertain delivery rather than corrupting JSONL with an appended abort. Failed sends and the newest unacknowledged queued draft are reviewable without automatic replay. Shutdown waits are bounded. `docs/rpc-transport.md` documents configuration, trade-offs and recovery.
+- New evidence: seven transport tests (including slow FIFO consumption, byte/count/capacity caps, no-LF limits, blocked-write deadlines/callback cancellation and a duplex stdout-flood/stdin-block scenario) plus three PTY pressure tests (modal fail-closed approval/reconnect, blocked initial image send, blocked queued image send). Counter checks stayed within their test budgets; the duplex fixture peaked at 264 queued bytes/eight records before explicit failure. These are synthetic scenarios, not real-provider load or total-RSS measurements.
+- Still deferred: the 40 ms shared event-loop wake-up redesign, partial JSON decoding, background session scans and remaining rejected-draft copies. First session listing still scans files synchronously. No sampling/peak-RSS profiler or real macOS/provider verification was performed.
+- Verified GitHub CI run [36140379851](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36140379851) for `8616a00`: Ubuntu, macOS 14, and lint/installer jobs succeeded. This closes the reported macOS clipboard-fixture CI failure at that commit, not real desktop support. **CI for the newer performance/RPC changes is pending this push.** Published releases were not verified.
+- The user reports completing the suggested manual checks with everything working. No platform/build-specific reproduction details were supplied, so this is positive user evidence, not closure of every outstanding verification item.
 - Earlier user confirmations: WSL Alt+V image paste and Ctrl+Enter multiline input worked on earlier builds. They do not validate this newer worktree. The user's installed binary was not matched to this source snapshot.
 
 ## Latest automated evidence
 
-The full checks below were rerun on Linux after the performance changes, against the source/test/benchmark fingerprint below. Full release-mode Rust testing was not performed; the targeted release PTY regression and benchmarks were run.
+The full checks below were rerun on Linux after the RPC changes, against the source/test/benchmark fingerprint below. Full release-mode Rust testing was not performed; both targeted release PTY suites and the benchmarks were run.
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Pass: 88 unit + 74 integration tests. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
+| `cargo test --locked` | Pass: 95 unit + 77 integration tests. Includes mock Pi/SDK subprocesses and PTY scenarios; not a real-provider acceptance test. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
 | `cargo build --release --locked` | Pass during implementation; the final release binary was also built by the targeted release PTY test. |
 | `cargo bench --locked --bench formatter --bench allocations --bench session_list` | Pass; reports timings/allocation calls, no absolute timing CI gates. |
-| `cargo test --locked --release --test performance_tty -- --nocapture` | Pass; exact pasted text and batched-frame regression. |
+| `cargo test --locked --release --test rpc_pressure --test performance_tty` | Pass: four tests for pressure/cancellation and exact pasted text/batched frames. |
+| `HIBISCUS_RPC_METRICS=1 cargo test --locked --bin hibiscus pi::transport::tests -- --nocapture` | Pass: seven synthetic transport tests; counters only, not an RSS profile. |
 | `node tests/approval.mjs` | Pass for the fake extension harness's policy/checklist cases, not arbitrary shell safety. |
 | `node --check src/pi/approval.mjs` and `src/pi/logout.mjs` | Pass; syntax only. |
 | `sh tests/install.sh` and `sh tests/bump-version.sh` | Pass with mocked downloads/sandbox fixtures; no real installation or release. |
@@ -33,7 +35,7 @@ The full checks below were rerun on Linux after the performance changes, against
 
 Environment: Cargo 1.98.1, Node v24.21.0; `pi --version` reports 0.87.1. No macOS rerun of these changes or real terminal visual check was performed here.
 
-Source/test/benchmark fingerprint: `01e5fe725e6a020f00c0abfb60d499478c11529898725e6e899fbcb9276bcb44`.
+Source/test/benchmark fingerprint: `4afeadac802408402bd6fe993476636f79b76a043731ae351ee735a75f335340`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`, `benches/`. Records/docs are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
 
 ## User-reported issues: candidates implemented, real-use closure pending
@@ -63,10 +65,10 @@ Also pending: inline `/logout` against an intentionally selected account, the cu
 
 ## Next actions, in order
 
-1. Rerun macOS CI with the corrected fixture; confirm all steering cases and the subsequent suites finish. Do not label the macOS failure resolved until that result is available.
+1. Verify Linux/macOS CI for the RPC dev push. The older clipboard-fixture CI failure is verified resolved at `8616a00`; keep that distinct from validation of newer changes. Test real workloads/default limits before any release.
 2. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
 3. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
 4. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.
-5. Before publishing, verify the intended version-matching commit, supported-platform CI and release artifacts. No release tag/version bump is part of the pending documentation/licensing work or performance implementation.
+5. Before publishing, verify the intended version-matching commit, supported-platform CI and release artifacts. No release tag/version bump is part of the checkpoint or current RPC work.
 
 Details live in `docs/terminal.md`, `docs/error-handling.md`, `docs/architecture.md`, and the named tests. Those documents describe intended/current implementation; they are not additional proof that a reported bug is resolved.

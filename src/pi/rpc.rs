@@ -1,6 +1,7 @@
 use super::{
     error::{self, ChatError, ErrorSource},
     run::{RunOutcome, RunState},
+    transport::{Events, Inbox, Limits, PipeWriter, WireWrite},
 };
 use crate::{
     pi::{configure_builtin_tools, dialog::Dialogs},
@@ -31,8 +32,8 @@ pub(crate) enum SessionStart {
 
 pub(crate) struct Rpc {
     child: Child,
-    input: Option<ChildStdin>,
-    output: Receiver<Result<Value>>,
+    input: Option<PipeWriter<ChildStdin>>,
+    output: Inbox,
     diagnostics: Option<JoinHandle<io::Result<u64>>>,
     next_id: u64,
     resume: SessionStart,
@@ -41,6 +42,7 @@ pub(crate) struct Rpc {
 
 impl Rpc {
     pub(crate) fn start(start: SessionStart) -> Result<Self> {
+        let limits = Limits::from_env()?;
         let pi = env::var("HIBISCUS_PI").unwrap_or_else(|_| "pi".to_owned());
         let mut command = Command::new(&pi);
         command.args(["--mode", "rpc"]);
@@ -71,25 +73,15 @@ impl Rpc {
             })?;
         let input = child.stdin.take().ok_or("pi stdin unavailable")?;
         let stdout = child.stdout.take().ok_or("pi stdout unavailable")?;
-        let (sender, output) = mpsc::channel();
-        thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-            loop {
-                match read_record_into(&mut reader, &mut line) {
-                    Ok(Some(event)) => {
-                        if sender.send(Ok(event)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(error) => {
-                        let _ = sender.send(Err(error));
-                        break;
-                    }
-                }
+        let output = Inbox::start(stdout, limits);
+        let input = match output.writer(input) {
+            Ok(input) => input,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error::transport(error).into());
             }
-        });
+        };
         let stderr = child.stderr.take().ok_or("pi stderr unavailable")?;
         let diagnostics =
             thread::spawn(move || io::copy(&mut BufReader::new(stderr), &mut io::stderr()));
@@ -131,23 +123,32 @@ impl Rpc {
         if kind == "prompt" {
             display.expect_initial_user(command["message"].as_str().unwrap_or(""));
         }
-        write_command(input, &command, images)?;
-
         if kind == "prompt" {
             display.start_work()?;
+            display.set_work("Sending prompt…")?;
         }
-        let mut result = exchange(
-            input,
-            &self.output,
-            display,
-            fallback,
-            dialogs,
-            events,
-            &id,
-            &kind,
-            raw,
-            interactive,
+        let sending = write_command(
+            &mut input.checked(|| service_sending(display, events, kind == "prompt")),
+            &command,
+            images,
         );
+        let mut result = sending.and_then(|()| {
+            if kind == "prompt" {
+                display.set_work("Working…")?;
+            }
+            exchange(
+                input,
+                &self.output,
+                display,
+                fallback,
+                dialogs,
+                events,
+                &id,
+                &kind,
+                raw,
+                interactive,
+            )
+        });
         if let Err(error) = &mut result {
             if let Some(error) = error.downcast_mut::<ChatError>() {
                 error.command_id = Some(id);
@@ -264,7 +265,7 @@ impl Rpc {
     pub(crate) fn disconnect(&mut self) {
         let was_open = self.input.take().is_some();
         self.disconnected = true;
-        if was_open {
+        if was_open || matches!(self.child.try_wait(), Ok(None)) {
             // SAFETY: this child was started in its own process group. Kill
             // before reaping so surviving tools cannot write the old session.
             unsafe {
@@ -287,16 +288,47 @@ impl Rpc {
         Ok(())
     }
 
+    fn wait_for_shutdown(&mut self) -> Result<std::process::ExitStatus> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if self.output.failed() || Instant::now() >= deadline {
+                self.disconnect();
+                return Err(error::transport(
+                    "Pi RPC failed or timed out during shutdown; outcome is uncertain",
+                )
+                .into());
+            }
+            if let Some(status) = self.child.try_wait().map_err(error::transport)? {
+                if self
+                    .diagnostics
+                    .as_ref()
+                    .is_none_or(|reader| reader.is_finished())
+                    && self.output.closed_cleanly()
+                {
+                    if let Some(reader) = self.diagnostics.take() {
+                        let _ = reader.join();
+                    }
+                    return Ok(status);
+                }
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     /// Stop the idle RPC child before another Pi process opens its session.
     pub(crate) fn close(&mut self) -> Result<()> {
+        if self.output.failed() {
+            self.disconnect();
+            return Err(error::transport(
+                "Pi RPC receive failure; connection outcome is uncertain",
+            )
+            .into());
+        }
         if self.input.is_none() {
             return Ok(());
         }
         drop(self.input.take());
-        let status = self.child.wait()?;
-        if let Some(reader) = self.diagnostics.take() {
-            let _ = reader.join();
-        }
+        let status = self.wait_for_shutdown()?;
         if !status.success() {
             return Err(format!("pi exited with {status}").into());
         }
@@ -322,15 +354,18 @@ impl Rpc {
             self.disconnect();
             return outcome;
         }
+        if self.output.failed() {
+            self.disconnect();
+            return outcome.and_then(|()| {
+                Err(error::transport("Pi RPC connection failed; outcome is uncertain").into())
+            });
+        }
         if outcome.is_err() {
             self.disconnect();
             return outcome;
         }
         drop(self.input.take());
-        let status = self.child.wait()?;
-        if let Some(reader) = self.diagnostics.take() {
-            let _ = reader.join();
-        }
+        let status = self.wait_for_shutdown()?;
         outcome?;
         if !status.success() {
             return Err(format!("pi exited with {status}").into());
@@ -349,8 +384,8 @@ impl Drop for Rpc {
 
 #[allow(clippy::too_many_arguments)] // Pi RPC and terminal streams must remain independent.
 fn exchange<F: BufRead, W: ScrollDisplay>(
-    input: &mut impl Write,
-    output: &Receiver<Result<Value>>,
+    input: &mut impl WireWrite,
+    output: &impl Events,
     display: &mut W,
     fallback: &mut F,
     dialogs: &mut Dialogs,
@@ -411,13 +446,21 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             .into());
         }
         let event = match output.recv_timeout(std::time::Duration::from_millis(40)) {
-            Ok(event) => event?,
+            Ok(Ok(event)) => event,
+            Ok(Err(error)) => {
+                preserve_uncertain_queue(display, &mut pending_queued)?;
+                return Err(error);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(error::transport("stream ended before the command completed").into())
+                preserve_uncertain_queue(display, &mut pending_queued)?;
+                return Err(error::transport("stream ended before the command completed").into());
             }
         };
-        check_record(&event)?;
+        if let Err(error) = check_record(&event) {
+            preserve_uncertain_queue(display, &mut pending_queued)?;
+            return Err(error);
+        }
         run.observe(&event);
         if kind == "prompt" && event["type"] == "response" {
             if let Some(queued) = event["id"]
@@ -720,6 +763,30 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
     }
 }
 
+fn preserve_uncertain_queue(
+    display: &mut impl ScrollDisplay,
+    pending: &mut HashMap<String, DraftSubmission>,
+) -> io::Result<()> {
+    // Recovery has one explicit /restore slot. Keep the newest unacknowledged
+    // submission, without replaying it or overwriting newer live typing.
+    let latest = pending
+        .keys()
+        .max_by_key(|id| {
+            id.rsplit('-')
+                .next()
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0)
+        })
+        .cloned();
+    if let Some(submission) = latest.and_then(|id| pending.remove(&id)) {
+        display.rejected_queue(
+            submission,
+            "Delivery uncertain: RPC connection failed; check history before resending",
+        )?;
+    }
+    Ok(())
+}
+
 fn show_reasoning<W: ScrollDisplay>(
     ui: &Ui,
     display: &mut W,
@@ -794,7 +861,7 @@ fn tool_label(name: &str, args: &Value) -> String {
 
 #[allow(clippy::too_many_arguments)]
 fn maybe_interrupt(
-    input: &mut impl Write,
+    input: &mut impl WireWrite,
     display: &mut impl ScrollDisplay,
     events: Option<&Receiver<u8>>,
     kind: &str,
@@ -840,7 +907,7 @@ fn maybe_interrupt(
 
 #[allow(clippy::too_many_arguments)] // Pi stdin, terminal events and correlated queue state are independent.
 fn poll_live_input(
-    input: &mut impl Write,
+    input: &mut impl WireWrite,
     display: &mut impl ScrollDisplay,
     events: &Receiver<u8>,
     id: &str,
@@ -875,7 +942,17 @@ fn poll_live_input(
                     QueueMode::FollowUp => "followUp",
                 };
                 let command = json!({"id":queue_id,"type":"prompt","message":&submission.text,"streamingBehavior":behavior});
-                write_command(input, &command, &submission.images)?;
+                if let Err(error) = write_command(
+                    &mut input.checked(|| service_sending(display, Some(events), true)),
+                    &command,
+                    &submission.images,
+                ) {
+                    display.rejected_queue(
+                        submission,
+                        "Delivery uncertain: sending failed; check history before resending",
+                    )?;
+                    return Err(error);
+                }
                 pending.insert(queue_id, submission);
             }
         }
@@ -898,7 +975,7 @@ fn active_keys(events: &Receiver<u8>, display: &mut impl ScrollDisplay) -> Resul
     Ok(false)
 }
 
-fn receive_record(output: &Receiver<Result<Value>>, deadline: Instant) -> Result<Option<Value>> {
+fn receive_record(output: &impl Events, deadline: Instant) -> Result<Option<Value>> {
     if Instant::now() >= deadline {
         return Err(error::transport(
             "Pi command response timed out; connection state is uncertain",
@@ -917,23 +994,53 @@ fn receive_record(output: &Receiver<Result<Value>>, deadline: Instant) -> Result
 
 #[cfg(test)]
 fn read_record<R: BufRead>(output: &mut R) -> Result<Option<Value>> {
-    read_record_into(output, &mut String::new())
+    super::transport::read_frame(output, 64 * 1024 * 1024)
+        .map_err(error::transport)?
+        .map(|frame| {
+            serde_json::from_slice(&frame)
+                .map_err(|_| error::protocol("Invalid Pi RPC JSON record").into())
+        })
+        .transpose()
 }
 
-fn read_record_into<R: BufRead>(output: &mut R, line: &mut String) -> Result<Option<Value>> {
-    // Reuse ordinary event buffers, but don't retain a giant history/image
-    // response's allocation for the remainder of the session.
-    if line.capacity() > 1024 * 1024 {
-        *line = String::new();
+// A partially sent JSONL record cannot be followed by an abort command without
+// corrupting framing. Esc while sending invalidates the connection instead.
+fn service_sending(
+    display: &mut impl ScrollDisplay,
+    events: Option<&Receiver<u8>>,
+    prompt: bool,
+) -> io::Result<()> {
+    if !prompt {
+        return Ok(());
+    }
+    display.tick_work()?;
+    let Some(events) = events else {
+        return Ok(());
+    };
+    let stopped = if display.live_input() {
+        let mut stopped = false;
+        for _ in 0..8 {
+            let Some(byte) = display.pending_key().or_else(|| events.try_recv().ok()) else {
+                break;
+            };
+            match display.active_key(byte, events).map_err(io::Error::other)? {
+                ActiveAction::Stop => {
+                    stopped = true;
+                    break;
+                }
+                ActiveAction::Submit(submission) => display.hold_queue(submission)?,
+                ActiveAction::None => {}
+            }
+        }
+        stopped
     } else {
-        line.clear();
+        active_keys(events, display).map_err(io::Error::other)?
+    };
+    if stopped {
+        Err(io::Error::other("Stopped while sending RPC command; delivery is uncertain. Reconnect and review before resending"))
+    } else {
+        Ok(())
     }
-    if output.read_line(line).map_err(error::transport)? == 0 {
-        return Ok(None);
-    }
-    let event = serde_json::from_str(line.trim_end_matches(['\r', '\n']))
-        .map_err(|_| error::protocol("Invalid Pi RPC JSON record"))?;
-    Ok(Some(event))
 }
 
 /// Serialize borrowed attachments rather than cloning base64 into another
@@ -1036,6 +1143,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn newest_unacknowledged_queue_is_preserved_for_explicit_review() {
+        let mut screen = crate::tui::screen::Screen::new(false).unwrap();
+        let mut pending = HashMap::new();
+        for n in [2, 10] {
+            pending.insert(
+                format!("hibiscus-1-queued-{n}"),
+                DraftSubmission {
+                    text: format!("draft {n}"),
+                    images: vec![json!({"type":"image","data":"synthetic"})],
+                    mode: QueueMode::Steer,
+                },
+            );
+        }
+        preserve_uncertain_queue(&mut screen, &mut pending).unwrap();
+        let (text, images) = screen.take_rejected_queue().unwrap();
+        assert_eq!(text, "draft 10");
+        assert_eq!(images[0]["data"], "synthetic");
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
     fn borrowed_images_serialize_as_one_jsonl_record_and_preserve_originals() {
         let command = json!({"id":"request","type":"prompt","message":"line one\nline two"});
         let images =
@@ -1078,25 +1206,6 @@ mod tests {
             write_command(&mut writer, &json!({"type":"prompt","message":"test"}), &[]).is_err()
         );
         assert_eq!(writer.0, 1, "never implicitly retry a buffered RPC command");
-    }
-
-    #[test]
-    fn record_buffer_is_reused_without_retaining_giant_responses() {
-        let mut wire = b"{\"type\":\"a\"}\n{\"type\":\"b\"}\n".as_slice();
-        let mut buffer = String::with_capacity(8192);
-        let pointer = buffer.as_ptr();
-        assert_eq!(
-            read_record_into(&mut wire, &mut buffer).unwrap().unwrap()["type"],
-            "a"
-        );
-        assert_eq!(
-            read_record_into(&mut wire, &mut buffer).unwrap().unwrap()["type"],
-            "b"
-        );
-        assert_eq!(buffer.as_ptr(), pointer);
-        buffer.reserve(2 * 1024 * 1024);
-        assert!(read_record_into(&mut wire, &mut buffer).unwrap().is_none());
-        assert!(buffer.capacity() <= 8192);
     }
 
     #[test]

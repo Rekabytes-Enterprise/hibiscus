@@ -41,7 +41,9 @@ The committed session benchmark measured 200 unchanged files at **0.385 ms** on 
 
 ### Deliberately not changed yet
 
-The 40 ms RPC polling wait, unbounded inbound event channel, full incoming JSON deserialization, and remaining rejected-draft image copies are unchanged. No peak-RSS/backlog profile or duplex-pipe stress proof was obtained. A blocking bounded queue or a new event-loop architecture should not be introduced solely to mark a checklist complete: they can obstruct cancellation or deadlock while sending a large prompt. Background session refresh and broader frame-buffer/LTO tuning also remain candidates, not completed optimizations. Pi/provider speed and real-terminal cursor presentation are not established by these results.
+The 40 ms RPC polling wait/shared wake-driven event loop, partial JSON decoding, remaining rejected-draft image copies, background session refresh and broader frame-buffer/LTO tuning remain candidates.
+
+A subsequent local RPC phase replaces the unbounded parsed-event channel with a byte/count-bounded raw inbox, consumer-side parsing, explicit overload failure, nonblocking/deadline-controlled writes, and responsive partial-send cancellation. It adds duplex/slow-consumer/modal pressure regressions and opt-in queue high-water metrics. This is fail-fast overload protection, not a blocking bounded channel or a total process-memory cap. See [RPC transport](rpc-transport.md) for configuration, recovery, coverage and limits. Peak-RSS profiling, real-provider load tests and real-terminal presentation verification are still outstanding.
 
 ## Scope and evidence
 

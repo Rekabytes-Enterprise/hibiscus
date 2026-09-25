@@ -11,11 +11,12 @@ All notable changes to Hibiscus are documented here.
 
 ### Changed
 
+- Bound RPC wire-record/backlog memory and record counts with explicit overload failure, nonblocking/deadline-controlled writes, partial-send cancellation and reviewable uncertain queued drafts. Add synthetic duplex/overload regressions and opt-in queue metrics.
 - Cache transcript layout independently of terminal row painting, reuse completed message blocks, and coalesce scrolled row counting.
 - Batch available printable input and read terminal bytes in chunks without changing control-key or UTF-8 handling.
 - Avoid per-character Markdown string allocations, repeated front-shifting during wrapping, and repeated failed link searches.
 - Cache unchanged session metadata with bounded memory, file-identity checks, invalidation and periodic expiry.
-- Borrow images during RPC serialization, move response data/base64 buffers, and reuse ordinary incoming line buffers. Buffered output errors do not implicitly retry commands.
+- Borrow images during RPC serialization, move response data/base64 buffers, and queue compact raw incoming records for consumer-side parsing. Buffered output errors do not implicitly retry commands.
 
 ## [0.1.7] - 2026-09-25
 
