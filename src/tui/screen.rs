@@ -198,6 +198,13 @@ const FLOWERS: [&str; 4] = ["✿", "❀", "✾", "❁"];
 // screen; never change the terminal's configured background with OSC 11.
 const BASE_BACKGROUND: &str = "\x1b[48;2;48;10;36m";
 
+// Keep two columns on either side, including on wide/ultrawide terminals.
+// A single source of truth keeps Markdown, composer movement, modals and
+// cursor placement aligned when the terminal is resized.
+fn content_width(columns: usize) -> usize {
+    columns.saturating_sub(4).max(1)
+}
+
 fn paint_background(frame: &str, color: bool) -> String {
     if color {
         // The theme's accent and Markdown renderers reset foreground styles.
@@ -870,13 +877,7 @@ impl Screen {
     }
 
     fn ensure_cursor_visible(&mut self) {
-        let width = self
-            .size()
-            .0
-            .saturating_sub(4)
-            .clamp(1, 100)
-            .saturating_sub(5)
-            .max(1);
+        let width = content_width(self.size().0).saturating_sub(5).max(1);
         let total = draft_lines(&self.draft, width).len();
         let visible = total.min(5);
         let row = draft_cursor_position(&self.draft, width, self.draft_cursor).0;
@@ -891,13 +892,7 @@ impl Screen {
     }
 
     fn move_draft(&mut self, key: Navigation) -> io::Result<()> {
-        let width = self
-            .size()
-            .0
-            .saturating_sub(4)
-            .clamp(1, 100)
-            .saturating_sub(5)
-            .max(1);
+        let width = content_width(self.size().0).saturating_sub(5).max(1);
         match key {
             Navigation::Left => {
                 if let Some(ch) = self.draft[..self.draft_cursor].chars().next_back() {
@@ -1016,10 +1011,7 @@ impl Screen {
             return self.move_draft(key);
         }
         let (columns, height) = self.size();
-        let layout = draft_lines(
-            &self.draft,
-            columns.saturating_sub(4).clamp(1, 100).saturating_sub(5),
-        );
+        let layout = draft_lines(&self.draft, content_width(columns).saturating_sub(5).max(1));
         let visible = layout.len().min(5);
         let key = match key {
             Navigation::MouseScroll(lines, row)
@@ -1456,7 +1448,7 @@ impl Screen {
         if self.painter.resized((columns, rows)) && !self.secret_input {
             self.ensure_cursor_visible();
         }
-        let width = columns.saturating_sub(4).clamp(1, 100);
+        let width = content_width(columns);
         let left = " ".repeat(columns.saturating_sub(width) / 2);
         let workspace = &self.workspace;
         let flower = self
@@ -2406,6 +2398,19 @@ mod tests {
         assert!(pending.is_empty());
         assert_eq!(screen.pending_input.take(), Some(b'\r'));
         assert_eq!(events.recv().unwrap(), b'M');
+    }
+
+    #[test]
+    fn wide_layout_uses_terminal_width_for_composer_and_cursor() {
+        for (columns, expected) in [(40, 36), (80, 76), (160, 156), (200, 196)] {
+            assert_eq!(content_width(columns), expected);
+        }
+        let draft = "x".repeat(180);
+        assert_eq!(
+            draft_cursor_position(&draft, content_width(200) - 5, draft.len()),
+            (0, 180)
+        );
+        assert!(draft_cursor_position(&draft, content_width(80) - 5, draft.len()).0 > 0);
     }
 
     #[test]
