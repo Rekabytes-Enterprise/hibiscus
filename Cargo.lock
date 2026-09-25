@@ -7,6 +7,7 @@ name = "hibiscus"
 version = "0.1.7"
 dependencies = [
  "libc",
+ "serde",
  "serde_json",
 ]
 

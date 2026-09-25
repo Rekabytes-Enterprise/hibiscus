@@ -289,6 +289,7 @@ fn chat<R: BufRead>(
                 "/new" => {
                     rpc.command(
                         json!({"type": "new_session"}),
+                        &[],
                         output,
                         input,
                         dialogs,
@@ -426,12 +427,10 @@ fn chat<R: BufRead>(
                 }
                 _ => {
                     submitted = true;
-                    let mut command = json!({"type":"prompt", "message":message});
-                    if !images.is_empty() {
-                        command["images"] = json!(images);
-                    }
+                    let command = json!({"type":"prompt", "message":message});
                     rpc.command(
                         command,
+                        &images,
                         output,
                         input,
                         dialogs,

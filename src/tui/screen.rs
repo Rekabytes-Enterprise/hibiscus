@@ -227,6 +227,10 @@ pub(crate) struct Screen {
     last_paint: Option<Instant>,
     paint_pending: bool,
     transcript: Vec<u8>,
+    layout: markdown::Layout,
+    layout_dirty: bool,
+    scroll_anchor: Option<usize>,
+    workspace: String,
     draft: String,
     draft_cursor: usize,
     preferred_column: Option<usize>,
@@ -276,6 +280,13 @@ impl Screen {
             last_paint: None,
             paint_pending: false,
             transcript: Vec::new(),
+            layout: markdown::Layout::default(),
+            layout_dirty: true,
+            scroll_anchor: None,
+            workspace: env::current_dir()
+                .ok()
+                .and_then(|path| path.file_name().map(|part| clean(&part.to_string_lossy())))
+                .unwrap_or_else(|| "workspace".into()),
             draft: String::new(),
             draft_cursor: 0,
             preferred_column: None,
@@ -412,6 +423,7 @@ impl Screen {
         self.preferred_column = None;
         self.suggestions = None;
         if self.full {
+            self.dirty_transcript();
             while self.transcript.last() == Some(&b'\n') {
                 self.transcript.pop();
             }
@@ -435,6 +447,7 @@ impl Screen {
     /// Reset only the local view after Pi has created a new session. Persisted
     /// history belongs to Pi and is not deleted by clearing the screen.
     pub(crate) fn clear_session(&mut self) -> io::Result<()> {
+        self.dirty_transcript();
         self.transcript.clear();
         self.draft.clear();
         self.draft_cursor = 0;
@@ -503,6 +516,28 @@ impl Screen {
         }
     }
 
+    fn dirty_transcript(&mut self) {
+        if self.scroll > 0 && self.scroll_anchor.is_none() {
+            self.scroll_anchor = Some(self.layout.len());
+        }
+        self.layout_dirty = true;
+    }
+
+    fn transcript_layout(&mut self, width: usize) -> std::rc::Rc<Vec<std::rc::Rc<markdown::Row>>> {
+        if self.layout_dirty || self.layout.width() != width {
+            self.layout.update(&self.rendered_transcript(), width);
+            self.layout_dirty = false;
+            if let Some(before) = self.scroll_anchor.take() {
+                if self.scroll > 0 {
+                    self.scroll = self
+                        .scroll
+                        .saturating_add(self.layout.len().saturating_sub(before));
+                }
+            }
+        }
+        self.layout.rows()
+    }
+
     fn rendered_transcript(&self) -> String {
         let mut text = strip_ansi(&String::from_utf8_lossy(&self.transcript));
         for (index, timeline) in self.timelines.iter().enumerate() {
@@ -515,6 +550,9 @@ impl Screen {
     }
 
     fn freeze_timeline(&mut self) {
+        if !self.timelines.is_empty() {
+            self.dirty_transcript();
+        }
         if let Some(index) = self.current_timeline {
             self.timelines[index].finish();
         }
@@ -530,12 +568,7 @@ impl Screen {
         if !self.full {
             return Ok(());
         }
-        let width = self.size().0.saturating_sub(7).clamp(1, 97);
-        let before = if self.scroll > 0 {
-            markdown::format(&self.rendered_transcript(), width).len()
-        } else {
-            0
-        };
+        self.dirty_transcript();
         let index = match self.current_timeline {
             Some(index) => index,
             None => {
@@ -551,10 +584,6 @@ impl Screen {
             self.transcript
                 .extend_from_slice(format!("\n· __hibiscus_activity_{index}__\n").as_bytes());
             self.timeline_marked = true;
-        }
-        if before > 0 {
-            let after = markdown::format(&self.rendered_transcript(), width).len();
-            self.scroll = self.scroll.saturating_add(after.saturating_sub(before));
         }
         self.render()
     }
@@ -766,6 +795,36 @@ impl Screen {
             let rows = self.size().1.saturating_sub(12).clamp(1, 5);
             Some(Picker::new("Commands".into(), items, None, rows))
         };
+    }
+
+    // Only batch already available printable bytes. Control/escape sequences
+    // stay ordered and are handled by the existing input state machine.
+    fn insert_input_batch(&mut self, first: u8, events: &Receiver<u8>, pending: &mut Vec<u8>) {
+        let mut text = String::new();
+        for index in 0..128 {
+            let byte = if index == 0 {
+                first
+            } else {
+                let Ok(byte) = events.try_recv() else { break };
+                if !matches!(byte, 32..=126 | 128..=255) {
+                    self.pending_input = Some(byte);
+                    break;
+                }
+                byte
+            };
+            pending.push(byte);
+            match std::str::from_utf8(pending) {
+                Ok(value) => {
+                    text.push_str(value);
+                    pending.clear();
+                }
+                Err(error) if error.error_len().is_some() => pending.clear(),
+                Err(_) => {}
+            }
+        }
+        if !text.is_empty() {
+            self.insert_draft(&text);
+        }
     }
 
     fn insert_draft(&mut self, text: &str) {
@@ -1085,7 +1144,7 @@ impl Screen {
                     }
                 }
             }
-            let byte = match queued.take() {
+            let byte = match queued.take().or_else(|| self.pending_input.take()) {
                 Some(byte) => byte,
                 None => {
                     if !self.full && updates.is_none() && self.clipboard.is_none() {
@@ -1191,18 +1250,10 @@ impl Screen {
                     key => self.input_navigation(key)?,
                 },
                 32..=126 | 128..=255 => {
-                    pending.push(byte);
-                    match std::str::from_utf8(&pending) {
-                        Ok(s) => {
-                            self.insert_draft(s);
-                            pending.clear();
-                            self.suggestions_dismissed = false;
-                            self.refresh_suggestions();
-                            self.render()?;
-                        }
-                        Err(error) if error.error_len().is_some() => pending.clear(),
-                        Err(_) => {}
-                    }
+                    self.insert_input_batch(byte, events, &mut pending);
+                    self.suggestions_dismissed = false;
+                    self.refresh_suggestions();
+                    self.render()?;
                 }
                 _ => {}
             }
@@ -1368,10 +1419,7 @@ impl Screen {
         }
         let width = columns.saturating_sub(4).clamp(1, 100);
         let left = " ".repeat(columns.saturating_sub(width) / 2);
-        let workspace = env::current_dir()
-            .ok()
-            .and_then(|path| path.file_name().map(|part| clean(&part.to_string_lossy())))
-            .unwrap_or_else(|| "workspace".into());
+        let workspace = &self.workspace;
         let flower = self
             .activity
             .as_ref()
@@ -1379,8 +1427,7 @@ impl Screen {
         let title = clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width);
         let metadata = format!("{}  ·  {}", self.model, self.session);
         let header = clip(&metadata, width);
-        let text = self.rendered_transcript();
-        let lines = markdown::format(&text, width.saturating_sub(3).max(1));
+        let lines = self.transcript_layout(width.saturating_sub(3).max(1));
         let draft_width = width.saturating_sub(5).max(1);
         let draft_rows = if self.modal.is_some() {
             vec![clip("Respond in the dialog above", draft_width)]
@@ -1711,7 +1758,10 @@ impl ScrollDisplay for Screen {
                 activity.flower_frame = (activity.flower_frame + 1) % FLOWERS.len();
                 changed = true;
                 if let Some(index) = self.current_timeline {
-                    changed |= self.timelines[index].advance_explore();
+                    if self.timelines[index].advance_explore() {
+                        self.dirty_transcript();
+                        changed = true;
+                    }
                 }
             }
         }
@@ -1742,6 +1792,7 @@ impl ScrollDisplay for Screen {
             self.input_notice = None;
         }
         if self.full && self.transcript.len() > 256 * 1024 {
+            self.dirty_transcript();
             let excess = self.transcript.len() - 256 * 1024;
             let cut = self.transcript[excess..]
                 .iter()
@@ -1828,17 +1879,10 @@ impl ScrollDisplay for Screen {
                 nav => self.input_navigation(nav)?,
             },
             32..=126 | 128..=255 => {
-                self.active_utf8.push(byte);
-                match std::str::from_utf8(&self.active_utf8) {
-                    Ok(value) => {
-                        let text = value.to_owned();
-                        self.active_utf8.clear();
-                        self.insert_draft(&text);
-                        self.render()?;
-                    }
-                    Err(error) if error.error_len().is_some() => self.active_utf8.clear(),
-                    Err(_) => {}
-                }
+                let mut pending = std::mem::take(&mut self.active_utf8);
+                self.insert_input_batch(byte, events, &mut pending);
+                self.active_utf8 = pending;
+                self.render()?;
             }
             _ => {}
         }
@@ -1918,6 +1962,7 @@ impl ScrollDisplay for Screen {
         };
         let shown = format!("\nyou › {}{image_note}\n", text.trim_start_matches('\n'));
         if self.suspended {
+            self.dirty_transcript();
             self.transcript.extend_from_slice(shown.as_bytes());
         } else {
             self.write_all(shown.as_bytes())?;
@@ -2079,32 +2124,8 @@ fn goal_line(width: usize, completed: usize, total: usize) -> String {
 impl Write for Screen {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.full && !self.suspended {
-            let old_lines = if self.scroll > 0 {
-                let width = self
-                    .size()
-                    .0
-                    .saturating_sub(4)
-                    .clamp(1, 100)
-                    .saturating_sub(3)
-                    .max(1);
-                markdown::format(&self.rendered_transcript(), width).len()
-            } else {
-                0
-            };
+            self.dirty_transcript();
             self.transcript.extend_from_slice(buf);
-            if old_lines > 0 {
-                let width = self
-                    .size()
-                    .0
-                    .saturating_sub(4)
-                    .clamp(1, 100)
-                    .saturating_sub(3)
-                    .max(1);
-                let new_lines = markdown::format(&self.rendered_transcript(), width).len();
-                self.scroll = self
-                    .scroll
-                    .saturating_add(new_lines.saturating_sub(old_lines));
-            }
             // Rendering always reflows the visible transcript; bound retained
             // screen text independently of Pi's persistent session history.
             const MAX_TRANSCRIPT: usize = 256 * 1024;
@@ -2300,6 +2321,49 @@ fn draft_lines(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn layout_reuses_rows_for_typing_and_coalesces_scrolled_changes() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.transcript = "hibi › first\nsecond\nthird\n".as_bytes().to_vec();
+        let original = screen.transcript_layout(73);
+        screen.insert_draft("typing does not change transcript");
+        assert!(std::rc::Rc::ptr_eq(
+            &original,
+            &screen.transcript_layout(73)
+        ));
+        screen.scroll = 2;
+        for line in ["fourth\n", "fifth\n"] {
+            screen.dirty_transcript();
+            screen.transcript.extend_from_slice(line.as_bytes());
+        }
+        assert_eq!(screen.scroll, 2, "scroll counting is deferred until layout");
+        assert_eq!(screen.transcript_layout(73).len(), original.len() + 2);
+        assert_eq!(screen.scroll, 4);
+        screen.transcript_layout(73);
+        assert_eq!(screen.scroll, 4, "do not apply an anchor twice");
+        screen.clear_session().unwrap();
+        assert!(screen.transcript_layout(73).is_empty());
+        assert_eq!(screen.scroll, 0);
+    }
+
+    #[test]
+    fn printable_batches_are_bounded_utf8_safe_and_stop_before_control_keys() {
+        let mut screen = Screen::new(false).unwrap();
+        let (send, events) = std::sync::mpsc::channel();
+        let text = "é".repeat(70);
+        for byte in text.as_bytes().iter().skip(1).chain(b"\rMORE") {
+            send.send(*byte).unwrap();
+        }
+        let mut pending = Vec::new();
+        screen.insert_input_batch(text.as_bytes()[0], &events, &mut pending);
+        assert_eq!(screen.draft.chars().count(), 64);
+        screen.insert_input_batch(events.recv().unwrap(), &events, &mut pending);
+        assert_eq!(screen.draft, text);
+        assert!(pending.is_empty());
+        assert_eq!(screen.pending_input.take(), Some(b'\r'));
+        assert_eq!(events.recv().unwrap(), b'M');
+    }
+
     #[test]
     fn new_session_clears_transcript_and_transient_input_but_keeps_model() {
         let mut screen = Screen::new(false).unwrap();

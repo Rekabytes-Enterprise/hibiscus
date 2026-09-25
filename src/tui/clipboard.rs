@@ -164,7 +164,11 @@ fn image_content(bytes: &[u8]) -> Result<Value, String> {
     } else {
         return Err("Clipboard does not contain a PNG, JPEG, GIF, or WebP image".into());
     };
-    Ok(json!({"type":"image", "mimeType":mime, "data":super::screen::base64(bytes)}))
+    let mut image = json!({"type":"image", "mimeType":mime});
+    // Move the encoded buffer into the value; json!(base64(bytes)) serializes
+    // the temporary String by reference and allocates another full copy.
+    image["data"] = Value::String(super::screen::base64(bytes));
+    Ok(image)
 }
 
 fn capture(

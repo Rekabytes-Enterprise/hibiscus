@@ -21,7 +21,8 @@
   <a href="#made-for-the-terminal">Features</a> ·
   <a href="#your-everyday-commands">Commands</a> ·
   <a href="docs/README.md">Documentation</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="LICENSE">MIT license</a>
 </p>
 
 <p align="center">
@@ -141,7 +142,7 @@ cargo test --locked
 cargo install --path .
 ```
 
-On Ubuntu/WSL, the linker prerequisite is `sudo apt install build-essential`. Source builds require Pi separately; the prebuilt installer handles Pi installation for you.
+On Ubuntu/WSL, the linker prerequisite is `sudo apt install build-essential`. Source builds require Pi separately; the prebuilt installer handles Pi installation for you. To contribute, [fork the repository, branch from `dev`, and open a PR targeting `dev`](CONTRIBUTING.md#fork-branch-and-open-a-pull-request), not `main`.
 
 | Explore | |
 | :--- | :--- |
@@ -150,7 +151,12 @@ On Ubuntu/WSL, the linker prerequisite is `sudo apt install build-essential`. So
 | [Terminal guide](docs/terminal.md) | Input, images, sessions, authentication, and compatibility |
 | [Architecture](docs/architecture.md) | The Rust modules and Pi RPC boundary |
 | [Development](docs/development.md) | Tests and manual verification |
-| [Contributing](CONTRIBUTING.md) | Help improve Hibiscus |
+| [Contributing](CONTRIBUTING.md) | Fork, branch, and submit a PR to `dev` |
+| [MIT license](LICENSE) | Use, modify, redistribute, and sell copies under the MIT terms |
+
+## Ownership and license
+
+Hibiscus is a project of [Reka Bytes](https://reka-bytes.my/), the trading name of **Rekabytes Enterprise** (registration **202503277241 (IP0614333-M)**), based in Kuala Lumpur, Malaysia. Hibiscus is released under the [MIT license](LICENSE); this permits commercial use and resale when its notice is retained.
 
 <p align="center">
   <img src="docs/assets/hibiscus.svg" width="32" height="32" alt=""><br>

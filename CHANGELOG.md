@@ -2,6 +2,21 @@
 
 All notable changes to Hibiscus are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Standard MIT license with Rekabytes Enterprise attribution and a fork/feature-branch contribution guide targeting `dev`.
+- Repeatable formatter, allocation and session-list benchmarks, plus a large-history paste regression and performance review.
+
+### Changed
+
+- Cache transcript layout independently of terminal row painting, reuse completed message blocks, and coalesce scrolled row counting.
+- Batch available printable input and read terminal bytes in chunks without changing control-key or UTF-8 handling.
+- Avoid per-character Markdown string allocations, repeated front-shifting during wrapping, and repeated failed link searches.
+- Cache unchanged session metadata with bounded memory, file-identity checks, invalidation and periodic expiry.
+- Borrow images during RPC serialization, move response data/base64 buffers, and reuse ordinary incoming line buffers. Buffered output errors do not implicitly retry commands.
+
 ## [0.1.7] - 2026-09-25
 
 ### Added

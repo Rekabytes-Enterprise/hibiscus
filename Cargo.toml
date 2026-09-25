@@ -3,10 +3,24 @@ name = "hibiscus"
 version = "0.1.7"
 edition = "2021"
 description = "A Rust CLI for the Pi agent over RPC"
+license = "MIT"
 
 [dependencies]
+serde = "1"
 serde_json = "1"
 libc = "0.2"
 
 [dev-dependencies]
 # Integration tests use only the standard library.
+
+[[bench]]
+name = "formatter"
+harness = false
+
+[[bench]]
+name = "session_list"
+harness = false
+
+[[bench]]
+name = "allocations"
+harness = false

@@ -74,8 +74,9 @@ impl Rpc {
         let (sender, output) = mpsc::channel();
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
             loop {
-                match read_record(&mut reader) {
+                match read_record_into(&mut reader, &mut line) {
                     Ok(Some(event)) => {
                         if sender.send(Ok(event)).is_err() {
                             break;
@@ -107,6 +108,7 @@ impl Rpc {
     pub(crate) fn command<R: BufRead, W: ScrollDisplay>(
         &mut self,
         command: Value,
+        images: &[Value],
         display: &mut W,
         fallback: &mut R,
         dialogs: &mut Dialogs,
@@ -129,8 +131,7 @@ impl Rpc {
         if kind == "prompt" {
             display.expect_initial_user(command["message"].as_str().unwrap_or(""));
         }
-        writeln!(input, "{command}").map_err(error::transport)?;
-        input.flush().map_err(error::transport)?;
+        write_command(input, &command, images)?;
 
         if kind == "prompt" {
             display.start_work()?;
@@ -174,6 +175,7 @@ impl Rpc {
     ) -> Result<()> {
         self.command(
             json!({"type": "prompt", "message": message}),
+            &[],
             display,
             fallback,
             dialogs,
@@ -210,7 +212,7 @@ impl Rpc {
         writer.flush().map_err(error::transport)?;
         let mut deadline = Instant::now() + std::time::Duration::from_secs(30);
         loop {
-            let record = receive_record(&self.output, deadline)?
+            let mut record = receive_record(&self.output, deadline)?
                 .ok_or_else(|| error::transport("stream ended before the command completed"))?;
             check_record(&record)?;
             if record["type"] == "response" && record["id"] == id {
@@ -232,7 +234,7 @@ impl Rpc {
                         .map(|path| SessionStart::Selected(path.into()))
                         .unwrap_or(SessionStart::New);
                 }
-                return Ok(record["data"].clone());
+                return Ok(record.get_mut("data").map_or(Value::Null, Value::take));
             }
             dialogs.handle(
                 self.input.as_mut().ok_or("pi stdin unavailable")?,
@@ -848,7 +850,8 @@ fn poll_live_input(
     sequence: &mut u64,
 ) -> Result<bool> {
     // Bound input work so a fast paste cannot starve Pi stdout or the spinner.
-    for _ in 0..128 {
+    // Each printable action may consume up to 128 already queued bytes.
+    for _ in 0..8 {
         let byte = match display.pending_key().or_else(|| events.try_recv().ok()) {
             Some(byte) => byte,
             None => break,
@@ -871,12 +874,8 @@ fn poll_live_input(
                     QueueMode::Steer => "steer",
                     QueueMode::FollowUp => "followUp",
                 };
-                let mut command = json!({"id":queue_id,"type":"prompt","message":&submission.text,"streamingBehavior":behavior});
-                if !submission.images.is_empty() {
-                    command["images"] = json!(&submission.images);
-                }
-                writeln!(input, "{command}").map_err(error::transport)?;
-                input.flush().map_err(error::transport)?;
+                let command = json!({"id":queue_id,"type":"prompt","message":&submission.text,"streamingBehavior":behavior});
+                write_command(input, &command, &submission.images)?;
                 pending.insert(queue_id, submission);
             }
         }
@@ -916,14 +915,66 @@ fn receive_record(output: &Receiver<Result<Value>>, deadline: Instant) -> Result
     }
 }
 
+#[cfg(test)]
 fn read_record<R: BufRead>(output: &mut R) -> Result<Option<Value>> {
-    let mut line = String::new();
-    if output.read_line(&mut line).map_err(error::transport)? == 0 {
+    read_record_into(output, &mut String::new())
+}
+
+fn read_record_into<R: BufRead>(output: &mut R, line: &mut String) -> Result<Option<Value>> {
+    // Reuse ordinary event buffers, but don't retain a giant history/image
+    // response's allocation for the remainder of the session.
+    if line.capacity() > 1024 * 1024 {
+        *line = String::new();
+    } else {
+        line.clear();
+    }
+    if output.read_line(line).map_err(error::transport)? == 0 {
         return Ok(None);
     }
     let event = serde_json::from_str(line.trim_end_matches(['\r', '\n']))
         .map_err(|_| error::protocol("Invalid Pi RPC JSON record"))?;
     Ok(Some(event))
+}
+
+/// Serialize borrowed attachments rather than cloning base64 into another
+/// Value. Buffer small JSON fragments, then flush exactly one LF-framed command.
+fn write_command(input: &mut impl Write, command: &Value, images: &[Value]) -> Result<()> {
+    struct Envelope<'a> {
+        command: &'a Value,
+        images: &'a [Value],
+    }
+    impl serde::Serialize for Envelope<'_> {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::{Error, SerializeMap};
+            let fields = self
+                .command
+                .as_object()
+                .ok_or_else(|| S::Error::custom("command must be an object"))?;
+            let mut map = serializer.serialize_map(None)?;
+            for (key, value) in fields {
+                map.serialize_entry(key, value)?;
+            }
+            if !self.images.is_empty() {
+                map.serialize_entry("images", self.images)?;
+            }
+            map.end()
+        }
+    }
+    let mut writer = std::io::BufWriter::new(input);
+    let result = (|| {
+        serde_json::to_writer(&mut writer, &Envelope { command, images })
+            .map_err(error::transport)?;
+        writer.write_all(b"\n").map_err(error::transport)?;
+        writer.flush().map_err(error::transport)?;
+        Ok(())
+    })();
+    // BufWriter's Drop otherwise retries a failed flush. Once command delivery
+    // is uncertain, only the caller's explicit recovery may send more bytes.
+    let _ = writer.into_parts();
+    result
 }
 
 fn finish_turn<W: Write>(
@@ -983,6 +1034,71 @@ fn check_record(event: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_images_serialize_as_one_jsonl_record_and_preserve_originals() {
+        let command = json!({"id":"request","type":"prompt","message":"line one\nline two"});
+        let images =
+            vec![json!({"type":"image","mimeType":"image/png","data":"a".repeat(1024 * 1024)})];
+        let pointer = images[0]["data"].as_str().unwrap().as_ptr();
+        let mut wire = Vec::new();
+        write_command(&mut wire, &command, &images).unwrap();
+        assert_eq!(wire.iter().filter(|&&byte| byte == b'\n').count(), 1);
+        let decoded: Value = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(decoded["images"], json!(images));
+        assert_eq!(decoded["message"], command["message"]);
+        assert_eq!(images[0]["data"].as_str().unwrap().as_ptr(), pointer);
+        assert!(command.get("images").is_none());
+        wire.clear();
+        write_command(&mut wire, &command, &[]).unwrap();
+        assert!(serde_json::from_slice::<Value>(&wire)
+            .unwrap()
+            .get("images")
+            .is_none());
+    }
+
+    #[test]
+    fn buffered_command_does_not_retry_a_failed_write_on_drop() {
+        struct FailsOnce(usize);
+        impl Write for FailsOnce {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0 += 1;
+                if self.0 == 1 {
+                    Err(io::Error::other("uncertain write"))
+                } else {
+                    Ok(bytes.len())
+                }
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut writer = FailsOnce(0);
+        assert!(
+            write_command(&mut writer, &json!({"type":"prompt","message":"test"}), &[]).is_err()
+        );
+        assert_eq!(writer.0, 1, "never implicitly retry a buffered RPC command");
+    }
+
+    #[test]
+    fn record_buffer_is_reused_without_retaining_giant_responses() {
+        let mut wire = b"{\"type\":\"a\"}\n{\"type\":\"b\"}\n".as_slice();
+        let mut buffer = String::with_capacity(8192);
+        let pointer = buffer.as_ptr();
+        assert_eq!(
+            read_record_into(&mut wire, &mut buffer).unwrap().unwrap()["type"],
+            "a"
+        );
+        assert_eq!(
+            read_record_into(&mut wire, &mut buffer).unwrap().unwrap()["type"],
+            "b"
+        );
+        assert_eq!(buffer.as_ptr(), pointer);
+        buffer.reserve(2 * 1024 * 1024);
+        assert!(read_record_into(&mut wire, &mut buffer).unwrap().is_none());
+        assert!(buffer.capacity() <= 8192);
+    }
+
     #[test]
     fn edit_preview_uses_result_details_and_limits_output() {
         let diff = (0..45)
