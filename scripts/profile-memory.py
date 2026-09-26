@@ -89,7 +89,9 @@ def mock_backend():
     for line in sys.stdin.buffer:  # bytes iteration splits on LF, not Unicode separators
         command = json.loads(line)
         kind = command["type"]
-        if kind in ("get_state", "new_session"):
+        if kind == "get_session_stats":
+            send({"type": "response", "id": command["id"], "success": True, "data": {}})
+        elif kind in ("get_state", "new_session"):
             data = {}
             if kind == "get_state":
                 state_count += 1

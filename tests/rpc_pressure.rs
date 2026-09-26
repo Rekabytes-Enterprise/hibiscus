@@ -32,9 +32,12 @@ const reader = require('node:readline').createInterface({input:process.stdin});
 reader.on('line', line => {
  const c = JSON.parse(line);
  fs.appendFileSync(process.env.PRESSURE_LOG, line+'\n');
- if(c.type === 'get_state') {
+ if(c.type === 'get_session_stats') {
   console.log(JSON.stringify({type:'response',id:c.id,success:true,data:{}}));
   if(process.env.PRESSURE_QUEUED !== '1') { reader.pause(); setInterval(() => {}, 1000); }
+ }
+ else if(c.type === 'get_state') {
+  console.log(JSON.stringify({type:'response',id:c.id,success:true,data:{}}));
  } else if(c.type === 'prompt') {
   console.log(JSON.stringify({type:'response',id:c.id,success:true}));
   console.log(JSON.stringify({type:'message_update',assistantMessageEvent:{type:'thinking_start'}}));
@@ -86,7 +89,7 @@ reader.on('line', line => {
     let log = fs::read_to_string(root.join("commands")).unwrap();
     assert_eq!(
         log.lines().count(),
-        if queued { 2 } else { 1 },
+        if queued { 3 } else { 2 },
         "no completed prompt, abort appended to a partial record, or automatic replay"
     );
     assert!(!shown.contains("iVBORw0KGgo"));
@@ -106,7 +109,8 @@ process.stdout.on('error', () => fs.writeFileSync(process.env.PRESSURE_READY, 'r
 require('node:readline').createInterface({input:process.stdin}).on('line', line => {
  const c = JSON.parse(line);
  fs.appendFileSync(process.env.PRESSURE_LOG, line+'\n');
- if(c.type === 'get_state') {
+ if(c.type === 'get_session_stats') { send({type:'response',id:c.id,success:true,data:{}}); }
+ else if(c.type === 'get_state') {
   send({type:'response',id:c.id,success:true,data:{sessionFile:process.env.PRESSURE_SESSION}});
  } else if(c.type === 'prompt') {
   send({type:'response',id:c.id,success:true});

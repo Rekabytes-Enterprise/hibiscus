@@ -76,6 +76,7 @@ printf '%s\n' "$*" >> "$HIBISCUS_TEST_PI_LOG"
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s","model":{"provider":"%s","id":"gpt-test"}}}\n' "$id" "$HIBISCUS_TEST_SESSION" "$HIBISCUS_TEST_PROVIDER" ;;
   *'"type":"prompt"'*)
    case "$line" in

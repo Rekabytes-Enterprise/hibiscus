@@ -22,7 +22,7 @@ for line in sys.stdin:
  c=json.loads(line)
  kind=c['type'];id=c['id']
  def send(value): print(json.dumps(value),flush=True)
- if kind=='get_state':send({'type':'response','id':id,'success':True,'data':{}})
+ if kind in ('get_state','get_session_stats'):send({'type':'response','id':id,'success':True,'data':{}})
  elif kind=='prompt':
   with open(os.environ['QUEUE_ACK_LOG'],'a') as f:f.write(json.dumps(c)+'\n')
   if c.get('streamingBehavior')=='steer':

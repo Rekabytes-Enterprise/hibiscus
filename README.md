@@ -63,7 +63,7 @@ Prefer to inspect the installer first, choose a version, or use a custom directo
 | **Show, don't describe** | Paste clipboard images alongside your prompt, with a visible attachment count. |
 | **Models at your fingertips** | A keyboard-and-wheel picker of Pi-configured models, grouped by provider. |
 | **Pick up where you left off** | Resume the latest session or choose another, with recent conversation context shown. |
-| **Know what's happening** | Live phase on the footer's left, optional checklist Goal bar on its right; a small rotating Exploring glyph beside the latest file, checked read/bash counts, visible failures, and individual edit diffs in chat. |
+| **Know what's happening** | Pi-reported thinking level in the header; confirmed context/input/output, compact cache-read and cost snapshot beside the live footer phase and optional checklist Goal bar. A rotating Exploring glyph, checked read/bash counts, failures, and edit diffs stay visible in chat. |
 | **Stay in control** | Type while Pi works: Enter steers, Ctrl+Q (WSL) or Alt+Enter queues a follow-up. Waiting messages stay beside the composer until Pi actually delivers them; dangerous shell commands request approval in the same docked panel style as `/models`. Esc clears the queue and stops a run. |
 
 ### A few keys to remember

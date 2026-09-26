@@ -30,7 +30,7 @@ def backend():
         command = json.loads(line)
         kind = command["type"]
         reply = {"type": "response", "id": command["id"], "success": True}
-        if kind == "get_state":
+        if kind in ("get_state", "get_session_stats"):
             reply["data"] = {}
         print(json.dumps(reply), flush=True)
         if kind == "prompt":

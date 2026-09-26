@@ -24,6 +24,7 @@ while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  n=$(cat "$FIXTURE/count")
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*)
    if [ "$SCENARIO" = reconnect_failure ] && [ "$(wc -l < "$FIXTURE/launches")" -eq 2 ]; then exit 8; fi
    if [ "$SCENARIO" = startup_disconnect ] && [ "$(wc -l < "$FIXTURE/launches")" -eq 1 ]; then exit 7; fi

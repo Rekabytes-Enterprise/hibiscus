@@ -77,6 +77,7 @@ trap 'rm -f "$TEST_ROOT/active"' EXIT
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*)
    if [ "$TEST_MODE" = no_model ]; then
     printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s"}}\n' "$id" "$TEST_SESSION"

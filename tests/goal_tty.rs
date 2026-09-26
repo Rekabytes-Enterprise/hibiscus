@@ -56,6 +56,7 @@ fn explicit_checklist_updates_one_row_and_long_timeline_keeps_three_diffs() {
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"model":{"provider":"demo","id":"small"}}}\n' "$id" ;;
   *'"type":"prompt"'*) printf '{"type":"response","id":"%s","success":true}\n' "$id"; while IFS= read -r record; do printf '%s\n' "$record"; done < "$GOAL_EVENTS" ;;
   *) exit 13 ;;

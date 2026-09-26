@@ -36,6 +36,7 @@ if [ "$1" = "--mode" ]; then
  while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
+   *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
    *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionFile":"%s"}}\n' "$id" "$HIBISCUS_TEST_SESSION" ;;
    *'"type":"prompt"'*)
     case "$line" in

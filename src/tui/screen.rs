@@ -230,6 +230,109 @@ struct Activity {
     flower_frame: usize,
 }
 
+/// Last confirmed Pi session snapshot, not an independently calculated budget.
+/// Decimal token units for display only; Pi's original counts stay untouched.
+pub(crate) fn compact_tokens(value: u64) -> String {
+    for (unit, suffix, next) in [
+        (1_000_000_000_000u64, "T", None),
+        (1_000_000_000, "B", Some("T")),
+        (1_000_000, "M", Some("B")),
+        (1_000, "K", Some("M")),
+    ] {
+        if value >= unit {
+            let tenths = (u128::from(value) * 10 + u128::from(unit) / 2) / u128::from(unit);
+            if tenths >= 10_000 {
+                if let Some(next) = next {
+                    return format!("1{next}");
+                }
+            }
+            if tenths % 10 == 0 {
+                return format!("{}{suffix}", tenths / 10);
+            }
+            return format!("{}.{}{suffix}", tenths / 10, tenths % 10);
+        }
+    }
+    value.to_string()
+}
+
+struct SessionUsage {
+    context: Option<String>,
+    input: Option<u64>,
+    output: Option<u64>,
+    cache_read: Option<u64>,
+    cost: Option<f64>,
+}
+impl SessionUsage {
+    fn from_pi(data: &Value) -> Option<Self> {
+        if !data.is_object() {
+            return None;
+        }
+        let context = &data["contextUsage"];
+        let context = match (
+            context["tokens"].as_u64(),
+            context["contextWindow"].as_u64(),
+        ) {
+            (Some(tokens), Some(window)) if window > 0 => {
+                let percent = context["percent"]
+                    .as_f64()
+                    .filter(|n| n.is_finite() && *n >= 0.0)
+                    .map_or(String::new(), |n| format!(" · {n:.0}%"));
+                Some(format!(
+                    "Ctx {}/{}{percent}",
+                    compact_tokens(tokens),
+                    compact_tokens(window)
+                ))
+            }
+            _ => None, // Pi may report null immediately after compaction.
+        };
+        let cost = data["cost"].as_f64().filter(|n| n.is_finite() && *n >= 0.0);
+        let usage = Self {
+            context,
+            input: data["tokens"]["input"].as_u64(),
+            output: data["tokens"]["output"].as_u64(),
+            cache_read: data["tokens"]["cacheRead"].as_u64(),
+            cost,
+        };
+        (!usage.parts().is_empty()).then_some(usage)
+    }
+    fn parts(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if let Some(context) = &self.context {
+            parts.push(context.clone());
+        }
+        if let (Some(input), Some(output)) = (self.input, self.output) {
+            parts.push(format!(
+                "In {} · Out {}",
+                compact_tokens(input),
+                compact_tokens(output)
+            ));
+        }
+        if let Some(read) = self.cache_read {
+            parts.push(format!("Cache ~{}", compact_tokens(read)));
+        }
+        if let Some(cost) = self.cost {
+            parts.push(if cost > 0.0 && cost < 0.005 {
+                "Cost <$0.01".into()
+            } else {
+                format!("Cost ~${cost:.2}")
+            });
+        }
+        parts
+    }
+}
+
+fn with_usage(mut left: String, limit: usize, usage: Option<&SessionUsage>) -> String {
+    if let Some(usage) = usage {
+        for part in usage.parts() {
+            if left.chars().count() + part.chars().count() + 3 <= limit {
+                left.push_str(" · ");
+                left.push_str(&part);
+            }
+        }
+    }
+    clip(&left, limit)
+}
+
 /// An alternate-screen transcript with a persistent composer. Non-terminal
 /// streams pass through untouched; RPC responses are never written here.
 pub(crate) struct Screen {
@@ -265,7 +368,9 @@ pub(crate) struct Screen {
     rejected_queued: Option<(String, Vec<SharedImage>)>,
     active_utf8: Vec<u8>,
     model: String,
+    thinking: Option<String>,
     session: String,
+    usage: Option<SessionUsage>,
     scroll: usize,
     picker: Option<Picker>,
     modal: Option<Modal>,
@@ -325,7 +430,9 @@ impl Screen {
             rejected_queued: None,
             active_utf8: Vec::new(),
             model: "no model".into(),
+            thinking: None,
             session: "new chat".into(),
+            usage: None,
             scroll: 0,
             picker: None,
             modal: None,
@@ -434,6 +541,18 @@ impl Screen {
         } else {
             format!("{}/{}", clean(provider), clean(model))
         };
+        self.thinking = state["model"]
+            .is_object()
+            .then_some(&state["thinkingLevel"])
+            .and_then(Value::as_str)
+            .filter(|level| {
+                !level.is_empty()
+                    && level.len() <= 32
+                    && level
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            })
+            .map(str::to_owned);
         self.session = state["sessionName"]
             .as_str()
             .filter(|name| !name.is_empty())
@@ -444,6 +563,11 @@ impl Screen {
                     .map(|id| clean(&id.chars().take(8).collect::<String>()))
             })
             .unwrap_or_else(|| "new chat".into());
+        self.render()
+    }
+
+    pub(crate) fn session_usage(&mut self, stats: &Value) -> io::Result<()> {
+        self.usage = SessionUsage::from_pi(stats);
         self.render()
     }
 
@@ -508,6 +632,7 @@ impl Screen {
         self.deferred_input.clear();
         self.input_notice = None;
         self.session = "new chat".into();
+        self.usage = None;
         self.render()
     }
 
@@ -1483,7 +1608,14 @@ impl Screen {
             .as_ref()
             .map_or(FLOWERS[0], |activity| FLOWERS[activity.flower_frame]);
         let title = clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width);
-        let metadata = format!("{}  ·  {}", self.model, self.session);
+        let metadata = format!(
+            "{}{}  ·  {}",
+            self.model,
+            self.thinking
+                .as_deref()
+                .map_or(String::new(), |level| format!("  ·  Thinking {level}")),
+            self.session
+        );
         let header = clip(&metadata, width);
         let lines = self.transcript_layout(width.saturating_sub(3).max(1));
         let draft_width = width.saturating_sub(5).max(1);
@@ -1686,12 +1818,15 @@ impl Screen {
                 activity.started.elapsed().as_secs(),
                 &format!("{queue_hint}{scrolled}"),
                 self.goal,
+                self.usage.as_ref(),
             )
         } else if self.scroll > 0 {
             format!(
                 "↑ {} lines  ·  Wheel / PgDn to return to latest",
                 self.scroll
             )
+        } else if self.usage.is_some() {
+            with_usage("Enter send · /help".into(), width, self.usage.as_ref())
         } else {
             format!(
                 "Enter send · Ctrl+Enter newline · {} image · ↑↓ input · /help",
@@ -2171,10 +2306,11 @@ fn working_status(
     seconds: u64,
     scrolled: &str,
     goal: Option<(usize, usize)>,
+    usage: Option<&SessionUsage>,
 ) -> String {
     let left = format!("{flower} {phase} · {seconds}s · Esc stop{scrolled}");
     let Some((completed, total)) = goal.filter(|(_, total)| *total > 0) else {
-        return clip(&left, width);
+        return with_usage(left, width, usage);
     };
     let right = if width >= 60 {
         goal_line(width, completed, total)
@@ -2185,7 +2321,7 @@ fn working_status(
     if space < 5 {
         return clip(&left, width);
     }
-    let left = clip(&left, space);
+    let left = with_usage(left, space, usage);
     format!(
         "{left}{}{right}",
         " ".repeat(width.saturating_sub(left.chars().count() + right.chars().count()))
@@ -2451,6 +2587,78 @@ mod tests {
         assert!(pending.is_empty());
         assert_eq!(screen.pending_input.take(), Some(b'\r'));
         assert_eq!(events.recv().unwrap(), b'M');
+    }
+
+    #[test]
+    fn compact_token_labels_round_at_unit_boundaries() {
+        for (count, label) in [
+            (0, "0"),
+            (999, "999"),
+            (1_000, "1K"),
+            (1_250, "1.3K"),
+            (200_000, "200K"),
+            (999_950, "1M"),
+            (1_000_000, "1M"),
+            (1_500_000, "1.5M"),
+            (1_000_000_000, "1B"),
+            (1_000_000_000_000, "1T"),
+        ] {
+            assert_eq!(compact_tokens(count), label, "{count}");
+        }
+        assert!(compact_tokens(u64::MAX).ends_with('T'));
+    }
+
+    #[test]
+    fn displayed_cost_has_two_decimals_without_calling_a_small_charge_free() {
+        for (cost, label) in [
+            (0.0, "Cost ~$0.00"),
+            (0.004, "Cost <$0.01"),
+            (0.005, "Cost ~$0.01"),
+            (0.45, "Cost ~$0.45"),
+            (0.6634, "Cost ~$0.66"),
+        ] {
+            let usage = SessionUsage::from_pi(&serde_json::json!({"cost":cost})).unwrap();
+            assert_eq!(usage.parts(), [label]);
+        }
+    }
+
+    #[test]
+    fn pi_stats_are_confirmed_not_inferred_and_goal_keeps_its_right_edge() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.status(&serde_json::json!({"model":{"provider":"test","id":"reasoner"},"thinkingLevel":"high","sessionName":"work"})).unwrap();
+        assert_eq!(screen.thinking.as_deref(), Some("high"));
+        screen.session_usage(&serde_json::json!({"tokens":{"input":50000,"output":10000,"cacheRead":40000,"cacheWrite":5000},"cost":0.45,"contextUsage":{"tokens":60000,"contextWindow":200000,"percent":30.0}})).unwrap();
+        let usage = screen.usage.as_ref().unwrap();
+        let line = working_status(130, "✿", "Working…", 12, "", Some((2, 4)), Some(usage));
+        assert!(line.starts_with("✿ Working… · 12s · Esc stop"));
+        assert!(line.contains("Ctx 60K/200K · 30%"), "{line}");
+        assert!(line.contains("In 50K · Out 10K"), "{line}");
+        assert!(
+            line.ends_with("Goal  ██████████░░░░░░░░░░  2/4 · 50%"),
+            "{line}"
+        );
+        assert_eq!(line.chars().count(), 130);
+        assert!(
+            !working_status(40, "✿", "Working…", 1, "", Some((2, 4)), Some(usage))
+                .contains("In 50K")
+        );
+        screen.session_usage(&serde_json::json!({"tokens":{"input":50000,"output":10000},"contextUsage":{"tokens":null,"contextWindow":200000,"percent":null}})).unwrap();
+        assert!(
+            screen.usage.as_ref().unwrap().context.is_none(),
+            "null context after compaction is not zero"
+        );
+        screen.session_usage(&serde_json::json!({})).unwrap();
+        assert!(
+            screen.usage.is_none(),
+            "missing Pi stats must not invent values"
+        );
+        screen
+            .status(&serde_json::json!({"model":null,"thinkingLevel":"high"}))
+            .unwrap();
+        assert!(
+            screen.thinking.is_none(),
+            "no model must not imply a supported thinking level"
+        );
     }
 
     #[test]
@@ -3134,17 +3342,17 @@ mod tests {
 
     #[test]
     fn working_footer_puts_status_left_and_goal_right_only_while_active() {
-        let line = working_status(76, "✿", "Thinking…", 49, "", Some((2, 4)));
+        let line = working_status(76, "✿", "Thinking…", 49, "", Some((2, 4)), None);
         assert!(line.starts_with("✿ Thinking… · 49s · Esc stop"));
         assert!(
             line.ends_with("Goal  ██████████░░░░░░░░░░  2/4 · 50%"),
             "{line}"
         );
         assert_eq!(line.chars().count(), 76);
-        let narrow = working_status(40, "✿", "Reading…", 7, "", Some((2, 4)));
+        let narrow = working_status(40, "✿", "Reading…", 7, "", Some((2, 4)), None);
         assert!(narrow.contains("Goal 2/4 · 50%"));
         assert!(narrow.chars().count() <= 40);
-        assert!(!working_status(76, "✿", "Working…", 3, "", None).contains("Goal"));
+        assert!(!working_status(76, "✿", "Working…", 3, "", None, None).contains("Goal"));
     }
 
     #[test]

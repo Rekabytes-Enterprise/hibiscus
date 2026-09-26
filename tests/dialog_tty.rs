@@ -21,6 +21,7 @@ fn confirm_can_be_approved_in_chat() {
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"sessionName":"test","model":{"provider":"demo","id":"small"}}}\n' "$id" ;;
   *'"type":"prompt"'*)
    printf '{"type":"response","id":"%s","success":true}\n' "$id"

@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-26
+
+### Added
+
+- Pi-confirmed thinking level in the header and cumulative context/input/output/cache tokens plus approximate cost in the single footer row beside activity and optional Goal. Usage refreshes only at confirmed idle boundaries; unsupported Pi stats and null context do not invent values.
+
+### Changed
+
+- Abbreviate displayed token counts and manual compaction notices with decimal K/M/B/T units (e.g. 200K/1M); shorten cache reads to `Cache ~value`, omit cache writes, and cap displayed USD cost at two decimals (with `<$0.01` for small nonzero costs), without changing Pi's accounting.
+
 ## [0.2.3] - 2026-09-26
 
 ### Added
@@ -145,7 +155,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.3
 [0.2.2]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.2
 [0.2.1]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.1
