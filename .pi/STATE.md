@@ -2,9 +2,9 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
-## Snapshot — Pi-owned thinking/compaction dev push, 2026-09-25 (UTC)
+## Snapshot — 0.2.3 dev push preparation, 2026-09-25 (UTC)
 
-- Branch: `dev`; manifest version: **`0.2.2`**; previous remote HEAD **`06e598e`**. The user requests committing/pushing `/thinking [level]` and `/compact [instructions]` via Pi RPC, not a Hibiscus reasoning/summarization engine. `/thinking` queries Pi-supported levels for the active model and confirms a change with `get_state`. `/compact` waits for its ID-correlated final response instead of the 30-second metadata deadline/`agent_settled`, animates while Pi works, keeps draft input, and drains Esc cancellation/abort acknowledgements before returning. Pi owns summary persistence; only safe token counts are displayed. No version bump or release tag was requested. Verify CI for the pushed commit; the prior identity fix passed [CI 36190211294](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/36190211294) but real Mac/model retests remain open. No release artifacts or private screenshots/transcripts are committed; the requested binary digest remains absent.
+- Branch: `dev`; manifest version: **`0.2.3`**. `/thinking [level]` and `/compact [instructions]` were pushed earlier as **`7adbdb6`**, with Pi owning available thinking levels and summary/session persistence. The user then requested a patch bump and dev push. `scripts/bump-version.sh` updated manifest/lock/docs/installer fixture, and `CHANGELOG.md` now has a 0.2.3 entry. No release tag or artifacts requested. Verify new dev CI after pushing; real provider/long-compaction and Mac identity/warning-row retests remain open. No private screenshots/transcripts or the requested binary digest are committed.
 - Added optional Linux-only `scripts/profile-memory.py`, six helper tests in `tests/profile_memory.py`, and logical live/peak allocation-byte measurements in `benches/allocations.rs`. The helper launches a synthetic local Pi replacement solely for profiling; normal Hibiscus still launches real Pi. Credentials/Pi settings are isolated, clipboard helpers are mocked, and reports separate client and mock-process memory. No real models, sessions or clipboard contents were used.
 - Completed **33 experiments** (11 scenarios × three fresh processes) against a locally fingerprinted release binary, unchanged during the experiments. `docs/memory-profiling.md` records methodology, all results and caveats. Approximate client VmHWM medians: idle 3.06 MiB; 20 prose turns 9.00 MiB; four maximum images plus incoming echo 195.24 MiB at default limits; rejected queued images 123.24 MiB; ignored 2 MiB array 37.09 MiB versus text 7.15 MiB. Queue bursts hit their 8/32 MiB capacity budgets and explicitly disconnected.
 - Shared-image evidence: cloning four maximum-size owned image values allocated **55,926,840 bytes** versus **32 bytes** for four shared handles. On the same synthetic Linux queue-rejection fixture (three runs), client observed `VmHWM` median fell from **123.24 MiB** to **69.64 MiB**; initial rejection remained ~69.74 MiB, and successful maximum-image send plus echo remained ~195.28 MiB. The latter path is still dominated by serialization/incoming echo. Baseline ignored-array parsing also cost **33,555,741 bytes** for ~2 MiB wire data. The narrow decoder follow-up reduced synthetic client observed `VmHWM` median for that ignored array from **37.09 MiB** to **7.18 MiB** (three runs); text control remained ~7.22 MiB. The new incoming user-image echo follow-up reduced synthetic client observed `VmHWM` median for a successful maximum-image send from **195.28 MiB** to **141.83 MiB** (three fresh runs). All runs completed without inbox failure and retained the 64 MiB raw queue peak. Broader selective decoding of authoritative message ends/history remains unimplemented. Process RSS and these mock fixtures cannot establish real-provider behavior or prove absence of memory leaks. See `docs/memory-profiling.md`.
@@ -15,19 +15,19 @@ This is a working snapshot, **not a certificate that the product is bug-free**. 
 
 ## Latest automated evidence
 
-The checks below were rerun on Linux after thinking/compaction command additions, against the source/test/benchmark fingerprint below. Synthetic Pi fixtures simulate model-supported levels and long-running compaction; no provider credentials or billable model calls were used. Full release-mode Rust testing was not performed; targeted release PTY suites were run.
+The checks below were rerun on Linux after the 0.2.3 version bump, against the source/test/benchmark fingerprint below. Synthetic Pi fixtures simulate model-supported levels and long-running compaction; no provider credentials or billable model calls were used. Full release-mode Rust testing was not performed; targeted release PTY suites were run.
 
 | Check | Result and scope |
 | --- | --- |
-| `cargo test --locked` | Local pass: 106 unit + 90 integration tests at 0.2.2; remote Ubuntu/macOS CI applies to older source. New tests cover thinking picker/direct/cancel/no-model/nonreasoning, manual compaction success/failure/Esc, preserved draft, correlated abort, and piped commands. |
+| `cargo test --locked` | Local pass: 106 unit + 90 integration tests at 0.2.3; new remote CI is pending. New tests cover thinking picker/direct/cancel/no-model/nonreasoning, manual compaction success/failure/Esc, preserved draft, correlated abort, and piped commands. |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass; static checks only. |
 | `cargo fmt --all -- --check` | Pass. |
-| `cargo build --release --locked`; `target/release/hibiscus --version` | Pass; reports `hibiscus 0.2.2`. No binary digest is stored in this record; older digests already in Git history are not rewritten by this task. |
+| `cargo build --release --locked`; `target/release/hibiscus --version` | Pass; reports `hibiscus 0.2.3`. No binary digest is stored in this record; older digests already in Git history are not rewritten by this task. |
 | `python3 tests/profile_memory.py` | Pass: six tests for counters, framing, metrics and failed-report handling. |
 | `python3 scripts/profile-wake.py --samples 60 --output …` | Pass: synthetic before/after quiet-run latency comparison; results and limits in `docs/wake-profiling.md`. Earlier memory profiling remains historical. |
 | `python3 tests/profile_wake.py` | Pass: two synthetic/probe helper tests; no real Pi calls. |
 | `cargo bench --locked --bench session_list` | Pass: on this host, 200 files cold scan ~94 ms, cached repeat ~0.26 ms. The worker does not speed up cold I/O; the UI can show loading/cancel while it runs. |
-| `cargo test --locked --release --test pi_commands_tty --test models_tty --test goal_tty --test steering_tty --test error_recovery --test modal_tty --test queue_order_tty` | Pass: 30 targeted release integration tests. |
+| `cargo test --locked --release --test pi_commands_tty --test models_tty --test steering_tty --test error_recovery --test diagnostics_tty` | Pass: 28 targeted release integration tests at 0.2.3. |
 | Transport unit tests | Included in the full Rust run; seven scenarios covering bounds/duplex behavior. Prior opt-in counter output is documented in the RPC review. |
 | `node tests/approval.mjs` | Pass for fake extension harness approval/checklist and identity: structured sections, missing sections with rendered prompt, options-only append, and legacy prompt-only hooks. No literal live-model wording claim. |
 | `node --check src/pi/approval.mjs` and `src/pi/logout.mjs` | Pass; syntax only. |
@@ -36,7 +36,7 @@ The checks below were rerun on Linux after thinking/compaction command additions
 
 Environment: Cargo 1.98.1, Node v24.21.0, Python 3.12.3; `pi --version` reports 0.87.1. No local macOS run or real provider identity-response test was performed here; remote macOS CI passed as recorded above.
 
-Source/test/benchmark fingerprint: `1aaeaef3222c7ddd80b0fa0f045aa6eca005f3dd22581c25cd054cccde650e77`.
+Source/test/benchmark fingerprint: `179dbe20fa3f84182445b8f1d540af872baf74beccedea3b00a4e88f52a8ec4e`.
 Computed as SHA-256 of sorted `path + NUL + file bytes + NUL` for `Cargo.toml`, `Cargo.lock`, `install.sh`, and files under `src/`, `tests/`, `scripts/`, `benches/`. Records/docs and generated Python bytecode (`__pycache__`, `*.pyc`) are excluded. **Any source/test change invalidates this snapshot's test claim until rerun.**
 
 ## User-reported issues: candidates implemented, real-use closure pending
@@ -66,7 +66,7 @@ Also pending: inline `/logout` against an intentionally selected account, the cu
 
 ## Next actions, in order
 
-1. Rebuild current local source and verify `/thinking` against a reasoning-capable model and `/compact` against a long conversation on the selected Pi installation. Compaction can incur tokens/cost; do not run it against real sessions just to update records. Check cancellation, confirmation, model switches and preserved drafts. Run macOS CI before publishing/claiming supported behavior; identity and warning-row visual reports still need live Mac retests. Publishing 0.2.0 remains a separate explicit decision: verify the version-matching commit, release workflow and artifacts before tagging.
+1. Commit/push the tested 0.2.3 bump and verify Ubuntu/macOS dev CI. Then optionally retest `/thinking` and `/compact` on real Pi with informed consent (compaction consumes tokens and can change model context). The identity and warning-row Mac reports still need live retests before claiming closure; no provider credentials should be changed for verification. Publishing 0.2.0 remains a separate explicit decision: verify the version-matching commit, release workflow and artifacts before tagging.
 2. Stabilize the reported cursor/modal/queue cases before adding more UI behavior. Record the exact build/source, Pi version, terminal/platform and minimal reproduction; no credentials or private transcripts.
 3. Reproduce queue ordering/identity risks in isolated fixtures, then add targeted regressions. Keep protocol behavior separate from presentation changes.
 4. Run the relevant automated checks and retest the actual reported UX after rebuilding. Record **what was observed**, not just “fixed.” Keep unresolved items until evidence closes them.
