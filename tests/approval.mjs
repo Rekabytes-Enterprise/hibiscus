@@ -24,6 +24,26 @@ assert.equal(promptOptions.sections.pi_base, 'Pi keeps its own instructions');
 assert.deepEqual(promptOptions.selectedTools, ['read', 'bash']);
 assert.equal(start.prompt, 'Who are you and what model?', 'do not rewrite the user prompt');
 assert.equal(handlers.before_agent_start(start), undefined, 'Pi builds the prompt from its structured sections');
+const withoutSections = { prompt: 'Who are you?', systemPrompt: 'Pi base prompt with tools and safety rules', systemPromptOptions: { selectedTools: ['read'], appendSystemPrompt: 'Keep Pi guidance' } };
+const noSectionsResult = handlers.before_agent_start(withoutSections);
+assert.ok(noSectionsResult.systemPrompt.startsWith(withoutSections.systemPrompt), 'preserve Pi base prompt');
+assert.match(noSectionsResult.systemPrompt, /<hibiscus_identity>/);
+assert.equal(withoutSections.systemPromptOptions.appendSystemPrompt, 'Keep Pi guidance');
+assert.deepEqual(withoutSections.systemPromptOptions.selectedTools, ['read']);
+for (const sections of [null, 'bad']) {
+  const event = { systemPromptOptions: { sections, appendSystemPrompt: 'Keep Pi guidance' } };
+  assert.equal(handlers.before_agent_start(event), undefined);
+  assert.match(event.systemPromptOptions.appendSystemPrompt, /Keep Pi guidance\n\n<hibiscus_identity>/);
+  assert.equal(handlers.before_agent_start(event), undefined);
+  assert.equal(event.systemPromptOptions.appendSystemPrompt.match(/<hibiscus_identity>/g).length, 1);
+}
+const legacy = { systemPrompt: 'Pi base prompt with tools and safety rules', prompt: 'Who are you?' };
+const fallback = handlers.before_agent_start(legacy);
+assert.ok(fallback.systemPrompt.startsWith(legacy.systemPrompt));
+assert.match(fallback.systemPrompt, /<hibiscus_identity>/);
+assert.match(fallback.systemPrompt, /powered by the Pi coding agent/);
+assert.equal(handlers.before_agent_start({ systemPrompt: fallback.systemPrompt }).systemPrompt, fallback.systemPrompt, 'do not duplicate identity on repeat runs');
+assert.equal(handlers.before_agent_start({ prompt: 'no supported prompt surface' }), undefined, 'unknown Pi shapes do not throw');
 let asks = 0;
 let response;
 const ctx = {
