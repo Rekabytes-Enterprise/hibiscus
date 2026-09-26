@@ -114,7 +114,11 @@ impl Ui {
         writeln!(out, "\n  Chat        /new  /continue  /sessions  /quit")?;
         writeln!(
             out,
-            "  Models      /models  (↑↓ / wheel, Enter, Esc in full screen)"
+            "  Models      /models  /thinking [level]  (↑↓ / wheel, Enter, Esc)"
+        )?;
+        writeln!(
+            out,
+            "  Context     /compact [summary instructions]  (Pi model call)"
         )?;
         writeln!(out, "  Account     /login  (Codex here; others in Pi)")?;
         writeln!(

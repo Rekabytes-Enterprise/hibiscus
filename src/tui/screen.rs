@@ -128,6 +128,9 @@ pub(crate) trait ScrollDisplay: Write {
     fn stop_work(&mut self) -> io::Result<()> {
         Ok(())
     }
+    fn compaction_mode(&mut self, _active: bool) -> io::Result<()> {
+        Ok(())
+    }
     fn thinking_start(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -273,6 +276,7 @@ pub(crate) struct Screen {
     secret_input: bool,
     auth_url: Option<String>,
     activity: Option<Activity>,
+    manual_compaction: bool,
     timelines: Vec<Timeline>,
     current_timeline: Option<usize>,
     timeline_marked: bool,
@@ -332,6 +336,7 @@ impl Screen {
             secret_input: false,
             auth_url: None,
             activity: None,
+            manual_compaction: false,
             timelines: Vec::new(),
             current_timeline: None,
             timeline_marked: false,
@@ -488,6 +493,7 @@ impl Screen {
         self.auth_url = None;
         self.secret_input = false;
         self.activity = None;
+        self.manual_compaction = false;
         self.timelines.clear();
         self.current_timeline = None;
         self.timeline_marked = false;
@@ -974,6 +980,12 @@ impl Screen {
     }
 
     fn send_active_draft(&mut self, mode: QueueMode) -> io::Result<ActiveAction> {
+        if self.manual_compaction {
+            self.input_notice =
+                Some("Compacting… draft kept · Enter after Pi finishes · Esc cancel".into());
+            self.render()?;
+            return Ok(ActiveAction::None);
+        }
         if self.clipboard.is_some() {
             self.input_notice = Some("Reading clipboard… press Enter when ready".into());
         } else if self.draft.trim_start().starts_with('/') {
@@ -1582,6 +1594,11 @@ impl Screen {
             self.clipboard_notice.clone()
         } else if let Some(notice) = &self.input_notice {
             notice.clone()
+        } else if self.manual_compaction {
+            format!(
+                "Compacting… {} image(s) attached · Enter after Pi finishes · Esc cancel",
+                self.images.len()
+            )
         } else if !self.images.is_empty() && self.activity.is_some() {
             format!(
                 "{} image(s) attached · Enter steer · {} later",
@@ -1832,6 +1849,18 @@ impl ScrollDisplay for Screen {
         Ok(())
     }
 
+    fn compaction_mode(&mut self, active: bool) -> io::Result<()> {
+        self.manual_compaction = active;
+        if !active
+            && self
+                .input_notice
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Compacting…"))
+        {
+            self.input_notice = None;
+        }
+        self.render()
+    }
     fn stop_work(&mut self) -> io::Result<()> {
         self.freeze_timeline();
         self.queue_steering = 0;

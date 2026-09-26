@@ -2,7 +2,7 @@ pub(crate) mod commands;
 mod models;
 pub(crate) mod sessions;
 
-use self::models::choose_model;
+use self::models::{choose_model, choose_thinking};
 use crate::{
     pi::{
         auth::{codex_sign_in, AuthOutcome},
@@ -354,6 +354,51 @@ fn chat<R: BufRead>(
                         events.as_ref().map(|e| &e.receiver),
                         raw,
                     )?;
+                    show_session_status(
+                        rpc,
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|e| &e.receiver),
+                        ui,
+                    )?;
+                }
+                _ if message == "/thinking" || message.starts_with("/thinking ") => {
+                    choose_thinking(
+                        rpc,
+                        input,
+                        output,
+                        message
+                            .strip_prefix("/thinking")
+                            .map(str::trim)
+                            .filter(|level| !level.is_empty()),
+                        interactive,
+                        events.as_ref().map(|e| &e.receiver),
+                        raw,
+                    )?;
+                }
+                _ if message == "/compact" || message.starts_with("/compact ") => {
+                    let instructions = message
+                        .strip_prefix("/compact")
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty());
+                    let result = rpc.compact(
+                        instructions,
+                        output,
+                        input,
+                        dialogs,
+                        events.as_ref().map(|e| &e.receiver),
+                        raw,
+                        interactive,
+                    )?;
+                    let before = result["tokensBefore"].as_u64();
+                    let after = result["estimatedTokensAfter"].as_u64();
+                    if let (Some(before), Some(after)) = (before, after) {
+                        ui.info(output, &format!("Pi compacted context: {before} → ~{after} tokens. Original history is saved."))?;
+                    } else {
+                        ui.info(output, "Pi compacted context. Original history is saved.")?;
+                    }
                     show_session_status(
                         rpc,
                         input,

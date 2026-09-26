@@ -87,7 +87,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Start::Help => {
-            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /new, /continue, /sessions, /models, /login, /logout, /restore, /reconnect, /quit.\n/login uses Pi's Codex SDK flow in the full-screen UI when available; other-provider login hands off to Pi. Finish there and type /quit to return.\n/logout removes a selected provider's stored credentials inside full-screen Hibiscus.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_PI to override the pi executable.");
+            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login uses Pi's Codex SDK flow in the full-screen UI when available; other-provider login hands off to Pi. Finish there and type /quit to return.\n/logout removes a selected provider's stored credentials inside full-screen Hibiscus.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_PI to override the pi executable.");
             Ok(())
         }
         Start::Prompt(prompt) => {
