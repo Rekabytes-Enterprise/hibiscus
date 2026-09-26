@@ -4,6 +4,10 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `/thinking [level]` to choose only Pi-reported reasoning levels for the selected model, and `/compact [instructions]` to let Pi summarize older context with live status, Esc cancellation and explicit response correlation.
+
 ## [0.2.2] - 2026-09-25
 
 ### Fixed

@@ -112,6 +112,154 @@ pub(crate) fn choose_model<R: BufRead>(
     Ok(())
 }
 
+/// Query the active model's supported levels from Pi; never guess reasoning
+/// support or maintain a second per-model configuration in Hibiscus.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn choose_thinking<R: BufRead>(
+    rpc: &mut Rpc,
+    input: &mut R,
+    output: &mut Screen,
+    requested: Option<&str>,
+    interactive: bool,
+    events: Option<&Receiver<u8>>,
+    raw: &mut Option<RawMode>,
+) -> Result<()> {
+    let mut dialogs = Dialogs;
+    let state = rpc.request(
+        json!({"type":"get_state"}),
+        input,
+        output,
+        &mut dialogs,
+        raw,
+        events,
+        interactive,
+    )?;
+    if !state["model"].is_object() {
+        writeln!(
+            output,
+            "Choose a model with /models before setting thinking."
+        )?;
+        return Ok(());
+    }
+    let available = rpc.request(
+        json!({"type":"get_available_thinking_levels"}),
+        input,
+        output,
+        &mut dialogs,
+        raw,
+        events,
+        interactive,
+    )?;
+    let Some(levels) = available["levels"].as_array() else {
+        return Err("invalid get_available_thinking_levels response".into());
+    };
+    let levels: Vec<&str> = levels
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 32
+                        && s.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+                })
+                .ok_or("invalid thinking level from Pi")
+        })
+        .collect::<std::result::Result<_, _>>()?;
+    if levels.is_empty() {
+        return Err("Pi reported no thinking levels".into());
+    }
+    let active = state["thinkingLevel"]
+        .as_str()
+        .and_then(|level| levels.iter().position(|candidate| *candidate == level));
+    let selected = if let Some(level) = requested {
+        let Some(index) = levels
+            .iter()
+            .position(|candidate| candidate.eq_ignore_ascii_case(level))
+        else {
+            writeln!(
+                output,
+                "Unknown thinking level. Available: {}",
+                levels.join(", ")
+            )?;
+            return Ok(());
+        };
+        Some(index)
+    } else if output.is_full() {
+        let Some(keys) = events else { return Ok(()) };
+        let labels = levels
+            .iter()
+            .map(|level| (*level).to_owned())
+            .collect::<Vec<_>>();
+        output.select("Thinking · Pi model", &labels, active, keys)?
+    } else {
+        writeln!(output, "Thinking levels (current marked):")?;
+        for (index, level) in levels.iter().enumerate() {
+            writeln!(
+                output,
+                "  {}. {}{}",
+                index + 1,
+                level,
+                if Some(index) == active {
+                    "  (current)"
+                } else {
+                    ""
+                }
+            )?;
+        }
+        let answer = if let (Some(keys), Some(raw)) = (events, raw.as_mut()) {
+            raw.write("Choose a number (Enter to cancel): ")?;
+            terminal::read_line(keys, raw)?
+        } else if interactive {
+            write!(output, "Choose a number (Enter to cancel): ")?;
+            output.flush()?;
+            let mut line = String::new();
+            if input.read_line(&mut line)? == 0 {
+                None
+            } else {
+                Some(line)
+            }
+        } else {
+            None
+        };
+        answer
+            .and_then(|answer| answer.trim().parse::<usize>().ok())
+            .and_then(|index| index.checked_sub(1))
+            .filter(|index| *index < levels.len())
+    };
+    let Some(index) = selected else { return Ok(()) };
+    if Some(index) == active {
+        writeln!(output, "Already using {} thinking.", levels[index])?;
+        return Ok(());
+    }
+    rpc.request(
+        json!({"type":"set_thinking_level","level":levels[index]}),
+        input,
+        output,
+        &mut dialogs,
+        raw,
+        events,
+        interactive,
+    )?;
+    let confirmed = rpc.request(
+        json!({"type":"get_state"}),
+        input,
+        output,
+        &mut dialogs,
+        raw,
+        events,
+        interactive,
+    )?;
+    let level = confirmed["thinkingLevel"]
+        .as_str()
+        .ok_or("Pi did not confirm thinking level")?;
+    if !levels.contains(&level) {
+        return Err("Pi returned an unsupported thinking level".into());
+    }
+    writeln!(output, "Thinking level: {level} (Pi).")?;
+    Ok(())
+}
+
 fn active_index(models: &[&Value], state: &Value) -> Option<usize> {
     let provider = state["model"]["provider"].as_str()?;
     let id = state["model"]["id"].as_str()?;

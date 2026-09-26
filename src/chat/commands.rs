@@ -9,6 +9,10 @@ pub(crate) struct Command {
 
 const COMMANDS: &[Command] = &[
     Command {
+        name: "/compact",
+        description: "Summarize old context with Pi",
+    },
+    Command {
         name: "/continue",
         description: "Resume the latest session",
     },
@@ -52,6 +56,10 @@ const COMMANDS: &[Command] = &[
         name: "/sessions",
         description: "Browse saved sessions",
     },
+    Command {
+        name: "/thinking",
+        description: "Choose Pi reasoning level",
+    },
 ];
 
 pub(crate) fn matches(prefix: &str) -> Vec<&'static Command> {
@@ -79,6 +87,20 @@ mod tests {
                 .map(|cmd| cmd.name)
                 .collect::<Vec<_>>(),
             ["/login", "/logout"]
+        );
+        assert_eq!(
+            matches("/thi")
+                .iter()
+                .map(|cmd| cmd.name)
+                .collect::<Vec<_>>(),
+            ["/thinking"]
+        );
+        assert_eq!(
+            matches("/comp")
+                .iter()
+                .map(|cmd| cmd.name)
+                .collect::<Vec<_>>(),
+            ["/compact"]
         );
         assert!(matches("/model ").is_empty());
         assert!(matches("hello").is_empty());
