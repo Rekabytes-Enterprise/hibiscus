@@ -15,6 +15,7 @@ fn model_picker_groups_providers_and_switches_without_restarting_pi() {
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*)
    active=$(head -n 1 "$HIBISCUS_TEST_CURRENT")
    provider=${active%%/*}

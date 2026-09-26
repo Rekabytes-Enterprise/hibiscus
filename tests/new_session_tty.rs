@@ -16,6 +16,7 @@ while IFS= read -r line; do
  printf '%s\n' "$line" >> "$FIXTURE/commands"
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*)
    printf '{"type":"response","id":"%s","success":true,"data":{"sessionName":"%s","sessionFile":"%s/old.jsonl","model":{"provider":"test","id":"model"}}}\n' "$id" "$session" "$FIXTURE" ;;
   *'"type":"new_session"'*)

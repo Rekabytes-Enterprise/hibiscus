@@ -11,6 +11,7 @@ fn wide_terminal_and_resizes_expand_composer_without_losing_draft() {
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"prompt"'*)
    printf '%s\n' "$line" > "$WIDE_PROMPT"

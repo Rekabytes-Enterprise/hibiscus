@@ -33,7 +33,9 @@ import json,os,sys
 current='none'
 for line in sys.stdin:
  c=json.loads(line)
- if c['type']=='get_state':
+ if c['type']=='get_session_stats':
+  print(json.dumps({'type':'response','id':c['id'],'success':True,'data':{}}),flush=True)
+ elif c['type']=='get_state':
   print(json.dumps({'type':'response','id':c['id'],'success':True,'data':{'sessionName':current}}),flush=True)
  elif c['type']=='switch_session':
   current='latest' if c['sessionPath'].endswith('latest.jsonl') else 'older'

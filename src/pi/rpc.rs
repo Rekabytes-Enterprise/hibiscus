@@ -43,6 +43,7 @@ pub(crate) struct Rpc {
     next_id: u64,
     resume: SessionStart,
     disconnected: bool,
+    stats_supported: bool,
 }
 
 impl Rpc {
@@ -109,6 +110,7 @@ impl Rpc {
             next_id: 0,
             resume,
             disconnected: false,
+            stats_supported: true,
         })
     }
 
@@ -413,6 +415,44 @@ impl Rpc {
         display.stop_work()?;
         display.compaction_mode(false)?;
         result
+    }
+
+    /// Older Pi builds can reject this optional UI metadata command. Keep
+    /// chatting without inventing numbers, but do not hide transport errors.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn session_stats<R: BufRead, W: ScrollDisplay>(
+        &mut self,
+        fallback: &mut R,
+        display: &mut W,
+        dialogs: &mut Dialogs,
+        raw: &mut Option<RawMode>,
+        events: Option<&Receiver<u8>>,
+        interactive: bool,
+    ) -> Result<Option<Value>> {
+        if !self.stats_supported {
+            return Ok(None);
+        }
+        match self.request(
+            json!({"type":"get_session_stats"}),
+            fallback,
+            display,
+            dialogs,
+            raw,
+            events,
+            interactive,
+        ) {
+            Ok(stats) => Ok(Some(stats)),
+            Err(error)
+                if error.downcast_ref::<ChatError>().is_some_and(|error| {
+                    error.source == ErrorSource::Command
+                        && error.message.contains("Unknown command: get_session_stats")
+                }) =>
+            {
+                self.stats_supported = false;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub(crate) fn is_connected(&self) -> bool {

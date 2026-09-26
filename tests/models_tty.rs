@@ -23,6 +23,7 @@ fn model_picker_marks_current_scrolls_and_cancels_without_switching() {
 while IFS= read -r line; do
  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
  case "$line" in
+  *'"type":"get_session_stats"'*) printf '{"type":"response","id":"%s","success":true,"data":{}}\n' "$id" ;;
   *'"type":"get_state"'*)
    model=$(tr -d '\n' < "$HIBISCUS_TEST_CURRENT")
    printf '{"type":"response","id":"%s","success":true,"data":{"model":{"provider":"demo","id":"%s"},"sessionName":"chat"}}\n' "$id" "$model" ;;

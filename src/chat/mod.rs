@@ -13,7 +13,7 @@ use crate::{
         rpc::{Rpc, SessionStart},
     },
     tui::{
-        screen::{PromptAction, Screen, ScrollDisplay},
+        screen::{compact_tokens, PromptAction, Screen, ScrollDisplay},
         terminal::{self, RawMode, Terminal, TerminalEvents},
         ui::Ui,
     },
@@ -133,6 +133,8 @@ fn show_session_status<R: BufRead>(
         )?;
         if output.is_full() {
             output.status(&state)?;
+            let stats = rpc.session_stats(input, output, dialogs, raw, events, true)?;
+            output.session_usage(stats.as_ref().unwrap_or(&serde_json::Value::Null))?;
         } else {
             ui.session(output, &state)?;
         }
@@ -377,6 +379,15 @@ fn chat<R: BufRead>(
                         events.as_ref().map(|e| &e.receiver),
                         raw,
                     )?;
+                    show_session_status(
+                        rpc,
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|e| &e.receiver),
+                        ui,
+                    )?;
                 }
                 _ if message == "/compact" || message.starts_with("/compact ") => {
                     let instructions = message
@@ -395,7 +406,14 @@ fn chat<R: BufRead>(
                     let before = result["tokensBefore"].as_u64();
                     let after = result["estimatedTokensAfter"].as_u64();
                     if let (Some(before), Some(after)) = (before, after) {
-                        ui.info(output, &format!("Pi compacted context: {before} → ~{after} tokens. Original history is saved."))?;
+                        ui.info(
+                            output,
+                            &format!(
+                                "Pi compacted context: {} → ~{} tokens. Original history is saved.",
+                                compact_tokens(before),
+                                compact_tokens(after)
+                            ),
+                        )?;
                     } else {
                         ui.info(output, "Pi compacted context. Original history is saved.")?;
                     }

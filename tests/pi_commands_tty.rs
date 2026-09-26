@@ -29,7 +29,7 @@ def work(c):
   if time.monotonic()>end:raise RuntimeError('fixture did not release compaction')
   time.sleep(.005)
  if stop.is_set():return
- result={'summary':'PRIVATE_SUMMARY','tokensBefore':100,'estimatedTokensAfter':40}
+ result={'summary':'PRIVATE_SUMMARY','tokensBefore':1000000,'estimatedTokensAfter':200000}
  send({'type':'compaction_end','reason':'manual','result':result,'aborted':False})
  response(c, data=result)
  compact=None
@@ -37,6 +37,7 @@ for line in sys.stdin:
  c=json.loads(line);kind=c['type']
  with open(root+'/commands','a') as log:log.write(json.dumps(c)+'\n')
  if kind=='get_state':response(c,data={'model':None if scenario=='no_model' else {'provider':'test','id':'reasoner'},'thinkingLevel':level})
+ elif kind=='get_session_stats':response(c,data={})
  elif kind=='get_available_thinking_levels':response(c,data={'levels':['off'] if scenario=='no_thinking' else ['off','low','high']})
  elif kind=='set_thinking_level':
   level=c['level'];send({'type':'thinking_level_changed','level':level});response(c)
@@ -87,7 +88,7 @@ for line in sys.stdin:
         );
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains("Thinking level: high (Pi)."));
-        assert!(text.contains("Pi compacted context: 100 → ~40 tokens."));
+        assert!(text.contains("Pi compacted context: 1M → ~200K tokens."));
         assert!(!text.contains("PRIVATE_SUMMARY") && !text.contains('\x1b'));
         let commands = fs::read_to_string(root.join("commands")).unwrap();
         assert!(!commands.contains("\"type\": \"prompt\""));
@@ -126,7 +127,7 @@ for line in sys.stdin:
             tty.wait_text("Cancelled compact");
         } else {
             fs::write(root.join("finish"), "").unwrap();
-            tty.wait_text("Pi compacted context: 100 → ~40 tokens");
+            tty.wait_text("Pi compacted context: 1M → ~200K tokens");
         }
         tty.wait_text("Enter send");
         tty.send(b"\r"); // send the preserved draft explicitly, not before
