@@ -19,7 +19,7 @@ while IFS= read -r line; do
   *'"type":"get_state"'*) printf '{"type":"response","id":"%s","success":true,"data":{"model":{"provider":"test","id":"demo"}}}\n' "$id" ;;
   *'"type":"prompt"'*)
    printf '{"type":"response","id":"%s","success":true}\n' "$id"
-   printf '{"type":"extension_ui_request","id":"approval-1","method":"select","title":"Approval needed: recursive deletion; Directory: /workspace; Command: rm -rf build","options":["Deny","Allow","Always Allow"],"timeout":60000}\n' ;;
+   printf '{"type":"extension_ui_request","id":"approval-1","method":"select","title":"Approval needed: recursive deletion; Directory: /workspace; Command: rm -rf build","options":["Deny","Allow","Always Allow"]}\n' ;;
   *'"type":"extension_ui_response"'*)
    printf '%s\n' "$line" > "$APPROVAL_ROOT/reply"
    case "$line" in *'"value":"Allow"'*|*'"value":"Always Allow"'*) printf allowed > "$APPROVAL_ROOT/ran";; esac
@@ -51,6 +51,13 @@ fn approval_choices_are_correlated_and_default_to_deny() {
         tty.wait_text("Enter send");
         tty.send(b"trigger\r");
         tty.wait_text("Always Allow");
+        if expected == Some("Deny") {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(
+                !root.join("reply").exists(),
+                "approval must still wait for user input"
+            );
+        }
         tty.send(choice);
         tty.wait_text("Enter send");
         tty.send(b"/quit\r");

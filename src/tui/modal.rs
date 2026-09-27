@@ -172,9 +172,6 @@ impl Modal {
         modal.deadline = event["timeout"]
             .as_u64()
             .map(|ms| Instant::now() + Duration::from_millis(ms.min(86_400_000)));
-        if modal.approval && modal.deadline.is_none() {
-            modal.deadline = Some(Instant::now() + Duration::from_secs(60));
-        }
         match event["method"].as_str()? {
             "select" => {
                 let options = event["options"].as_array()?;
@@ -399,6 +396,10 @@ mod tests {
     fn approval_defaults_to_deny_and_long_commands_require_review() {
         let event = json!({"method":"select","title":format!("Approval needed: command\n{}", "rm -rf example ".repeat(30)),"options":["Deny","Allow","Always Allow"]});
         let mut modal = Modal::from_rpc(&event).unwrap();
+        assert!(
+            modal.deadline.is_none(),
+            "untimed approvals wait for an explicit decision"
+        );
         let rows = modal.rows(40, 10);
         assert!(rows.len() <= 10);
         assert!(rows.iter().all(|row| row.text.chars().count() <= 40));

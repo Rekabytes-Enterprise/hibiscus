@@ -4,6 +4,22 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-27
+
+### Added
+
+- Full-screen transcript drag selection and clipboard copying, including Ctrl+C to copy an active selection. On an empty selection, two Ctrl+C presses within two seconds quit instead of one.
+- Bracketed multiline terminal paste inserts text into the composer without submitting the first line.
+
+### Changed
+
+- Improve layouts below 60 terminal columns with smaller margins, a compact header, and complete activity/Goal fields instead of clipped usage text. Wider layouts retain their previous spacing.
+- Dangerous-command approval waits for an explicit choice instead of auto-denying after 60 seconds. Deny remains the default, Esc cancels, and unrelated explicit dialog timeouts still apply.
+
+### Verification limits
+
+- Clipboard and mobile terminal presentation still require physical-terminal retesting. The approval gate remains a best-effort guard, not a sandbox.
+
 ## [0.2.4] - 2026-09-26
 
 ### Added
@@ -155,7 +171,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.3
 [0.2.2]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.2

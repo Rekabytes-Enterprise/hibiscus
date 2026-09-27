@@ -323,11 +323,38 @@ const FLOWERS: [&str; 4] = ["✿", "❀", "✾", "❁"];
 // screen; never change the terminal's configured background with OSC 11.
 const BASE_BACKGROUND: &str = "\x1b[48;2;48;10;36m";
 
-// Keep two columns on either side, including on wide/ultrawide terminals.
-// A single source of truth keeps Markdown, composer movement, modals and
-// cursor placement aligned when the terminal is resized.
+// Give narrow terminals one margin cell instead of two. Keep Markdown,
+// composer movement, panels and cursor based on the same content width.
+const NARROW_COLUMNS: usize = 60;
 fn content_width(columns: usize) -> usize {
-    columns.saturating_sub(4).max(1)
+    columns
+        .saturating_sub(if columns < NARROW_COLUMNS { 2 } else { 4 })
+        .max(1)
+}
+
+fn transcript_prefix(columns: usize) -> usize {
+    if columns < NARROW_COLUMNS {
+        2
+    } else {
+        3
+    }
+}
+
+fn mobile_header(model: &str, thinking: Option<&str>, session: &str, width: usize) -> String {
+    let model = model.rsplit('/').next().unwrap_or(model);
+    let mut header = clip(model, width);
+    if let Some(level) = thinking {
+        let part = format!(" · {}", clean(level));
+        if header.chars().count() + part.chars().count() <= width {
+            header.push_str(&part);
+        }
+    }
+    let session = clip(session, 10);
+    let part = format!(" · {session}");
+    if header.chars().count() + part.chars().count() <= width {
+        header.push_str(&part);
+    }
+    header
 }
 
 fn paint_background(frame: &str, color: bool) -> String {
@@ -1361,8 +1388,9 @@ impl Screen {
             .min(self.selectable_rows.len().saturating_sub(1));
         let (columns, _) = self.size();
         let left = (columns.saturating_sub(content_width(columns))) / 2;
-        let column = event.column.saturating_sub(left + 3);
-        let point = (row, column + left + 3);
+        let prefix = left + transcript_prefix(columns);
+        let column = event.column.saturating_sub(prefix);
+        let point = (row, column + prefix);
         if event.release {
             if let Some(selection) = self.selection.as_mut() {
                 if selection.dragging {
@@ -1461,7 +1489,8 @@ impl Screen {
             return String::new();
         };
         let (columns, _) = self.size();
-        let prefix = (columns.saturating_sub(content_width(columns))) / 2 + 3;
+        let prefix =
+            (columns.saturating_sub(content_width(columns))) / 2 + transcript_prefix(columns);
         let (start, end) = selection.bounds();
         if start == end {
             return String::new();
@@ -1871,26 +1900,35 @@ impl Screen {
         left: &str,
         row_index: usize,
     ) -> String {
-        let selected = self
-            .selection
-            .as_ref()
-            .and_then(|selection| selection.columns(row_index, row.cells.len(), left.len() + 3));
+        let selected = self.selection.as_ref().and_then(|selection| {
+            selection.columns(
+                row_index,
+                row.cells.len(),
+                left.len() + transcript_prefix(columns),
+            )
+        });
         let marker = match row.cells.first().map(|cell| cell.tone) {
             Some(Tone::DiffAdded) => self.accent("38;2;169;224;184", "┃"),
             Some(Tone::DiffRemoved) => self.accent("38;2;255;134;153", "┃"),
             _ if row.role == Role::User => self.accent("1;38;2;236;74;125", "┃"),
             _ => self.accent("2;38;2;184;57;101", "│"),
         };
+        let gap = " ".repeat(transcript_prefix(columns) - 1);
         let text = format!(
-            "{left}{marker}  {}",
-            self.styled_line_selected(row, width.saturating_sub(3).max(1), selected)
+            "{left}{marker}{gap}{}",
+            self.styled_line_selected(
+                row,
+                width.saturating_sub(transcript_prefix(columns)).max(1),
+                selected
+            )
         );
         if self.color && row.role == Role::User {
             // Reapply the tint after foreground/style resets, and paint the
             // margins and unused columns too. Reset before the next row.
             let background = "\x1b[48;2;57;30;46m";
             let text = text.replace("\x1b[0m", &format!("\x1b[0m{background}"));
-            let padding = columns.saturating_sub(left.len() + 3 + row.cells.len());
+            let padding =
+                columns.saturating_sub(left.len() + transcript_prefix(columns) + row.cells.len());
             format!("{background}{text}{}\x1b[0m", " ".repeat(padding))
         } else {
             text
@@ -1949,7 +1987,11 @@ impl Screen {
             .activity
             .as_ref()
             .map_or(FLOWERS[0], |activity| FLOWERS[activity.flower_frame]);
-        let title = clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width);
+        let title = if columns < NARROW_COLUMNS {
+            clip(&format!("{} hibiscus · {workspace}", FLOWERS[0]), width)
+        } else {
+            clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width)
+        };
         let metadata = format!(
             "{}{}  ·  {}",
             self.model,
@@ -1958,8 +2000,12 @@ impl Screen {
                 .map_or(String::new(), |level| format!("  ·  Thinking {level}")),
             self.session
         );
-        let header = clip(&metadata, width);
-        let lines = self.transcript_layout(width.saturating_sub(3).max(1));
+        let header = if columns < NARROW_COLUMNS {
+            mobile_header(&self.model, self.thinking.as_deref(), &self.session, width)
+        } else {
+            clip(&metadata, width)
+        };
+        let lines = self.transcript_layout(width.saturating_sub(transcript_prefix(columns)).max(1));
         let draft_width = width.saturating_sub(5).max(1);
         let draft_rows = if self.modal.is_some() {
             vec![clip("Respond in the dialog above", draft_width)]
@@ -2675,6 +2721,36 @@ fn working_status(
     goal: Option<(usize, usize)>,
     usage: Option<&SessionUsage>,
 ) -> String {
+    if width < NARROW_COLUMNS {
+        // Small screens must never show a chopped-off usage label. Keep the
+        // activity and, when present, the model-reported Goal on one row.
+        let phase = format!("{flower} {phase}");
+        let timed = format!("{phase} · {seconds}s");
+        let normal = if scrolled.is_empty() {
+            format!("{timed} · Esc stop")
+        } else {
+            format!("{timed} · ↑")
+        };
+        let Some((completed, total)) = goal.filter(|(_, total)| *total > 0) else {
+            return [normal, timed, phase, format!("{flower} Working…")]
+                .into_iter()
+                .find(|text| text.chars().count() <= width)
+                .unwrap_or_else(|| flower.to_owned());
+        };
+        let right = format!("Goal {completed}/{total} · {}%", completed * 100 / total);
+        let remaining = width.saturating_sub(right.chars().count() + 1);
+        let left = [timed, phase, flower.to_owned()]
+            .into_iter()
+            .find(|text| text.chars().count() <= remaining)
+            .unwrap_or_default();
+        if left.is_empty() {
+            return clip(&right, width);
+        }
+        return format!(
+            "{left}{}{right}",
+            " ".repeat(width - left.chars().count() - right.chars().count())
+        );
+    }
     let left = format!("{flower} {phase} · {seconds}s · Esc stop{scrolled}");
     let Some((completed, total)) = goal.filter(|(_, total)| *total > 0) else {
         return with_usage(left, width, usage);
@@ -3112,8 +3188,43 @@ mod tests {
     }
 
     #[test]
+    fn narrow_header_and_footer_keep_only_complete_fields() {
+        assert_eq!(
+            mobile_header("openai-codex/gpt-6-sol", Some("medium"), "01a0e1abc", 42),
+            "gpt-6-sol · medium · 01a0e1abc"
+        );
+        assert_eq!(
+            mobile_header("openai-codex/gpt-6-sol", Some("medium"), "session-id", 15),
+            "gpt-6-sol"
+        );
+        let usage = SessionUsage::from_pi(&serde_json::json!({
+            "contextUsage":{"tokens":3900,"contextWindow":272000,"percent":1.4},
+            "tokens":{"input":19000,"output":9000},"cost":0.62
+        }))
+        .unwrap();
+        let narrow = working_status(42, "✿", "Thinking…", 34, "", None, Some(&usage));
+        assert_eq!(narrow, "✿ Thinking… · 34s · Esc stop");
+        assert!(!narrow.contains("Ctx"));
+        let goal = working_status(42, "✿", "Thinking…", 34, "", Some((2, 5)), Some(&usage));
+        assert!(goal.starts_with("✿ Thinking… · 34s"), "{goal}");
+        assert!(goal.ends_with("Goal 2/5 · 40%"), "{goal}");
+        assert_eq!(goal.chars().count(), 42);
+        assert_eq!(
+            with_usage("Enter send · /help".into(), 42, Some(&usage)),
+            "Enter send · /help · Ctx 3.9K/272K · 1%"
+        );
+    }
+
+    #[test]
     fn wide_layout_uses_terminal_width_for_composer_and_cursor() {
-        for (columns, expected) in [(40, 36), (80, 76), (160, 156), (200, 196)] {
+        for (columns, expected) in [
+            (40, 38),
+            (59, 57),
+            (60, 56),
+            (80, 76),
+            (160, 156),
+            (200, 196),
+        ] {
             assert_eq!(content_width(columns), expected);
         }
         let draft = "x".repeat(180);

@@ -70,7 +70,7 @@ impl Dialogs {
                             .as_str()
                             .is_some_and(|title| title.starts_with("Approval needed:"))
                     {
-                        read_approval(events, raw, event["timeout"].as_u64().unwrap_or(60_000))
+                        read_approval(events, raw, event["timeout"].as_u64())
                     } else {
                         terminal::read_line(events, raw)
                     }
@@ -116,21 +116,27 @@ impl Dialogs {
     }
 }
 
-/// A timed, default-deny reader for tool approval. Ordinary terminal
-/// read_line ignores Esc, which must never leave an approval pending.
+/// A default-deny reader for tool approval. Wait for an explicit decision
+/// unless the requesting extension supplies a timeout; unlike read_line,
+/// Esc must cancel rather than leave an approval pending.
 fn read_approval(
     events: &Receiver<u8>,
     raw: &mut RawMode,
-    timeout_ms: u64,
+    timeout_ms: Option<u64>,
 ) -> Result<Option<String>> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms.min(60_000));
+    let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms.min(60_000)));
     let mut choice = None;
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
-        match events.recv_timeout(remaining) {
+        let next = if let Some(deadline) = deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            events.recv_timeout(remaining)
+        } else {
+            events.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        };
+        match next {
             Ok(b'\r' | b'\n') => {
                 raw.write("\r\n")?;
                 return Ok(choice.map(str::to_owned));

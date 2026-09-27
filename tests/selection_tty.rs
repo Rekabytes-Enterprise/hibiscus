@@ -64,6 +64,21 @@ fn drag_select_copies_visible_transcript_without_sending_mouse_bytes_to_pi() {
 }
 
 #[test]
+fn narrow_transcript_selection_uses_reduced_margin() {
+    let (root, mut tty) = fixture();
+    tty.resize(48, 24);
+    tty.wait_text("hibiscus ·");
+    tty.send(b"hello\r");
+    tty.wait_text("Copyable reply");
+    // Narrow layout has a one-cell outer margin and one-cell marker gap.
+    tty.send(b"\x1b[<0;4;8M\x1b[<32;12;8M\x1b[<0;12;8m");
+    tty.wait_text("\x1b]52;c;Q29weWFibGU=\x07");
+    tty.send(b"/quit\r");
+    tty.finish();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn idle_ctrl_c_requires_a_second_press_and_other_input_disarms_exit() {
     let (root, mut tty) = fixture();
     tty.send(b"\x03");
