@@ -30,7 +30,14 @@ done
         .env("HIBISCUS_TEST_PROMPTS", &log);
     let mut tty = Pty::spawn(&mut command);
     tty.wait_text("Enter send · Ctrl+Enter");
-    tty.send(b"one\x1b[13;5utwo\x1b[27;5;13~three\nfour\nfive\nsix");
+    // Fragmented paste markers and embedded Enter/Esc/control bytes are data,
+    // not submission, cancellation, or modified-key commands.
+    tty.send(b"\x1b[200~paste one\r\npaste two\r");
+    tty.send(b"\npaste three\x03\x1b[201");
+    tty.send(b"~");
+    tty.wait_text("paste three");
+    assert!(!log.exists(), "bracketed paste must not submit any line");
+    tty.send(b"\x1b[13;5uone\x1b[13;5utwo\x1b[27;5;13~three\nfour\nfive\nsix");
     tty.wait_text("six");
     assert!(!log.exists(), "newlines must not submit the draft");
     tty.send(b"\x1b[A\x1b[B\r");
@@ -45,7 +52,10 @@ done
     let lines: Vec<_> = prompts.lines().collect();
     assert_eq!(lines.len(), 2);
     let prompt: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-    assert_eq!(prompt["message"], "one\ntwo\nthree\nfour\nfive\nsix");
+    assert_eq!(
+        prompt["message"],
+        "paste one\npaste two\npaste three\none\ntwo\nthree\nfour\nfive\nsix"
+    );
     let corrected: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     assert_eq!(corrected["message"], "ab-C");
     assert!(
@@ -54,6 +64,8 @@ done
     );
     assert!(shown.contains("\x1b[>1u"));
     assert!(shown.contains("\x1b[<u"));
+    assert!(shown.contains("\x1b[?2004h"));
+    assert!(shown.contains("\x1b[?2004l"));
     drop(tty);
     fs::remove_dir_all(root).unwrap();
 }

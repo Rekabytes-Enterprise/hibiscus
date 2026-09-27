@@ -6,4 +6,5 @@ mod paint;
 pub(crate) mod picker;
 pub(crate) mod screen;
 pub(crate) mod terminal;
+mod text_clipboard;
 pub(crate) mod ui;

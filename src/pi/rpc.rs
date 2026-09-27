@@ -1194,11 +1194,16 @@ fn poll_live_input(
 // transcript rather than aborting a running response.
 fn active_keys(events: &Receiver<u8>, display: &mut impl ScrollDisplay) -> Result<bool> {
     while let Ok(key) = events.try_recv() {
+        if display.paste_byte(key)? {
+            continue;
+        }
         if key != 27 {
             continue;
         }
         match escape_key(events) {
             Navigation::Escape | Navigation::EscapeWith(_) => return Ok(true),
+            Navigation::PasteStart => display.paste_start(),
+            Navigation::Mouse(event) => display.mouse(event)?,
             nav => display.scroll(nav)?,
         }
     }
