@@ -4,6 +4,18 @@ use support::{unique_temp_dir, Pty};
 
 fn fixture() -> (std::path::PathBuf, Pty) {
     let root = unique_temp_dir("hibiscus-selection");
+    // The macOS backend tries pbcopy even without DISPLAY. Never allow PTY
+    // fixtures to reach a runner's real clipboard; force the OSC 52 fallback.
+    for name in ["pbcopy", "wl-copy", "xclip", "xsel"] {
+        let helper = root.join(name);
+        fs::write(
+            &helper,
+            format!("#!/bin/sh\nprintf '{name}\\n' >> \"$SELECTION_CLIPBOARD_LOG\"\nexit 1\n"),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let script = root.join("pi");
     fs::write(&script, r#"#!/usr/bin/env python3
 import json,sys
@@ -28,6 +40,15 @@ for line in sys.stdin:
         Command::new(env!("CARGO_BIN_EXE_hibiscus"))
             .env("HIBISCUS_PI", &script)
             .env("HIBISCUS_NO_UPDATE_CHECK", "1")
+            .env("SELECTION_CLIPBOARD_LOG", root.join("clipboard-calls"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    root.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY"),
     );
@@ -60,6 +81,7 @@ fn drag_select_copies_visible_transcript_without_sending_mouse_bytes_to_pi() {
         output.contains("\x1b[?1002l"),
         "button-motion reporting must be disabled"
     );
+    assert_clipboard_isolated(&root, 2);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -75,7 +97,24 @@ fn narrow_transcript_selection_uses_reduced_margin() {
     tty.wait_text("\x1b]52;c;Q29weWFibGU=\x07");
     tty.send(b"/quit\r");
     tty.finish();
+    assert_clipboard_isolated(&root, 1);
     fs::remove_dir_all(root).unwrap();
+}
+
+fn assert_clipboard_isolated(root: &std::path::Path, calls: usize) {
+    let log = root.join("clipboard-calls");
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            fs::read_to_string(log).unwrap(),
+            "pbcopy\n".repeat(calls),
+            "must use only the fake clipboard helper"
+        );
+    } else {
+        assert!(
+            !log.exists(),
+            "a headless Linux fixture must not use a desktop clipboard"
+        );
+    }
 }
 
 #[test]
