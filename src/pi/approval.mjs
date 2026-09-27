@@ -109,7 +109,6 @@ export default function (pi) {
       decision = await ctx.ui.select(
         `Approval needed: ${reason}\nDirectory: ${JSON.stringify(ctx.cwd)}\nCommand: ${JSON.stringify(command)}`,
         ['Deny', 'Allow', 'Always Allow'],
-        { timeout: 60000 },
       );
     } catch {
       return { block: true, reason: 'Approval unavailable' };

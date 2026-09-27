@@ -66,8 +66,119 @@ pub(crate) enum Navigation {
     Newline,
     FollowUp,
     PasteImage,
+    PasteStart,
     MouseScroll(i32, usize),
+    Mouse(MouseEvent),
     Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MouseEvent {
+    button: usize,
+    column: usize,
+    row: usize,
+    release: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TextSelection {
+    anchor: (usize, usize), // transcript row, character column
+    focus: (usize, usize),
+    dragging: bool,
+}
+
+impl TextSelection {
+    fn bounds(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+
+    fn columns(&self, row: usize, length: usize, prefix: usize) -> Option<(usize, usize)> {
+        let (start, end) = self.bounds();
+        if row < start.0 || row > end.0 {
+            return None;
+        }
+        let first = if row == start.0 {
+            start.1.saturating_sub(prefix)
+        } else {
+            0
+        };
+        let last = if row == end.0 {
+            end.1.saturating_sub(prefix)
+        } else {
+            length
+        };
+        (first < last).then_some((first.min(length), last.min(length)))
+    }
+}
+
+#[derive(Default)]
+struct PasteInput {
+    bytes: Vec<u8>,
+    overflow: bool,
+}
+
+impl PasteInput {
+    const END: &'static [u8] = b"\x1b[201~";
+    fn push(&mut self, byte: u8) -> Option<Option<String>> {
+        self.bytes.push(byte);
+        if self.bytes.ends_with(Self::END) {
+            self.bytes.truncate(self.bytes.len() - Self::END.len());
+            if self.overflow {
+                return Some(None);
+            }
+            let text = match std::str::from_utf8(&self.bytes) {
+                Ok(text) => text,
+                Err(_) => return Some(None),
+            };
+            let mut clean = String::new();
+            // tmux can re-encode pasted Ctrl+J as CSI-u; treat it as text
+            // rather than allowing it to become a submit/keyboard event.
+            let decoded = text.replace("\x1b[106;5u", "\n");
+            let mut chars = decoded.chars().peekable();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '\r' => {
+                        if chars.peek() == Some(&'\n') {
+                            chars.next();
+                        }
+                        clean.push('\n');
+                    }
+                    '\n' => clean.push('\n'),
+                    '\t' => clean.push_str("    "),
+                    ch if !ch.is_control() => clean.push(ch),
+                    _ => {}
+                }
+            }
+            return Some(Some(clean));
+        }
+        if self.bytes.len() > 8192 + Self::END.len() {
+            self.overflow = true;
+            self.bytes.drain(..self.bytes.len() - Self::END.len());
+        }
+        None
+    }
+}
+
+fn sgr_mouse(sequence: &str) -> Option<MouseEvent> {
+    let release = sequence.ends_with('m');
+    let fields = sequence.strip_prefix('<')?.trim_end_matches(['M', 'm']);
+    let mut fields = fields.split(';');
+    let button = fields.next()?.parse().ok()?;
+    let column = fields.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+    let row = fields.next()?.parse::<usize>().ok()?.checked_sub(1)?;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(MouseEvent {
+        button,
+        column,
+        row,
+        release,
+    })
 }
 
 pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
@@ -91,6 +202,7 @@ pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
         "13;2u" | "27;2;13~" | "13;2~" | "13;5u" | "27;5;13~" | "13;5~" => Navigation::Newline,
         "13;3u" | "27;3;13~" | "13;3~" => Navigation::FollowUp,
         "3~" => Navigation::Delete,
+        "200~" => Navigation::PasteStart,
         "C" => Navigation::Right,
         "D" => Navigation::Left,
         "5~" => Navigation::ScrollPage(1),
@@ -108,6 +220,9 @@ pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
                 .unwrap_or(0);
             Navigation::MouseScroll(if seq.starts_with("<64;") { 3 } else { -3 }, row)
         }
+        seq if seq.starts_with('<') && (seq.ends_with('M') || seq.ends_with('m')) => {
+            sgr_mouse(seq).map_or(Navigation::Other, Navigation::Mouse)
+        }
         _ => Navigation::Other,
     }
 }
@@ -115,6 +230,13 @@ pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
 pub(crate) trait ScrollDisplay: Write {
     fn scroll(&mut self, _navigation: Navigation) -> io::Result<()> {
         Ok(())
+    }
+    fn mouse(&mut self, _event: MouseEvent) -> io::Result<()> {
+        Ok(())
+    }
+    fn paste_start(&mut self) {}
+    fn paste_byte(&mut self, _byte: u8) -> io::Result<bool> {
+        Ok(false)
     }
     fn start_work(&mut self) -> io::Result<()> {
         Ok(())
@@ -201,11 +323,38 @@ const FLOWERS: [&str; 4] = ["✿", "❀", "✾", "❁"];
 // screen; never change the terminal's configured background with OSC 11.
 const BASE_BACKGROUND: &str = "\x1b[48;2;48;10;36m";
 
-// Keep two columns on either side, including on wide/ultrawide terminals.
-// A single source of truth keeps Markdown, composer movement, modals and
-// cursor placement aligned when the terminal is resized.
+// Give narrow terminals one margin cell instead of two. Keep Markdown,
+// composer movement, panels and cursor based on the same content width.
+const NARROW_COLUMNS: usize = 60;
 fn content_width(columns: usize) -> usize {
-    columns.saturating_sub(4).max(1)
+    columns
+        .saturating_sub(if columns < NARROW_COLUMNS { 2 } else { 4 })
+        .max(1)
+}
+
+fn transcript_prefix(columns: usize) -> usize {
+    if columns < NARROW_COLUMNS {
+        2
+    } else {
+        3
+    }
+}
+
+fn mobile_header(model: &str, thinking: Option<&str>, session: &str, width: usize) -> String {
+    let model = model.rsplit('/').next().unwrap_or(model);
+    let mut header = clip(model, width);
+    if let Some(level) = thinking {
+        let part = format!(" · {}", clean(level));
+        if header.chars().count() + part.chars().count() <= width {
+            header.push_str(&part);
+        }
+    }
+    let session = clip(session, 10);
+    let part = format!(" · {session}");
+    if header.chars().count() + part.chars().count() <= width {
+        header.push_str(&part);
+    }
+    header
 }
 
 fn paint_background(frame: &str, color: bool) -> String {
@@ -372,6 +521,10 @@ pub(crate) struct Screen {
     session: String,
     usage: Option<SessionUsage>,
     scroll: usize,
+    selection: Option<TextSelection>,
+    selectable_rows: Vec<String>,
+    exit_armed: Option<Instant>,
+    paste: Option<PasteInput>,
     picker: Option<Picker>,
     modal: Option<Modal>,
     suggestions: Option<Picker>,
@@ -434,6 +587,10 @@ impl Screen {
             session: "new chat".into(),
             usage: None,
             scroll: 0,
+            selection: None,
+            selectable_rows: Vec::new(),
+            exit_armed: None,
+            paste: None,
             picker: None,
             modal: None,
             suggestions: None,
@@ -505,7 +662,14 @@ impl Screen {
         if self.full && !self.suspended {
             self.painter.invalidate();
             self.last_paint = None;
-            write!(self.out, "{SYNC_END}\x1b[<u\x1b[?1000l\x1b[?1006l")?;
+            self.selection = None;
+            self.selectable_rows.clear();
+            self.exit_armed = None;
+            self.paste = None;
+            write!(
+                self.out,
+                "{SYNC_END}\x1b[?2004l\x1b[<u\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
+            )?;
             if self.color {
                 write!(self.out, "\x1b[0m")?;
             }
@@ -526,7 +690,12 @@ impl Screen {
             if self.color {
                 self.out.write_all(BASE_BACKGROUND.as_bytes())?;
             }
-            write!(self.out, "\x1b[2J\x1b[?1000h\x1b[?1006h\x1b[?25l")?;
+            // SGR coordinates plus button-motion let the UI own selection in
+            // the alternate screen; without drag reports terminal selection is lost.
+            write!(
+                self.out,
+                "\x1b[2J\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?25l"
+            )?;
             self.suspended = false;
             self.render()?;
         }
@@ -631,6 +800,8 @@ impl Screen {
         self.active_utf8.clear();
         self.deferred_input.clear();
         self.input_notice = None;
+        self.exit_armed = None;
+        self.paste = None;
         self.session = "new chat".into();
         self.usage = None;
         self.render()
@@ -695,6 +866,7 @@ impl Screen {
     }
 
     fn dirty_transcript(&mut self) {
+        self.selection = None;
         if self.scroll > 0 && self.scroll_anchor.is_none() {
             self.scroll_anchor = Some(self.layout.len());
         }
@@ -1141,6 +1313,13 @@ impl Screen {
     }
 
     fn input_navigation(&mut self, key: Navigation) -> io::Result<()> {
+        if key == Navigation::PasteStart {
+            self.paste = Some(PasteInput::default());
+            return Ok(());
+        }
+        if let Navigation::Mouse(event) = key {
+            return self.select_mouse(event);
+        }
         if key == Navigation::PasteImage {
             return self.paste_image();
         }
@@ -1195,6 +1374,150 @@ impl Screen {
         } else {
             self.scroll(key)
         }
+    }
+
+    fn select_mouse(&mut self, event: MouseEvent) -> io::Result<()> {
+        if !self.full || self.suspended {
+            return Ok(());
+        }
+        // The transcript begins below the three header rows. A press elsewhere
+        // must not select a dialog, password or unsent composer text.
+        let row = event
+            .row
+            .saturating_sub(3)
+            .min(self.selectable_rows.len().saturating_sub(1));
+        let (columns, _) = self.size();
+        let left = (columns.saturating_sub(content_width(columns))) / 2;
+        let prefix = left + transcript_prefix(columns);
+        let column = event.column.saturating_sub(prefix);
+        let point = (row, column + prefix);
+        if event.release {
+            if let Some(selection) = self.selection.as_mut() {
+                if selection.dragging {
+                    selection.focus = point;
+                    selection.dragging = false;
+                    let text = self.selected_text();
+                    if !text.is_empty() {
+                        super::text_clipboard::copy(&mut self.out, &text)?;
+                    }
+                    self.render()?;
+                }
+            }
+        } else if event.button & 32 != 0 {
+            if let Some(selection) = self.selection.as_mut() {
+                if selection.dragging {
+                    selection.focus = point;
+                    self.render()?;
+                }
+            }
+        } else if event.button & 3 == 0 {
+            self.selection = None;
+            if event.row >= 3
+                && row < self.selectable_rows.len()
+                && !self.selectable_rows[row].is_empty()
+            {
+                self.selection = Some(TextSelection {
+                    anchor: point,
+                    focus: point,
+                    dragging: true,
+                });
+            }
+            self.render()?;
+        }
+        Ok(())
+    }
+
+    fn feed_paste(&mut self, byte: u8) -> io::Result<bool> {
+        let Some(paste) = &mut self.paste else {
+            return Ok(false);
+        };
+        if let Some(done) = paste.push(byte) {
+            self.paste = None;
+            match done {
+                Some(text) if self.draft.len() + text.len() <= 8192 => {
+                    self.insert_draft(&text);
+                    self.refresh_suggestions();
+                }
+                Some(_) | None => self.input_notice = Some("Paste too large or invalid".into()),
+            }
+            self.render()?;
+        }
+        Ok(true)
+    }
+
+    fn idle_ctrl_c(&mut self, pending: &mut Vec<u8>) -> io::Result<bool> {
+        if !self.full {
+            if self.draft.is_empty() && self.images.is_empty() && self.clipboard.is_none() {
+                return Ok(true);
+            }
+            self.draft.clear();
+            self.draft_cursor = 0;
+            self.preferred_column = None;
+            self.clear_images();
+            pending.clear();
+            return Ok(false);
+        }
+        let now = Instant::now();
+        if self
+            .exit_armed
+            .is_some_and(|armed| now.duration_since(armed) < Duration::from_secs(2))
+        {
+            self.exit_armed = None;
+            return Ok(true);
+        }
+        let text = self.selected_text();
+        if !text.is_empty() {
+            super::text_clipboard::copy(&mut self.out, &text)?;
+            self.selection = None;
+        } else {
+            self.draft.clear();
+            self.draft_cursor = 0;
+            self.preferred_column = None;
+            self.clear_images();
+            pending.clear();
+            self.suggestions_dismissed = false;
+            self.refresh_suggestions();
+        }
+        self.exit_armed = Some(now);
+        self.input_notice = Some("Press Ctrl+C again within 2s to quit".into());
+        self.render()?;
+        Ok(false)
+    }
+
+    fn selected_text(&self) -> String {
+        let Some(selection) = &self.selection else {
+            return String::new();
+        };
+        let (columns, _) = self.size();
+        let prefix =
+            (columns.saturating_sub(content_width(columns))) / 2 + transcript_prefix(columns);
+        let (start, end) = selection.bounds();
+        if start == end {
+            return String::new();
+        }
+        (start.0..=end.0)
+            .filter_map(|row| {
+                self.selectable_rows.get(row).map(|line| {
+                    let from = if row == start.0 {
+                        start.1.saturating_sub(prefix)
+                    } else {
+                        0
+                    };
+                    let to = if row == end.0 {
+                        end.1.saturating_sub(prefix)
+                    } else {
+                        line.chars().count()
+                    };
+                    line.chars()
+                        .skip(from)
+                        .take(to.saturating_sub(from))
+                        .collect::<String>()
+                        .trim_end()
+                        .to_owned()
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn scroll_draft(&mut self, lines: i32, total: usize) {
@@ -1294,6 +1617,16 @@ impl Screen {
         let mut queued = self.pending_input.take();
         loop {
             self.poll_clipboard()?;
+            if self
+                .exit_armed
+                .is_some_and(|armed| armed.elapsed() >= Duration::from_secs(2))
+            {
+                self.exit_armed = None;
+                if self.input_notice.as_deref() == Some("Press Ctrl+C again within 2s to quit") {
+                    self.input_notice = None;
+                    self.render()?;
+                }
+            }
             if self.full
                 && !self.suspended
                 && (self.painter.resized(self.size()) || self.diagnostics_changed())
@@ -1305,6 +1638,7 @@ impl Screen {
             if self.draft.is_empty()
                 && self.images.is_empty()
                 && self.clipboard.is_none()
+                && self.exit_armed.is_none()
                 && pending.is_empty()
                 && queued.is_none()
                 && self.deferred_input.is_empty()
@@ -1346,8 +1680,20 @@ impl Screen {
                     }
                 }
             };
+            if self.feed_paste(byte)? {
+                continue;
+            }
+            if byte != 3
+                && self.exit_armed.take().is_some()
+                && self.input_notice.as_deref() == Some("Press Ctrl+C again within 2s to quit")
+            {
+                self.input_notice = None;
+                self.render()?;
+            }
             match byte {
                 b'\n' => self.input_navigation(Navigation::Newline)?,
+                3 if self.idle_ctrl_c(&mut pending)? => return Ok(PromptAction::Text(None)),
+                3 => {}
                 b'\r' => {
                     if self.clipboard.is_some() {
                         self.clipboard_notice = "Reading clipboard… press Enter when ready".into();
@@ -1380,22 +1726,11 @@ impl Screen {
                     self.refresh_suggestions();
                     self.render()?;
                 }
-                3 | 4
-                    if self.draft.is_empty()
-                        && self.images.is_empty()
-                        && self.clipboard.is_none() =>
+                4 if self.draft.is_empty()
+                    && self.images.is_empty()
+                    && self.clipboard.is_none() =>
                 {
-                    return Ok(PromptAction::Text(None))
-                }
-                3 => {
-                    self.draft.clear();
-                    self.draft_cursor = 0;
-                    self.preferred_column = None;
-                    self.clear_images();
-                    pending.clear();
-                    self.suggestions_dismissed = false;
-                    self.refresh_suggestions();
-                    self.render()?;
+                    return Ok(PromptAction::Text(None));
                 }
                 8 | 127 => {
                     pending.clear();
@@ -1477,10 +1812,20 @@ impl Screen {
         }
     }
 
+    #[cfg(test)]
     fn styled_line(&self, row: &markdown::Row, width: usize) -> String {
+        self.styled_line_selected(row, width, None)
+    }
+
+    fn styled_line_selected(
+        &self,
+        row: &markdown::Row,
+        width: usize,
+        selected: Option<(usize, usize)>,
+    ) -> String {
         let mut out = String::new();
         let mut previous = Tone::Plain;
-        for cell in &row.cells {
+        for (index, cell) in row.cells.iter().enumerate() {
             if self.color && cell.tone != previous {
                 out.push_str("\x1b[0m");
                 let code = match cell.tone {
@@ -1503,7 +1848,14 @@ impl Screen {
                 }
                 previous = cell.tone;
             }
+            let selected = selected.is_some_and(|(start, end)| (start..end).contains(&index));
+            if selected {
+                out.push_str("\x1b[7m");
+            }
             out.push(cell.ch);
+            if selected {
+                out.push_str("\x1b[27m");
+            }
         }
         if self.color && row.role == Role::Diff {
             out.push_str(&" ".repeat(width.saturating_sub(row.cells.len())));
@@ -1529,6 +1881,7 @@ impl Screen {
         out
     }
 
+    #[cfg(test)]
     fn transcript_line(
         &self,
         row: &markdown::Row,
@@ -1536,22 +1889,46 @@ impl Screen {
         columns: usize,
         left: &str,
     ) -> String {
+        self.transcript_line_selected(row, width, columns, left, usize::MAX)
+    }
+
+    fn transcript_line_selected(
+        &self,
+        row: &markdown::Row,
+        width: usize,
+        columns: usize,
+        left: &str,
+        row_index: usize,
+    ) -> String {
+        let selected = self.selection.as_ref().and_then(|selection| {
+            selection.columns(
+                row_index,
+                row.cells.len(),
+                left.len() + transcript_prefix(columns),
+            )
+        });
         let marker = match row.cells.first().map(|cell| cell.tone) {
             Some(Tone::DiffAdded) => self.accent("38;2;169;224;184", "┃"),
             Some(Tone::DiffRemoved) => self.accent("38;2;255;134;153", "┃"),
             _ if row.role == Role::User => self.accent("1;38;2;236;74;125", "┃"),
             _ => self.accent("2;38;2;184;57;101", "│"),
         };
+        let gap = " ".repeat(transcript_prefix(columns) - 1);
         let text = format!(
-            "{left}{marker}  {}",
-            self.styled_line(row, width.saturating_sub(3).max(1))
+            "{left}{marker}{gap}{}",
+            self.styled_line_selected(
+                row,
+                width.saturating_sub(transcript_prefix(columns)).max(1),
+                selected
+            )
         );
         if self.color && row.role == Role::User {
             // Reapply the tint after foreground/style resets, and paint the
             // margins and unused columns too. Reset before the next row.
             let background = "\x1b[48;2;57;30;46m";
             let text = text.replace("\x1b[0m", &format!("\x1b[0m{background}"));
-            let padding = columns.saturating_sub(left.len() + 3 + row.cells.len());
+            let padding =
+                columns.saturating_sub(left.len() + transcript_prefix(columns) + row.cells.len());
             format!("{background}{text}{}\x1b[0m", " ".repeat(padding))
         } else {
             text
@@ -1597,8 +1974,11 @@ impl Screen {
             return Ok(());
         }
         let (columns, rows) = self.size();
-        if self.painter.resized((columns, rows)) && !self.secret_input {
-            self.ensure_cursor_visible();
+        if self.painter.resized((columns, rows)) {
+            self.selection = None;
+            if !self.secret_input {
+                self.ensure_cursor_visible();
+            }
         }
         let width = content_width(columns);
         let left = " ".repeat(columns.saturating_sub(width) / 2);
@@ -1607,7 +1987,11 @@ impl Screen {
             .activity
             .as_ref()
             .map_or(FLOWERS[0], |activity| FLOWERS[activity.flower_frame]);
-        let title = clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width);
+        let title = if columns < NARROW_COLUMNS {
+            clip(&format!("{} hibiscus · {workspace}", FLOWERS[0]), width)
+        } else {
+            clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width)
+        };
         let metadata = format!(
             "{}{}  ·  {}",
             self.model,
@@ -1616,8 +2000,12 @@ impl Screen {
                 .map_or(String::new(), |level| format!("  ·  Thinking {level}")),
             self.session
         );
-        let header = clip(&metadata, width);
-        let lines = self.transcript_layout(width.saturating_sub(3).max(1));
+        let header = if columns < NARROW_COLUMNS {
+            mobile_header(&self.model, self.thinking.as_deref(), &self.session, width)
+        } else {
+            clip(&metadata, width)
+        };
+        let lines = self.transcript_layout(width.saturating_sub(transcript_prefix(columns)).max(1));
         let draft_width = width.saturating_sub(5).max(1);
         let draft_rows = if self.modal.is_some() {
             vec![clip("Respond in the dialog above", draft_width)]
@@ -1672,6 +2060,7 @@ impl Screen {
         ));
         frame.push_str(&format!("{left}{}\x1b[K\r\n", self.accent("2", &header)));
         frame.push_str("\x1b[K\r\n");
+        self.selectable_rows = vec![String::new(); available];
         for row in 0..available {
             if let Some((top, panel)) = &modal {
                 if let Some(line) = row.checked_sub(*top).and_then(|offset| panel.get(offset)) {
@@ -1680,9 +2069,10 @@ impl Screen {
                 }
             }
             if let Some(line) = lines.get(start + row).filter(|_| start + row < end) {
+                self.selectable_rows[row] = line.cells.iter().map(|cell| cell.ch).collect();
                 frame.push_str(&format!(
                     "{}\x1b[K\r\n",
-                    self.transcript_line(line, width, columns, &left)
+                    self.transcript_line_selected(line, width, columns, &left, row)
                 ));
             } else {
                 frame.push_str("\x1b[K\r\n");
@@ -1901,6 +2291,15 @@ impl ScrollDisplay for Screen {
             response.unwrap_or_else(|| serde_json::json!({"cancelled":true})),
         ))
     }
+    fn mouse(&mut self, event: MouseEvent) -> io::Result<()> {
+        self.select_mouse(event)
+    }
+    fn paste_start(&mut self) {
+        self.paste = Some(PasteInput::default());
+    }
+    fn paste_byte(&mut self, byte: u8) -> io::Result<bool> {
+        self.feed_paste(byte)
+    }
     fn scroll(&mut self, navigation: Navigation) -> io::Result<()> {
         let step = self.size().1.saturating_sub(10).max(1);
         let offset = match navigation {
@@ -1914,12 +2313,17 @@ impl ScrollDisplay for Screen {
             self.scroll = self.scroll.saturating_sub(offset.unsigned_abs() as usize);
         }
         if offset != 0 {
+            self.selection = None;
             self.render()?;
         }
         Ok(())
     }
 
     fn start_work(&mut self) -> io::Result<()> {
+        self.exit_armed = None;
+        if self.input_notice.as_deref() == Some("Press Ctrl+C again within 2s to quit") {
+            self.input_notice = None;
+        }
         self.current_timeline = None;
         if !self.full {
             return Ok(());
@@ -2065,6 +2469,9 @@ impl ScrollDisplay for Screen {
     }
     fn active_key(&mut self, byte: u8, events: &Receiver<u8>) -> Result<ActiveAction> {
         self.poll_clipboard()?;
+        if self.feed_paste(byte)? {
+            return Ok(ActiveAction::None);
+        }
         match byte {
             b'\r' => return Ok(self.send_active_draft(QueueMode::Steer)?),
             17 => return Ok(self.send_active_draft(QueueMode::FollowUp)?), // Ctrl+Q (WSL)
@@ -2075,11 +2482,17 @@ impl ScrollDisplay for Screen {
                 self.render()?;
             }
             3 => {
-                self.draft.clear();
-                self.draft_cursor = 0;
-                self.preferred_column = None;
-                self.clear_images();
-                self.active_utf8.clear();
+                let text = self.selected_text();
+                if !text.is_empty() {
+                    super::text_clipboard::copy(&mut self.out, &text)?;
+                    self.selection = None;
+                } else {
+                    self.draft.clear();
+                    self.draft_cursor = 0;
+                    self.preferred_column = None;
+                    self.clear_images();
+                    self.active_utf8.clear();
+                }
                 self.render()?;
             }
             8 | 127 => self.backspace_draft()?,
@@ -2308,6 +2721,36 @@ fn working_status(
     goal: Option<(usize, usize)>,
     usage: Option<&SessionUsage>,
 ) -> String {
+    if width < NARROW_COLUMNS {
+        // Small screens must never show a chopped-off usage label. Keep the
+        // activity and, when present, the model-reported Goal on one row.
+        let phase = format!("{flower} {phase}");
+        let timed = format!("{phase} · {seconds}s");
+        let normal = if scrolled.is_empty() {
+            format!("{timed} · Esc stop")
+        } else {
+            format!("{timed} · ↑")
+        };
+        let Some((completed, total)) = goal.filter(|(_, total)| *total > 0) else {
+            return [normal, timed, phase, format!("{flower} Working…")]
+                .into_iter()
+                .find(|text| text.chars().count() <= width)
+                .unwrap_or_else(|| flower.to_owned());
+        };
+        let right = format!("Goal {completed}/{total} · {}%", completed * 100 / total);
+        let remaining = width.saturating_sub(right.chars().count() + 1);
+        let left = [timed, phase, flower.to_owned()]
+            .into_iter()
+            .find(|text| text.chars().count() <= remaining)
+            .unwrap_or_default();
+        if left.is_empty() {
+            return clip(&right, width);
+        }
+        return format!(
+            "{left}{}{right}",
+            " ".repeat(width - left.chars().count() - right.chars().count())
+        );
+    }
     let left = format!("{flower} {phase} · {seconds}s · Esc stop{scrolled}");
     let Some((completed, total)) = goal.filter(|(_, total)| *total > 0) else {
         return with_usage(left, width, usage);
@@ -2546,6 +2989,89 @@ fn draft_lines(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sgr_drag_release_and_wheel_are_distinct_from_escape() {
+        let (send, recv) = std::sync::mpsc::channel();
+        for (bytes, expected) in [
+            (
+                b"[<0;6;8M".as_slice(),
+                Navigation::Mouse(MouseEvent {
+                    button: 0,
+                    column: 5,
+                    row: 7,
+                    release: false,
+                }),
+            ),
+            (
+                b"[<32;14;8M".as_slice(),
+                Navigation::Mouse(MouseEvent {
+                    button: 32,
+                    column: 13,
+                    row: 7,
+                    release: false,
+                }),
+            ),
+            (
+                b"[<0;14;8m".as_slice(),
+                Navigation::Mouse(MouseEvent {
+                    button: 0,
+                    column: 13,
+                    row: 7,
+                    release: true,
+                }),
+            ),
+            (b"[<64;10;10M".as_slice(), Navigation::MouseScroll(3, 10)),
+            (b"[<0;0;8M".as_slice(), Navigation::Other),
+        ] {
+            for byte in bytes {
+                send.send(*byte).unwrap();
+            }
+            assert_eq!(escape_key(&recv), expected);
+        }
+    }
+
+    #[test]
+    fn bracketed_paste_is_literal_and_bounded_during_an_active_run() {
+        let mut screen = Screen::new(false).unwrap();
+        let (send, events) = std::sync::mpsc::channel();
+        for byte in b"[200~" {
+            send.send(*byte).unwrap();
+        }
+        assert_eq!(escape_key(&events), Navigation::PasteStart);
+        screen.paste_start();
+        for byte in b"a\r\nb\x03\x1b[106;5uZ\x1b[201~" {
+            assert!(screen.paste_byte(*byte).unwrap());
+        }
+        assert_eq!(screen.draft, "a\nb\nZ");
+        assert!(screen.paste.is_none());
+        screen.paste_start();
+        for byte in "x".repeat(8193).bytes().chain(b"\x1b[201~".iter().copied()) {
+            screen.paste_byte(byte).unwrap();
+        }
+        assert_eq!(screen.draft, "a\nb\nZ");
+        assert!(screen
+            .input_notice
+            .as_deref()
+            .unwrap()
+            .contains("too large"));
+    }
+
+    #[test]
+    fn selection_extracts_only_visible_transcript_and_not_chrome() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.selectable_rows = vec!["first line".into(), "second line".into()];
+        // At 80 columns the left margin and transcript marker occupy 5 cells.
+        screen.selection = Some(TextSelection {
+            anchor: (0, 5 + 6),
+            focus: (1, 5 + 6),
+            dragging: false,
+        });
+        assert_eq!(screen.selected_text(), "line\nsecond");
+        assert_eq!(screen.selection.unwrap().columns(0, 10, 5), Some((6, 10)));
+        screen.dirty_transcript();
+        assert!(screen.selection.is_none());
+    }
     #[test]
     fn layout_reuses_rows_for_typing_and_coalesces_scrolled_changes() {
         let mut screen = Screen::new(false).unwrap();
@@ -2662,8 +3188,43 @@ mod tests {
     }
 
     #[test]
+    fn narrow_header_and_footer_keep_only_complete_fields() {
+        assert_eq!(
+            mobile_header("openai-codex/gpt-6-sol", Some("medium"), "01a0e1abc", 42),
+            "gpt-6-sol · medium · 01a0e1abc"
+        );
+        assert_eq!(
+            mobile_header("openai-codex/gpt-6-sol", Some("medium"), "session-id", 15),
+            "gpt-6-sol"
+        );
+        let usage = SessionUsage::from_pi(&serde_json::json!({
+            "contextUsage":{"tokens":3900,"contextWindow":272000,"percent":1.4},
+            "tokens":{"input":19000,"output":9000},"cost":0.62
+        }))
+        .unwrap();
+        let narrow = working_status(42, "✿", "Thinking…", 34, "", None, Some(&usage));
+        assert_eq!(narrow, "✿ Thinking… · 34s · Esc stop");
+        assert!(!narrow.contains("Ctx"));
+        let goal = working_status(42, "✿", "Thinking…", 34, "", Some((2, 5)), Some(&usage));
+        assert!(goal.starts_with("✿ Thinking… · 34s"), "{goal}");
+        assert!(goal.ends_with("Goal 2/5 · 40%"), "{goal}");
+        assert_eq!(goal.chars().count(), 42);
+        assert_eq!(
+            with_usage("Enter send · /help".into(), 42, Some(&usage)),
+            "Enter send · /help · Ctx 3.9K/272K · 1%"
+        );
+    }
+
+    #[test]
     fn wide_layout_uses_terminal_width_for_composer_and_cursor() {
-        for (columns, expected) in [(40, 36), (80, 76), (160, 156), (200, 196)] {
+        for (columns, expected) in [
+            (40, 38),
+            (59, 57),
+            (60, 56),
+            (80, 76),
+            (160, 156),
+            (200, 196),
+        ] {
             assert_eq!(content_width(columns), expected);
         }
         let draft = "x".repeat(180);

@@ -54,7 +54,7 @@ const ctx = {
     assert.match(title, /Directory: "\/workspace\/first"/);
     assert.match(title, /Command: "rm -rf build"/);
     assert.deepEqual(choices, ['Deny', 'Allow', 'Always Allow']);
-    assert.ok(opts.timeout > 0);
+    assert.equal(opts, undefined, 'approval waits for the user without a timer');
     return response;
   } },
 };
