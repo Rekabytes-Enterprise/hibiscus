@@ -174,6 +174,11 @@ impl Rpc {
         }
         if kind == "prompt" {
             display.stop_work()?;
+            // Only a successfully settled run replaces completed Mermaid
+            // source with display-only diagrams. Never mutate Pi's messages.
+            if result.as_ref().is_ok_and(|stopped| !stopped) {
+                display.complete_diagrams()?;
+            }
         }
         if kind == "new_session" && result.is_ok() {
             self.resume = SessionStart::New;

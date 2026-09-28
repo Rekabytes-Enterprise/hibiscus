@@ -3,7 +3,10 @@ use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsRawFd;
 use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
-use std::{collections::VecDeque, env};
+use std::{
+    collections::{HashMap, VecDeque},
+    env,
+};
 
 use super::{
     activity::Timeline,
@@ -259,6 +262,9 @@ pub(crate) trait ScrollDisplay: Write {
     fn stop_work(&mut self) -> io::Result<()> {
         Ok(())
     }
+    fn complete_diagrams(&mut self) -> io::Result<()> {
+        Ok(())
+    }
     fn compaction_mode(&mut self, _active: bool) -> io::Result<()> {
         Ok(())
     }
@@ -507,6 +513,7 @@ pub(crate) struct Screen {
     loop_transcript_epoch: u64,
     loop_user_delivered: bool,
     layout: markdown::Layout,
+    diagrams: HashMap<String, Vec<String>>,
     layout_dirty: bool,
     scroll_anchor: Option<usize>,
     workspace: String,
@@ -594,6 +601,7 @@ impl Screen {
             loop_transcript_epoch: 0,
             loop_user_delivered: false,
             layout: markdown::Layout::default(),
+            diagrams: HashMap::new(),
             layout_dirty: true,
             scroll_anchor: None,
             workspace: env::current_dir()
@@ -829,6 +837,8 @@ impl Screen {
     pub(crate) fn clear_session(&mut self) -> io::Result<()> {
         self.dirty_transcript();
         self.transcript.clear();
+        self.diagrams.clear();
+        self.layout.invalidate();
         self.loop_transcript_epoch = self.loop_transcript_epoch.wrapping_add(1);
         self.draft.clear();
         self.draft_cursor = 0;
@@ -1227,7 +1237,8 @@ impl Screen {
 
     fn transcript_layout(&mut self, width: usize) -> std::rc::Rc<Vec<std::rc::Rc<markdown::Row>>> {
         if self.layout_dirty || self.layout.width() != width {
-            self.layout.update(&self.rendered_transcript(), width);
+            self.layout
+                .update_with_diagrams(&self.rendered_transcript(), width, &self.diagrams);
             self.layout_dirty = false;
             if let Some(before) = self.scroll_anchor.take() {
                 if self.scroll > 0 {
@@ -2188,6 +2199,7 @@ impl Screen {
                     Tone::Heading => "1;38;2;236;74;125",
                     Tone::Link => "4;38;2;236;74;125",
                     Tone::Muted => "2",
+                    Tone::TableBorder => "38;2;184;57;101",
                     Tone::Activity => "1;38;2;236;74;125",
                     Tone::Success => "38;2;169;224;184",
                     Tone::Error => "38;2;255;120;149",
@@ -2893,6 +2905,32 @@ impl ScrollDisplay for Screen {
         {
             self.input_notice = None;
         }
+        self.render()
+    }
+    fn complete_diagrams(&mut self) -> io::Result<()> {
+        if !self.full {
+            return Ok(());
+        }
+        let text = self.rendered_transcript();
+        let pending: Vec<_> = markdown::mermaid_sources(&text)
+            .into_iter()
+            .filter(|source| !self.diagrams.contains_key(source))
+            .collect();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let rendered = crate::pi::mermaid::render(&pending);
+        if self.diagrams.len() > 64 {
+            self.diagrams.clear();
+        }
+        for source in pending {
+            self.diagrams.insert(
+                source.clone(),
+                rendered.get(&source).cloned().unwrap_or_default(),
+            );
+        }
+        self.dirty_transcript();
+        self.layout.invalidate();
         self.render()
     }
     fn stop_work(&mut self) -> io::Result<()> {
@@ -4628,6 +4666,22 @@ mod tests {
         assert!(!screen
             .transcript_line(&rows[0], 13, 19, "   ")
             .contains('\x1b'));
+    }
+
+    #[test]
+    fn table_borders_use_raspberry_and_respect_no_color() {
+        let rows = markdown::format("hibi › A | B\none | two\nthree | four", 80);
+        let mut screen = Screen::new(false).unwrap();
+        let plain = screen.styled_line(&rows[1], 80);
+        assert!(plain.starts_with('╭'));
+        assert!(!plain.contains('\x1b'));
+        screen.color = true;
+        assert!(screen
+            .styled_line(&rows[1], 80)
+            .contains("\x1b[38;2;184;57;101m"));
+        assert!(screen
+            .styled_line(&rows[3], 80)
+            .contains("\x1b[38;2;184;57;101m"));
     }
 
     #[test]
