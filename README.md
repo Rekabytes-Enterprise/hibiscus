@@ -58,13 +58,24 @@ Prefer to inspect the installer first, choose a version, or use a custom directo
 
 | | What you get |
 | :--- | :--- |
-| **Clear conversations** | Ubuntu-style aubergine background, lighter user rows, visible `hibi` reply headings, Markdown, and a scrolling transcript. |
+| **Clear conversations** | Ubuntu-style aubergine background, lighter user rows, visible `hibi` reply headings, and a scrolling transcript. |
+| **Readable Markdown** | Width-aware pipe tables with wrapped cells, per-row dividers and raspberry borders. In full-screen chat, completed assistant `mermaid` blocks become Unicode diagrams after Pi settles; the source stays visible while streaming or if rendering is unavailable. |
 | **Room to think** | A movable insertion cursor in a multiline composer that grows to five rows, then scrolls within the input. |
 | **Show, don't describe** | Paste clipboard images alongside your prompt, with a visible attachment count. |
 | **Models at your fingertips** | A keyboard-and-wheel picker of Pi-configured models, grouped by provider. |
 | **Pick up where you left off** | Resume the latest session or choose another, with recent conversation context shown. |
 | **Know what's happening** | Pi-reported thinking level in the header; confirmed context/input/output, compact cache-read and cost snapshot beside the live footer phase and optional checklist Goal bar. A rotating Exploring glyph, checked read/bash counts, failures, and edit diffs stay visible in chat. |
 | **Stay in control** | Type while Pi works: Enter steers, Ctrl+Q (WSL) or Alt+Enter queues a follow-up. Waiting messages stay beside the composer until Pi actually delivers them; dangerous shell commands request approval in the same docked panel style as `/models`. Esc clears the queue and stops a run. |
+| **Opt-in `/loop`** | Ask Pi to work, test and continue across settled turns. Guided mode reports Pi's own completion assessment; `--strict` adds named criteria, Playwright evidence checks and a separate Pi SDK reviewer. |
+
+### Markdown at a glance
+
+<p align="center">
+  <img src="docs/assets/markdown-preview.svg" width="960" alt="Illustrated Hibiscus chat showing an aligned JavaScript versus TypeScript table and a three-step Unicode flowchart">
+  <br><sub>Illustrated examples, not a captured session. Diagram layout depends on the selected Pi installation and terminal width.</sub>
+</p>
+
+Tables are laid out within the transcript width, including model output that omits the usual Markdown separator row. For a fenced <code>mermaid</code> block, Hibiscus shows the source during streaming, then displays a diagram **after a successful settled reply**. Unsupported, too-wide or unavailable diagrams stay as source. This is a full-screen display transform only: Pi keeps the original Markdown in the saved session; line mode and piped output remain plain text.
 
 ### A few keys to remember
 
@@ -80,7 +91,7 @@ Prefer to inspect the installer first, choose a version, or use a custom directo
 | Scroll the conversation | **PgUp / PgDn** or mouse wheel |
 | Stop the current run | **Esc** |
 
-Image paste needs a supported local clipboard backend and an image-capable model. Input editing currently appends or deletes at the end of the draft. See [terminal behavior](docs/terminal.md) for clipboard requirements, limits, and terminal-specific shortcuts.
+Image paste needs a supported local clipboard backend and an image-capable model. You can move the cursor to edit inside a draft. See [terminal behavior](docs/terminal.md) for clipboard requirements, limits, and terminal-specific shortcuts.
 
 ## Your everyday commands
 
@@ -102,12 +113,34 @@ Inside a chat:
 | `/models` | Choose a model across Pi-configured providers |
 | `/thinking [level]` | Choose a Pi-supported reasoning level for the active model |
 | `/compact [instructions]` | Ask Pi to summarize older context (model call; original history remains saved) |
+| `/loop <goal>` | Let Pi work and test across settled turns; completion is **model-reported**, not independently verified |
+| `/loop --strict <goal>` | Opt into named criteria, Playwright report/screenshot checks and a separate Pi SDK reviewer |
 | `/login` | Sign in with Codex, or hand off to Pi for another provider |
 | `/logout` | Choose a provider and remove its stored credential inside Hibiscus |
 | `/restore` | Restore a failed prompt and images for review, without sending |
 | `/reconnect` | Reconnect a disconnected Pi backend without replaying requests |
 | `/help` | Show available commands |
 | `/quit` or `/exit` | Leave Hibiscus |
+
+### How `/loop` proceeds
+
+```mermaid
+flowchart TD
+    A["/loop goal"] --> M{"Mode?"}
+    M -->|Guided, default| W["Pi works and tests"]
+    M -->|--strict| S["Name and review acceptance criteria"]
+    S --> W
+    W --> T["Wait for Pi to settle"]
+    T --> R{"Pi reports complete?"}
+    R -->|More work| W
+    R -->|Guided complete| G["Done: model-reported"]
+    R -->|Strict complete| E["Validate Playwright report, attachments and image read"]
+    E --> V{"Separate SDK reviewer + evidence pass?"}
+    V -->|More work needed| W
+    V -->|Yes| F["Done: checked evidence and reviewer verdict"]
+```
+
+Both modes can stop on Esc, a reported blocker or an error and restore ordinary Hibiscus approvals. While `/loop` is active, Hibiscus's own dangerous-`bash` approval gate is bypassed; **this is not a sandbox**, and Esc cannot undo commands Pi has already run. For web apps, Pi is guided to set up project-local browser testing and preserve original failure screenshots, traces and separately labelled annotations where possible. Guided completion is Pi's assessment; strict checks validate report shape and review evidence, **not** whether generated tests truly prove the requested behavior. [Modes, evidence requirements and limits →](docs/loop-design.md)
 
 Sessions belong to Pi, not a second Hibiscus database. On resume, Hibiscus shows up to the **last five user turns** and their replies; Pi retains the full history. One-shot prompts are saved as separate sessions.
 
@@ -128,7 +161,7 @@ Set `HIBISCUS_NO_UPDATE_CHECK=1` to disable automatic checks. Custom install dir
 
 **A terminal interface, not another agent.** Hibiscus controls a long-lived `pi --mode rpc` process over JSONL. Pi remains responsible for authentication, model access, tools, agent behavior, and session persistence.
 
-- Hibiscus launches Pi with **installed extensions disabled**, its one explicit approval gate, and the built-in **read, bash, edit, and write** tools enabled. Your normal standalone Pi configuration is unaffected.
+- Hibiscus launches Pi with **installed extensions disabled**, its bundled integration (approval, goal and loop status), and the built-in **read, bash, edit, and write** tools enabled. Your normal standalone Pi configuration is unaffected.
 - Codex sign-in and provider logout stay inside full-screen Hibiscus with the Pi SDK available. Logout asks for a provider and confirmation; it removes only that stored credential, not environment/config keys or provider-side access. Other-provider login hands off to Pi's TUI; `/quit` there returns to Hibiscus. [Authentication details →](docs/terminal.md#authentication-handoff)
 - `NO_COLOR=1` disables colors. Small terminals, `TERM=dumb`, and piped input use line mode.
 - Set `HIBISCUS_PI` to select a different Pi executable. Pi's session-directory settings are respected.
