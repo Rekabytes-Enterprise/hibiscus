@@ -120,6 +120,10 @@ impl Ui {
             out,
             "  Context     /compact [summary instructions]  (Pi model call)"
         )?;
+        writeln!(
+            out,
+            "  Unattended  /loop [--strict] <goal>  (Esc stops; bypasses approvals)"
+        )?;
         writeln!(out, "  Account     /login  (Codex here; others in Pi)")?;
         writeln!(
             out,

@@ -33,6 +33,10 @@ const COMMANDS: &[Command] = &[
         description: "Remove a stored provider credential",
     },
     Command {
+        name: "/loop",
+        description: "Guided unattended work; --strict for evidence checks",
+    },
+    Command {
         name: "/models",
         description: "Choose a model",
     },
@@ -86,7 +90,7 @@ mod tests {
                 .iter()
                 .map(|cmd| cmd.name)
                 .collect::<Vec<_>>(),
-            ["/login", "/logout"]
+            ["/login", "/logout", "/loop"]
         );
         assert_eq!(
             matches("/thi")

@@ -1,4 +1,5 @@
 pub(crate) mod commands;
+mod loop_mode;
 mod models;
 pub(crate) mod sessions;
 
@@ -289,6 +290,30 @@ fn chat<R: BufRead>(
                         last_failed = Some((message.to_owned(), images.clone()));
                     }
                     ui.info(output, "Pi is disconnected. Use /reconnect, /restore, /help, or /quit. Nothing was sent.")?;
+                }
+                _ if message == "/loop" || message.starts_with("/loop ") => {
+                    if !images.is_empty() {
+                        output.restore_draft(message.to_owned(), images.clone());
+                        ui.info(
+                            output,
+                            "Remove attachments before using /loop; draft restored for review.",
+                        )?;
+                    } else {
+                        let goal = message.strip_prefix("/loop").unwrap_or("").trim();
+                        submitted = output.is_full() && !goal.is_empty();
+                        let result = loop_mode::run(
+                            goal,
+                            rpc,
+                            input,
+                            output,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            ui,
+                        );
+                        output.end_loop_scope()?;
+                        result?;
+                    }
                 }
                 "/new" => {
                     rpc.command(

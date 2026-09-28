@@ -182,7 +182,7 @@ export class ModelRuntime {
         let extension = launch
             .trim()
             .strip_prefix(
-                "--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension ",
+                "--mode rpc --no-extensions --tools read,bash,edit,write,goal,loop_status --extension ",
             )
             .unwrap()
             .to_owned();
@@ -271,7 +271,7 @@ export class ModelRuntime {
     let base = log.lines().next().unwrap();
     assert!(
         base.starts_with(
-            "--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension "
+            "--mode rpc --no-extensions --tools read,bash,edit,write,goal,loop_status --extension "
         ),
         "{log}"
     );

@@ -4,6 +4,22 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+### Added
+
+- Experimental interactive `/loop <goal>` drives Pi through repeated settled runs, temporarily bypasses Hibiscus's shell approval gate, and instructs Pi to provision browser UAT tooling on the user's host. Esc and reported blockers restore ordinary approvals. Both modes use an internal `loop_status` tool signal rather than displaying a magic completion marker and keep the between-turn footer raspberry until the loop exits. Opt-in strict mode freezes the initial named checklist and requires passing Playwright JSON tests and screenshot/console attachments per step, plus a read of an attached image. A separate reporting-only Pi SDK reviewer checks the immutable original request and evidence each turn, permits missing steps to be added before locking scope, and fails closed on unavailable verdicts. Consolidate missing UAT criteria in targeted continuation prompts; show checklist and verified UAT progress separately, fold repeated completion-only chat rows locally, and report stalled loops after targeted recovery. This still does not prove that generated tests meaningfully cover every behavior.
+
+### Changed
+
+- Loop instructions now request Playwright failure capture before the first browser run (`only-on-failure` in guided mode, `on` in strict mode, with traces and optional failure video), plus original and separately annotated failure screenshots, failed-control/locator identification, expected-versus-actual results, a Markdown failure summary, and post-fix screenshots. Model-driven guidance applies to both modes and continuations; unavailable annotations must be reported, not fabricated.
+- Default `/loop <goal>` now uses flexible Pi-guided test-and-fix instructions with explicitly model-reported completion. Existing Playwright evidence contracts and independent reviewer are opt-in through `/loop --strict <goal>`; guided mode needs no reviewer SDK or prescribed artifacts.
+- Accept inline and duplicate Playwright attachments; retain accepted evidence with explicit stale reasons based on bounded source comparison. Return report validation results directly to Pi and provide bounded test-source, console/log and historical failure excerpts to the reviewer.
+- Reviewer verdicts use Pi-native schema-defined `submit_verdict` tool arguments instead of parsing JSON prose, with one bounded format correction and explicit handling of provider errors, cancellation, truncation and incompatible SDKs. No custom Pi installation or global configuration change.
+- Accept `/loop` UAT evidence from saved Playwright JSON reports through `loop_status submit_evidence`; resolve relative artifact paths, check report freshness, preserve results during known read-only log checks, and send validated evidence metadata/missing checks to the independent reviewer.
+- Add a separate Hibiscus operational-guidance prompt section alongside identity guidance: inspect safely, ask about material ambiguities, use conservative defaults for minor reversible details, and report verification honestly. Keep Pi's original prompt and tools; model compliance is not guaranteed.
+- Dangerous-command Always Allow can authorize displayed per-command prefix patterns for the current directory/session (for example, `git push *`), including changed comments and arguments. Compound commands are reviewed per component where the syntax is simple; complex shell syntax stays exact. Parallel pending decisions reuse a matching grant, and Deny rejects queued approvals. Broad patterns can include force flags or other targets—review the scope before approving.
+
 ## [0.2.5] - 2026-09-27
 
 ### Added
@@ -171,7 +187,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.3

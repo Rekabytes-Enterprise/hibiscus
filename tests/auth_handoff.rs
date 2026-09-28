@@ -117,7 +117,9 @@ fi
     let mut launches = rpc_launches.lines();
     let base = launches.next().unwrap();
     let extension = base
-        .strip_prefix("--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension ")
+        .strip_prefix(
+            "--mode rpc --no-extensions --tools read,bash,edit,write,goal,loop_status --extension ",
+        )
         .expect("only the explicit approval extension may be loaded");
     assert!(extension.ends_with("/approval.mjs"));
     assert!(!std::path::Path::new(extension).exists());
@@ -129,7 +131,7 @@ fi
         assert_eq!(
             handed_off,
             format!(
-                "--no-extensions --tools read,bash,edit,write,goal --extension {extension} --session {}",
+                "--no-extensions --tools read,bash,edit,write,goal,loop_status --extension {extension} --session {}",
                 session.display()
             )
         );
@@ -138,7 +140,7 @@ fi
         assert_eq!(
             handed_off,
             format!(
-                "--no-extensions --tools read,bash,edit,write,goal --extension {extension} --no-session"
+                "--no-extensions --tools read,bash,edit,write,goal,loop_status --extension {extension} --no-session"
             )
         );
     }
