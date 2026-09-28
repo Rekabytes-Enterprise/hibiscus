@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="485" viewBox="0 0 1040 485" role="img" aria-labelledby="title desc">
+  <title id="title">Illustrated Hibiscus table and Mermaid flowchart rendering</title>
+  <desc id="desc">An example Markdown comparison table with aligned, wrapped cells and raspberry borders beside a sample Mermaid flowchart rendered as Unicode-style boxes and arrows. Illustrative, not a captured chat session.</desc>
+  <rect x="1" y="1" width="1038" height="483" rx="18" fill="#240c1d" stroke="#63304b" stroke-width="2"/>
+  <path d="M19 2H1021Q1038 2 1038 19V48H2V19Q2 2 19 2" fill="#35172b"/>
+  <g fill="#a66b89"><circle cx="28" cy="25" r="5"/><circle cx="46" cy="25" r="5"/><circle cx="64" cy="25" r="5"/></g>
+  <text x="520" y="30" text-anchor="middle" fill="#d6adc2" font-family="system-ui, sans-serif" font-size="13" letter-spacing="1.5">HIBISCUS / MARKDOWN PREVIEW</text>
+  <g font-family="'DejaVu Sans Mono', 'SFMono-Regular', Consolas, monospace">
+    <text x="35" y="84" fill="#ec4a7d" font-size="17" font-weight="bold">hibi</text>
+    <text x="35" y="116" fill="#fff1f6" font-size="15">A comparison and a flowchart, right in the chat:</text>
+    <text x="35" y="154" fill="#d6adc2" font-size="14">Markdown table</text>
+    <text x="550" y="154" fill="#d6adc2" font-size="14">Mermaid after the reply settles</text>
+    <g stroke="#b83965" stroke-width="2" fill="none">
+      <rect x="35" y="172" width="470" height="234" rx="8"/>
+      <path d="M35 221H505M35 281H505M35 343H505M180 172V406M338 172V406"/>
+      <rect x="654" y="180" width="250" height="46" rx="8"/>
+      <rect x="654" y="276" width="250" height="46" rx="8"/>
+      <rect x="654" y="372" width="250" height="46" rx="8"/>
+      <path d="M779 226V266M779 322V362" stroke="#ec4a7d"/>
+      <path d="M773 260L779 266L785 260M773 356L779 362L785 356" stroke="#ec4a7d"/>
+    </g>
+    <g fill="#fff1f6" font-size="14">
+      <text x="50" y="203" font-weight="bold">Aspect</text><text x="195" y="203" font-weight="bold">JavaScript</text><text x="353" y="203" font-weight="bold">TypeScript</text>
+      <text x="50" y="249">Types</text><text x="195" y="249">Dynamic</text><text x="353" y="249">Static</text>
+      <text x="50" y="309">Errors</text><text x="195" y="306">Often caught</text><text x="195" y="326">at runtime</text><text x="353" y="306">Often caught</text><text x="353" y="326">at compile time</text>
+      <text x="50" y="373">Build</text><text x="195" y="373">Runs directly</text><text x="353" y="370">Usually compiled</text><text x="353" y="390">to JavaScript</text>
+      <text x="779" y="209" text-anchor="middle">Read source</text>
+      <text x="779" y="305" text-anchor="middle">Run tests</text>
+      <text x="779" y="401" text-anchor="middle">Report result</text>
+    </g>
+    <text x="35" y="451" fill="#b493a8" font-size="13">Illustration · real layout depends on terminal width, font and Pi's Mermaid renderer.</text>
+  </g>
+</svg>
