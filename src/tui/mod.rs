@@ -1,5 +1,6 @@
 mod activity;
 mod clipboard;
+mod loop_evidence;
 pub(crate) mod markdown;
 mod modal;
 mod paint;

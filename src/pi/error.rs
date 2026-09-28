@@ -124,6 +124,9 @@ fn classify(message: &str) -> ErrorCategory {
         "out of budget",
         "available balance",
         "monthly usage limit",
+        "weekly usage limit",
+        "weekly limit",
+        "weekly quota",
         "gousagelimiterror",
         "freeusagelimiterror",
     ]) {
@@ -248,6 +251,7 @@ mod tests {
     fn classification_is_advisory_and_billing_wins_over_throttling() {
         for (message, category) in [
             ("429 insufficient_quota", ErrorCategory::Billing),
+            ("429 weekly usage limit", ErrorCategory::Billing),
             ("429 rate limit", ErrorCategory::RateLimit),
             ("401 unauthorized", ErrorCategory::Authentication),
             ("403 forbidden", ErrorCategory::Access),

@@ -38,6 +38,27 @@ impl Dialogs {
             return Ok(());
         }
         let method = event["method"].as_str().unwrap_or("");
+        if method == "input" && event["title"] == "Hibiscus internal loop evidence" {
+            // Internal extension/client bridge, not a human approval dialog.
+            // Only the active full-screen loop may validate submitted files.
+            let request = event["placeholder"]
+                .as_str()
+                .filter(|s| s.len() <= 40 * 1024)
+                .and_then(|s| serde_json::from_str::<Value>(s).ok());
+            let result = match request.filter(|_| interactive) {
+                Some(request) => display.loop_evidence_request(&request),
+                None => json!({"error":"Loop evidence request unavailable or invalid"}),
+            };
+            writeln!(
+                input,
+                "{}",
+                json!({"type":"extension_ui_response","id":event["id"],"value":result.to_string()})
+            )
+            .map_err(super::error::transport)?;
+            input.flush().map_err(super::error::transport)?;
+            display.flush()?;
+            return Ok(());
+        }
         if method == "notify" {
             writeln!(
                 display,
@@ -107,7 +128,7 @@ impl Dialogs {
         {
             let decision = match response["value"].as_str() {
                 Some("Allow") => "✓ approval · Allow once",
-                Some("Always Allow") => "✓ approval · Always Allow (exact command)",
+                Some("Always Allow") => "✓ approval · Always Allow (shown patterns)",
                 _ => "✗ approval · Denied",
             };
             writeln!(display, "  · {decision}")?;

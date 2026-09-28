@@ -3,6 +3,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod dialog;
 pub(crate) mod error;
 pub(crate) mod logout;
+pub(crate) mod loop_verify;
 pub(crate) mod rpc;
 mod run;
 pub(crate) mod transport;
@@ -58,10 +59,34 @@ impl Drop for ApprovalGuard {
     }
 }
 
+/// A private, process-local switch for the explicitly requested unattended
+/// mode. Normal chats never create it; dropping the guard always removes it.
+pub(crate) struct LoopApprovalBypass(PathBuf);
+impl LoopApprovalBypass {
+    pub(crate) fn start() -> io::Result<Self> {
+        let path = APPROVAL_PATH
+            .get()
+            .and_then(|extension| extension.parent())
+            .ok_or_else(|| io::Error::other("approval extension not staged"))?
+            .join("loop-active");
+        fs::write(&path, b"active")?;
+        Ok(Self(path))
+    }
+}
+impl Drop for LoopApprovalBypass {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 /// Keep built-in tools and only the explicit approval gate. Standalone Pi and
 /// user-installed extensions remain unchanged.
 pub(crate) fn configure_builtin_tools(command: &mut std::process::Command) {
-    command.args(["--no-extensions", "--tools", "read,bash,edit,write,goal"]);
+    command.args([
+        "--no-extensions",
+        "--tools",
+        "read,bash,edit,write,goal,loop_status",
+    ]);
     command.arg("--extension").arg(
         APPROVAL_PATH
             .get()

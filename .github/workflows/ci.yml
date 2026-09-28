@@ -51,6 +51,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Test bundled Pi helpers without providers
+        run: node tests/approval.mjs && node tests/loop_approval.mjs && node tests/loop_verify.mjs
       - name: Run Rust tests
         timeout-minutes: 5
         # PTY fixtures must configure their own terminal, not inherit the runner's.

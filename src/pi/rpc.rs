@@ -599,6 +599,8 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
 ) -> Result<bool> {
     let ui = Ui::new(interactive);
     let mut active_tools = HashMap::<String, String>::new();
+    let mut loop_tests = HashMap::<String, bool>::new();
+    let mut loop_images = HashMap::<String, String>::new();
     let mut reasoning_since = None;
     let mut accepted = false;
     let mut settled = false;
@@ -855,10 +857,39 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 show_reasoning(&ui, display, &mut reasoning_since)?;
                 let name = event["toolName"].as_str().unwrap_or("unknown");
                 let label = tool_label(name, &event["args"]);
+                let cmd = event["args"]["command"].as_str().unwrap_or("").trim_start();
+                let browser_test = name == "bash"
+                    && [
+                        "npx playwright test",
+                        "npm exec playwright test",
+                        "pnpm exec playwright test",
+                        "bunx playwright test",
+                        "./node_modules/.bin/playwright test",
+                    ]
+                    .iter()
+                    .any(|prefix| cmd.starts_with(prefix));
+                if matches!(name, "edit" | "write") {
+                    display.loop_tool_changed();
+                } else if name == "bash" && !browser_test && !read_only_evidence_check(cmd) {
+                    display.loop_probe_changed();
+                }
                 if let Some(call_id) = event["toolCallId"].as_str() {
                     active_tools.insert(call_id.to_owned(), label.clone());
+                    loop_tests.insert(call_id.to_owned(), browser_test);
+                    let path = event["args"]["path"].as_str().unwrap_or("");
+                    if name == "read"
+                        && [".png", ".jpg", ".jpeg", ".webp"]
+                            .iter()
+                            .any(|suffix| path.to_ascii_lowercase().ends_with(suffix))
+                    {
+                        loop_images.insert(call_id.to_owned(), path.to_owned());
+                    }
                 }
-                display.set_work(&format!("Running {label}…"))?;
+                if name == "loop_status" {
+                    display.set_work("Checking loop…")?;
+                } else {
+                    display.set_work(&format!("Running {label}…"))?;
+                }
                 if interactive {
                     if printed_text || pending_newline {
                         writeln!(display)?;
@@ -866,6 +897,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     }
                     let path = label.split_once(" · ").map_or("", |(_, path)| path);
                     if name != "goal"
+                        && name != "loop_status"
                         && !display.tool_start(
                             event["toolCallId"].as_str().unwrap_or(""),
                             name,
@@ -881,6 +913,15 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             }
             Some("tool_execution_end") if kind == "prompt" => {
                 let name = event["toolName"].as_str().unwrap_or("tool");
+                if let Some(id) = event["toolCallId"].as_str() {
+                    if loop_tests.remove(id) == Some(true) {
+                        display.loop_test_finished(event["isError"] != true, &event["result"]);
+                    }
+                    if let Some(path) = loop_images.remove(id).filter(|_| event["isError"] != true)
+                    {
+                        display.loop_screenshot_read(&path, &event["result"]);
+                    }
+                }
                 let label = event["toolCallId"]
                     .as_str()
                     .and_then(|id| active_tools.remove(id))
@@ -889,7 +930,10 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 if name == "goal" && event["isError"] != true {
                     display.goal(&event["result"]["details"])?;
                 }
-                if interactive && name != "goal" {
+                if name == "loop_status" && event["isError"] != true {
+                    display.loop_status(&event["result"]["details"]);
+                }
+                if interactive && name != "goal" && name != "loop_status" {
                     let outcome = if event["isError"] == true {
                         "✗ failed"
                     } else {
@@ -934,6 +978,9 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 }
             }
             Some("auto_retry_start" | "summarization_retry_scheduled") if kind == "prompt" => {
+                if event["type"] == "auto_retry_start" {
+                    display.loop_retry_started();
+                }
                 let attempt = event["attempt"].as_u64().unwrap_or(0);
                 let max = event["maxAttempts"].as_u64().unwrap_or(0);
                 let delay = event["delayMs"].as_u64().unwrap_or(0) / 1000;
@@ -991,6 +1038,18 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             );
         }
     }
+}
+
+// Deliberately small allowlist: preserve UAT for plain log/artifact inspection,
+// but never treat shell composition, redirects, scripts or unknown commands as reads.
+fn read_only_evidence_check(command: &str) -> bool {
+    if command.chars().any(|ch| ";&|<>$`\\\n\r".contains(ch)) {
+        return false;
+    }
+    matches!(
+        command.split_whitespace().next(),
+        Some("cat" | "head" | "tail" | "ls" | "pwd" | "wc" | "stat")
+    )
 }
 
 fn preserve_uncertain_queue(
@@ -1383,6 +1442,29 @@ fn check_record(event: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readonly_evidence_checks_exclude_shell_side_effects() {
+        for cmd in [
+            "cat server.log",
+            "tail -n 50 app/log.txt",
+            "ls test-results",
+            "pwd",
+            "stat screenshot.png",
+        ] {
+            assert!(read_only_evidence_check(cmd), "{cmd}");
+        }
+        for cmd in [
+            "cat log > app.js",
+            "tail log; rm app.js",
+            "ls $(touch x)",
+            "node check.js",
+            "sed -i s/a/b/ file",
+            "git checkout other",
+        ] {
+            assert!(!read_only_evidence_check(cmd), "{cmd}");
+        }
+    }
 
     #[test]
     fn newest_unacknowledged_queue_is_preserved_for_explicit_review() {

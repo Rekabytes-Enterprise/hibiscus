@@ -234,6 +234,15 @@ pub(crate) trait ScrollDisplay: Write {
     fn mouse(&mut self, _event: MouseEvent) -> io::Result<()> {
         Ok(())
     }
+    fn loop_tool_changed(&mut self) {}
+    fn loop_probe_changed(&mut self) {}
+    fn loop_evidence_request(&mut self, _request: &Value) -> Value {
+        serde_json::json!({"error":"Loop evidence unavailable"})
+    }
+    fn loop_status(&mut self, _details: &Value) {}
+    fn loop_retry_started(&mut self) {}
+    fn loop_test_finished(&mut self, _successful: bool, _result: &Value) {}
+    fn loop_screenshot_read(&mut self, _path: &str, _result: &Value) {}
     fn paste_start(&mut self) {}
     fn paste_byte(&mut self, _byte: u8) -> io::Result<bool> {
         Ok(false)
@@ -495,6 +504,8 @@ pub(crate) struct Screen {
     last_paint: Option<Instant>,
     paint_pending: bool,
     transcript: Vec<u8>,
+    loop_transcript_epoch: u64,
+    loop_user_delivered: bool,
     layout: markdown::Layout,
     layout_dirty: bool,
     scroll_anchor: Option<usize>,
@@ -539,6 +550,28 @@ pub(crate) struct Screen {
     current_timeline: Option<usize>,
     timeline_marked: bool,
     goal: Option<(usize, usize)>,
+    loop_scope: Option<Vec<String>>,
+    loop_scope_active: bool,
+    loop_strict: bool,
+    loop_started: Option<Instant>,
+    loop_phase: &'static str,
+    loop_scope_locked: bool,
+    loop_scope_drifted: bool,
+    loop_used_tools: bool,
+    loop_test_passed: bool,
+    loop_report_verified: usize,
+    loop_report_missing: Vec<String>,
+    loop_report_summary: Value,
+    loop_evidence_after: std::time::SystemTime,
+    loop_report_screenshots: Vec<std::path::PathBuf>,
+    loop_inline_images: Vec<Vec<u8>>,
+    loop_source_snapshot: Option<(String, u64)>,
+    loop_stale_reason: Option<String>,
+    loop_probe_started: Option<std::time::SystemTime>,
+    loop_screenshot_checked: bool,
+    loop_auto_retries: usize,
+    loop_candidate: bool,
+    loop_blocked: Option<String>,
 }
 
 impl Screen {
@@ -558,6 +591,8 @@ impl Screen {
             last_paint: None,
             paint_pending: false,
             transcript: Vec::new(),
+            loop_transcript_epoch: 0,
+            loop_user_delivered: false,
             layout: markdown::Layout::default(),
             layout_dirty: true,
             scroll_anchor: None,
@@ -605,6 +640,28 @@ impl Screen {
             current_timeline: None,
             timeline_marked: false,
             goal: None,
+            loop_scope: None,
+            loop_scope_active: false,
+            loop_strict: false,
+            loop_started: None,
+            loop_phase: "Loop · preparing…",
+            loop_scope_locked: false,
+            loop_scope_drifted: false,
+            loop_used_tools: false,
+            loop_test_passed: false,
+            loop_report_verified: 0,
+            loop_report_missing: Vec::new(),
+            loop_report_summary: Value::Null,
+            loop_evidence_after: std::time::SystemTime::now(),
+            loop_report_screenshots: Vec::new(),
+            loop_inline_images: Vec::new(),
+            loop_source_snapshot: None,
+            loop_stale_reason: None,
+            loop_probe_started: None,
+            loop_screenshot_checked: false,
+            loop_auto_retries: 0,
+            loop_candidate: false,
+            loop_blocked: None,
         };
         if screen.size().0 < 40 || screen.size().1 < 14 {
             screen.full = false;
@@ -772,6 +829,7 @@ impl Screen {
     pub(crate) fn clear_session(&mut self) -> io::Result<()> {
         self.dirty_transcript();
         self.transcript.clear();
+        self.loop_transcript_epoch = self.loop_transcript_epoch.wrapping_add(1);
         self.draft.clear();
         self.draft_cursor = 0;
         self.preferred_column = None;
@@ -840,6 +898,269 @@ impl Screen {
         self.restored_draft = Some((text, images));
     }
 
+    pub(crate) fn reset_loop_goal(&mut self, strict: bool) -> io::Result<()> {
+        self.loop_strict = strict;
+        self.goal = None;
+        self.loop_scope = None;
+        self.loop_scope_drifted = false;
+        self.loop_scope_locked = false;
+        self.loop_scope_active = true;
+        self.loop_started = Some(Instant::now());
+        self.loop_phase = "Loop · preparing…";
+        self.loop_source_snapshot = None;
+        self.loop_inline_images.clear();
+        self.loop_stale_reason = None;
+        self.loop_probe_started = None;
+        self.loop_evidence_after = std::time::SystemTime::now();
+        self.loop_report_summary = Value::Null;
+        self.loop_test_passed = false;
+        self.loop_report_verified = 0;
+        self.loop_report_missing.clear();
+        self.loop_report_screenshots.clear();
+        self.loop_screenshot_checked = false;
+        self.loop_candidate = false;
+        self.loop_blocked = None;
+        self.render()
+    }
+
+    pub(crate) fn set_loop_phase(&mut self, phase: &'static str) -> io::Result<()> {
+        self.loop_phase = phase;
+        self.render()
+    }
+
+    pub(crate) fn end_loop_scope(&mut self) -> io::Result<()> {
+        self.loop_scope_active = false;
+        self.loop_started = None;
+        self.render()
+    }
+
+    pub(crate) fn loop_steps(&self) -> Option<Vec<String>> {
+        self.loop_scope.clone()
+    }
+
+    pub(crate) fn lock_loop_scope(&mut self) {
+        if self.loop_scope.is_some() && !self.loop_scope_drifted {
+            self.loop_scope_locked = true;
+        }
+    }
+
+    pub(crate) fn allow_loop_scope_revision(&mut self) {
+        self.loop_scope_locked = false;
+        // A reviewer asking for more explanation must not erase accepted UAT.
+        // A later actual checklist change re-assesses coverage separately.
+    }
+
+    pub(crate) fn loop_goal_complete(&self) -> bool {
+        self.loop_scope_active
+            && self.loop_scope_locked
+            && !self.loop_scope_drifted
+            && self.goal.is_some_and(|(done, total)| {
+                self.loop_scope
+                    .as_ref()
+                    .is_some_and(|steps| total == steps.len() && done == total)
+            })
+    }
+
+    pub(crate) fn loop_used_tools(&self) -> bool {
+        self.loop_used_tools
+    }
+
+    pub(crate) fn loop_auto_retries(&self) -> usize {
+        self.loop_auto_retries
+    }
+
+    pub(crate) fn loop_checkpoint(&self) -> (usize, u64) {
+        (self.transcript.len(), self.loop_transcript_epoch)
+    }
+
+    pub(crate) fn collapse_repeated_loop_reply(
+        &mut self,
+        (start, epoch): (usize, u64),
+    ) -> io::Result<bool> {
+        if !self.loop_scope_active
+            || self.loop_used_tools
+            || self.loop_user_delivered
+            || epoch != self.loop_transcript_epoch
+            || start >= self.transcript.len()
+        {
+            return Ok(false);
+        }
+        if !String::from_utf8_lossy(&self.transcript[start..]).contains("hibi › ") {
+            return Ok(false);
+        }
+        self.transcript.truncate(start);
+        self.dirty_transcript();
+        writeln!(
+            self,
+            "  · ↻ Repeated completion claim collapsed · no new UAT evidence"
+        )?;
+        self.render()?;
+        Ok(true)
+    }
+
+    pub(crate) fn loop_progress(&self) -> (usize, usize, usize) {
+        let (done, total) = self.goal.unwrap_or((0, 0));
+        (done, total, self.loop_report_verified.min(total))
+    }
+
+    pub(crate) fn loop_missing(&self) -> Vec<String> {
+        let mut missing = self.loop_report_missing.clone();
+        if let Some(reason) = &self.loop_stale_reason {
+            missing.push(reason.clone());
+        }
+        if !self.loop_test_passed && missing.is_empty() {
+            missing.push(
+                "Run the full Playwright JSON suite for the original acceptance steps".into(),
+            );
+        }
+        if self.loop_test_passed && !self.loop_screenshot_checked {
+            missing.push("Read a screenshot attached to the passing Playwright report".into());
+        }
+        if !self.loop_candidate && self.loop_test_passed && self.loop_screenshot_checked {
+            missing.push("Call loop_status candidate_complete after final UAT".into());
+        }
+        missing
+    }
+
+    pub(crate) fn loop_evidence_summary(&self) -> Value {
+        serde_json::json!({"report":self.loop_report_summary,"missing":self.loop_missing(),
+            "verifiedCount":self.loop_report_verified,"screenshotRead":self.loop_screenshot_checked,
+            "scopeDrifted":self.loop_scope_drifted,"staleReason":self.loop_stale_reason})
+    }
+
+    pub(crate) fn revalidate_loop_sources(&mut self) {
+        if !self.loop_scope_active || !self.loop_strict {
+            return;
+        }
+        if let Some((project, stamp)) = &self.loop_source_snapshot {
+            match super::loop_evidence::source_stamp(project) {
+                Ok(current) if current == *stamp => {
+                    if self
+                        .loop_stale_reason
+                        .as_deref()
+                        .is_some_and(|s| s.starts_with("Source check:"))
+                    {
+                        self.loop_stale_reason = None;
+                    }
+                }
+                Ok(_) => {
+                    if self.loop_stale_reason.as_deref() != Some("Source check: app/test/config contents changed since accepted UAT; rerun tests after the change") {
+                        self.loop_evidence_after = self.loop_probe_started.unwrap_or_else(std::time::SystemTime::now);
+                    }
+                    self.loop_stale_reason = Some("Source check: app/test/config contents changed since accepted UAT; rerun tests after the change".into());
+                }
+                Err(_) => {
+                    self.loop_stale_reason = Some(
+                        "Source check: cannot check project source within bounded limits".into(),
+                    )
+                }
+            }
+        }
+    }
+
+    fn submit_loop_evidence(&mut self, evidence: &Value) -> Value {
+        if !self.loop_strict {
+            return serde_json::json!({"mode":"guided","message":"No report submission required. Test the original goal and report completion through candidate_complete."});
+        }
+        if !self.loop_scope_active {
+            return serde_json::json!({"error":"Loop is not active"});
+        }
+        let (Some(project), Some(path)) = (
+            evidence["projectDir"].as_str(),
+            evidence["reportPath"].as_str(),
+        ) else {
+            return serde_json::json!({"error":"Supply projectDir and reportPath"});
+        };
+        if project.len() > 4096 || path.len() > 4096 {
+            return serde_json::json!({"error":"Evidence paths too long"});
+        }
+        self.revalidate_loop_sources();
+        let mut check = super::loop_evidence::inspect_file(
+            project,
+            path,
+            self.loop_scope.as_deref().unwrap_or(&[]),
+            self.loop_evidence_after,
+        );
+        let files = evidence["supportFiles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|path| path.len() <= 4096)
+            .take(8)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        super::loop_evidence::add_support(&mut check, project, &files);
+        if check.complete {
+            match super::loop_evidence::source_stamp(project) {
+                Ok(stamp) => {
+                    self.loop_source_snapshot = Some((project.to_owned(), stamp));
+                    self.loop_probe_started = None;
+                }
+                Err(_) => {
+                    check.complete = false;
+                    check
+                        .missing
+                        .push("Cannot snapshot project sources within bounded limits".into());
+                }
+            }
+        }
+        let accepted = check.complete;
+        if !accepted && self.loop_report_verified > 0 {
+            self.loop_stale_reason.get_or_insert_with(|| "Submitted evidence was rejected; retained previous results are not sufficient for completion".into());
+            self.loop_report_missing = check.missing;
+            self.loop_report_summary["lastSubmission"] = check.summary;
+        } else {
+            self.apply_loop_assessment(check);
+        }
+        serde_json::json!({"accepted":accepted,"verified":self.loop_report_verified,
+            "total":self.loop_scope.as_ref().map_or(0,Vec::len),"missing":self.loop_missing(),
+            "next":"Read an attached screenshot, then call candidate_complete only when missing checks are resolved"})
+    }
+
+    fn apply_loop_assessment(&mut self, check: super::loop_evidence::Assessment) {
+        self.loop_report_verified = check.verified;
+        self.loop_report_missing = check.missing;
+        self.loop_report_summary = check.summary;
+        self.loop_report_screenshots = check.screenshots;
+        self.loop_inline_images = check.inline_images;
+        self.loop_stale_reason = None;
+        self.loop_test_passed = check.complete;
+        self.loop_screenshot_checked = false;
+        self.loop_candidate = false;
+    }
+
+    pub(crate) fn loop_uat_observed(&self) -> bool {
+        self.loop_test_passed && self.loop_screenshot_checked && self.loop_stale_reason.is_none()
+    }
+
+    pub(crate) fn loop_candidate(&self) -> bool {
+        self.loop_candidate
+    }
+
+    pub(crate) fn loop_blocked(&self) -> Option<&str> {
+        self.loop_blocked.as_deref()
+    }
+
+    pub(crate) fn loop_verification_reason(&self) -> String {
+        if self.loop_scope.is_none() {
+            "Set a named goal checklist for the full original request.".into()
+        } else if self.loop_scope_drifted {
+            "Restore the first checklist's named steps; do not shrink or rename the scope.".into()
+        } else if !self.loop_goal_complete() {
+            "Finish every original acceptance step before claiming completion.".into()
+        } else if !self.loop_test_passed {
+            self.loop_missing().join(" ")
+        } else if !self.loop_screenshot_checked {
+            "Use Pi read to inspect a screenshot attached to the passing Playwright report.".into()
+        } else if !self.loop_candidate {
+            "Call loop_status with action candidate_complete after reviewing all UAT evidence."
+                .into()
+        } else {
+            "Acceptance evidence is present; report exact tested flows and any remaining limitations.".into()
+        }
+    }
+
     pub(crate) fn restore_goal(&mut self, messages: &[Value]) -> io::Result<()> {
         self.goal = None;
         for message in messages {
@@ -861,6 +1182,37 @@ impl Screen {
             return;
         };
         if total <= 50 && completed <= total {
+            if self.loop_scope_active {
+                let steps = details["steps"]
+                    .as_array()
+                    .filter(|steps| steps.len() == total as usize)
+                    .and_then(|steps| {
+                        steps
+                            .iter()
+                            .map(|step| {
+                                step["label"]
+                                    .as_str()
+                                    .filter(|label| !label.is_empty())
+                                    .map(str::to_owned)
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    });
+                if let Some(steps) = steps {
+                    if self.loop_scope.as_ref() != Some(&steps) && self.loop_scope.is_some() {
+                        self.loop_test_passed = false;
+                        self.loop_candidate = false;
+                        self.loop_stale_reason = Some("Checklist changed: revalidate the retained report against all current criteria".into());
+                    }
+                    if self.loop_scope_locked {
+                        self.loop_scope_drifted = self.loop_scope.as_ref() != Some(&steps);
+                    } else if !steps.is_empty() {
+                        self.loop_scope = Some(steps);
+                        self.loop_scope_drifted = false;
+                    }
+                } else {
+                    self.loop_scope_drifted = true;
+                }
+            }
             self.goal = (total > 0).then_some((completed as usize, total as usize));
         }
     }
@@ -1805,7 +2157,7 @@ impl Screen {
     }
 
     fn status_style(&self) -> &'static str {
-        if self.activity.is_some() {
+        if self.activity.is_some() || self.loop_scope_active {
             "1;38;2;236;74;125"
         } else {
             "2"
@@ -2191,6 +2543,33 @@ impl Screen {
             } else {
                 "Open Codex sign-in ↗  ·  Ctrl+Y copy link  ·  Esc cancel".into()
             }
+        } else if self.loop_scope_active && !self.loop_strict {
+            let phase = self.activity.as_ref().map_or_else(
+                || "Loop · guided".to_owned(),
+                |activity| format!("Loop · {}", activity.phase),
+            );
+            working_status(
+                width,
+                flower,
+                &phase,
+                self.loop_started
+                    .map_or(0, |started| started.elapsed().as_secs()),
+                "",
+                self.goal,
+                None,
+            )
+        } else if self.loop_scope_active {
+            loop_footer(
+                width,
+                flower,
+                self.activity
+                    .as_ref()
+                    .map_or(self.loop_phase, |activity| &activity.phase),
+                self.loop_started
+                    .map_or(0, |started| started.elapsed().as_secs()),
+                self.loop_progress(),
+                self.loop_stale_reason.is_some(),
+            )
         } else if let Some(activity) = &self.activity {
             let queue_hint = match (self.queue_steering, self.queue_follow_up) {
                 (0, 0) => String::new(),
@@ -2294,6 +2673,115 @@ impl ScrollDisplay for Screen {
     fn mouse(&mut self, event: MouseEvent) -> io::Result<()> {
         self.select_mouse(event)
     }
+    fn loop_status(&mut self, details: &Value) {
+        if !self.loop_scope_active || details["hibiscusLoop"].get("error").is_some() {
+            return;
+        }
+        match details["hibiscusLoop"]["state"].as_str() {
+            Some("submit_evidence") => {
+                if details["hibiscusLoop"]["validatedByClient"] != true {
+                    self.submit_loop_evidence(&details["hibiscusLoop"]);
+                }
+            }
+            Some("candidate_complete") => self.loop_candidate = true,
+            Some("blocked") => {
+                self.loop_blocked = details["hibiscusLoop"]["reason"]
+                    .as_str()
+                    .filter(|reason| !reason.trim().is_empty() && reason.len() <= 500)
+                    .map(|reason| {
+                        reason
+                            .chars()
+                            .filter(|ch| !ch.is_control())
+                            .take(400)
+                            .collect()
+                    });
+            }
+            _ => {}
+        }
+    }
+    fn loop_retry_started(&mut self) {
+        self.loop_auto_retries = self.loop_auto_retries.saturating_add(1);
+    }
+    fn loop_probe_changed(&mut self) {
+        self.loop_probe_started = Some(std::time::SystemTime::now());
+        // No accepted package means there is nothing to invalidate. File
+        // submission compares report/source mtimes instead of guessing that
+        // a wrapped server/log check mutated the app.
+    }
+    fn loop_evidence_request(&mut self, request: &Value) -> Value {
+        self.submit_loop_evidence(request)
+    }
+    fn loop_tool_changed(&mut self) {
+        self.loop_probe_started = Some(std::time::SystemTime::now());
+        if self.loop_source_snapshot.is_none() {
+            self.loop_evidence_after = std::time::SystemTime::now();
+        }
+        self.loop_candidate = false;
+        if self.loop_report_verified > 0 {
+            self.loop_stale_reason = Some("Source check: a potentially mutating tool ran; retained UAT awaits source comparison or fresh submission".into());
+        }
+    }
+    fn loop_test_finished(&mut self, successful: bool, result: &Value) {
+        if !self.loop_scope_active || !self.loop_strict {
+            return;
+        }
+        let check = if successful {
+            self.loop_scope
+                .as_deref()
+                .map(|scope| super::loop_evidence::inspect(result, scope))
+        } else {
+            None
+        };
+        let check = check.unwrap_or_else(|| {
+            super::loop_evidence::Assessment::invalid(
+                "Playwright test command failed; rerun after fixing its failures",
+            )
+        });
+        if !check.complete && self.loop_report_verified > 0 {
+            self.loop_stale_reason = Some("New test evidence failed validation; previous passing evidence retained for review only".into());
+            self.loop_report_missing = check.missing;
+            self.loop_report_summary["lastSubmission"] = check.summary;
+            self.loop_candidate = false;
+        } else {
+            let fresh_run = check.complete;
+            self.apply_loop_assessment(check);
+            if fresh_run {
+                if let Some((project, stamp)) = &mut self.loop_source_snapshot {
+                    match super::loop_evidence::source_stamp(project) {
+                        Ok(current) => {
+                            *stamp = current;
+                            self.loop_probe_started = None;
+                        }
+                        Err(_) => {
+                            self.loop_stale_reason =
+                                Some("Source check: cannot snapshot sources after test run".into())
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fn loop_screenshot_read(&mut self, path: &str, result: &Value) {
+        if !self.loop_strict
+            || !self.loop_test_passed
+            || !result["content"]
+                .as_array()
+                .is_some_and(|parts| parts.iter().any(|part| part["type"] == "image"))
+        {
+            return;
+        }
+        if let Ok(path) = std::fs::canonicalize(path) {
+            if !self.loop_inline_images.is_empty() {
+                if let Ok(bytes) = super::loop_evidence::bounded_bytes(&path, 4 * 1024 * 1024 + 1) {
+                    self.loop_screenshot_checked |= self.loop_inline_images.contains(&bytes);
+                }
+            }
+            self.loop_screenshot_checked |= self
+                .loop_report_screenshots
+                .iter()
+                .any(|artifact| artifact.canonicalize().is_ok_and(|saved| saved == path));
+        }
+    }
     fn paste_start(&mut self) {
         self.paste = Some(PasteInput::default());
     }
@@ -2320,6 +2808,13 @@ impl ScrollDisplay for Screen {
     }
 
     fn start_work(&mut self) -> io::Result<()> {
+        self.loop_used_tools = false;
+        self.loop_user_delivered = false;
+        if self.loop_scope_active {
+            self.loop_candidate = false;
+            self.loop_blocked = None;
+        }
+        self.loop_auto_retries = 0;
         self.exit_armed = None;
         if self.input_notice.as_deref() == Some("Press Ctrl+C again within 2s to quit") {
             self.input_notice = None;
@@ -2422,6 +2917,7 @@ impl ScrollDisplay for Screen {
                 .position(|b| *b == b'\n')
                 .map_or(excess, |index| excess + index + 1);
             self.transcript.drain(..cut);
+            self.loop_transcript_epoch = self.loop_transcript_epoch.wrapping_add(1);
             self.scroll = 0;
         }
         if self.activity.take().is_some() {
@@ -2437,6 +2933,7 @@ impl ScrollDisplay for Screen {
         Ok(self.full)
     }
     fn tool_start(&mut self, id: &str, name: &str, path: &str) -> io::Result<bool> {
+        self.loop_used_tools = true;
         if !self.full {
             return Ok(false);
         }
@@ -2592,6 +3089,7 @@ impl ScrollDisplay for Screen {
         } else {
             String::new()
         };
+        self.loop_user_delivered = true;
         let shown = format!("\nyou › {}{image_note}\n", text.trim_start_matches('\n'));
         if self.suspended {
             self.dirty_transcript();
@@ -2712,6 +3210,48 @@ fn follow_up_key() -> &'static str {
     }
 }
 
+fn loop_footer(
+    width: usize,
+    flower: &str,
+    phase: &str,
+    seconds: u64,
+    (done, total, verified): (usize, usize, usize),
+    stale: bool,
+) -> String {
+    let suffix = if stale { " stale" } else { "" };
+    let phase = phase.strip_prefix("Loop · ").unwrap_or(phase);
+    let detailed = format!("{flower} Loop · {phase} · {seconds}s · Esc stop");
+    let short = format!("{flower} Loop · Esc stop");
+    let right = if total == 0 {
+        "Checklist pending · UAT pending".into()
+    } else {
+        format!("Checklist {done}/{total} · UAT {verified}/{total}{suffix}")
+    };
+    let compact = if total == 0 {
+        "UAT pending".into()
+    } else {
+        format!("UAT {verified}/{total}{suffix}")
+    };
+    for right in [right, compact] {
+        if let Some(left) = [&detailed, &short]
+            .into_iter()
+            .find(|left| left.chars().count() + 1 + right.chars().count() <= width)
+        {
+            return format!(
+                "{left}{}{right}",
+                " ".repeat(width - left.chars().count() - right.chars().count())
+            );
+        }
+    }
+    if detailed.chars().count() <= width {
+        detailed
+    } else if short.chars().count() <= width {
+        short
+    } else {
+        clip(&short, width)
+    }
+}
+
 fn working_status(
     width: usize,
     flower: &str,
@@ -2805,6 +3345,7 @@ impl Write for Screen {
                     .map(|offset| excess + offset + 1)
                     .unwrap_or(excess);
                 self.transcript.drain(..cut);
+                self.loop_transcript_epoch = self.loop_transcript_epoch.wrapping_add(1);
                 self.scroll = 0;
             }
             Ok(buf.len())
@@ -3185,6 +3726,113 @@ mod tests {
             screen.thinking.is_none(),
             "no model must not imply a supported thinking level"
         );
+    }
+
+    #[test]
+    fn guided_loop_does_not_validate_or_require_strict_report_files() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.reset_loop_goal(false).unwrap();
+        let result = screen.loop_evidence_request(
+            &serde_json::json!({"projectDir":"missing-project","reportPath":"missing-report.json"}),
+        );
+        assert_eq!(result["mode"], "guided");
+        screen.loop_test_finished(
+            true,
+            &serde_json::json!({"content":[{"type":"text","text":"ordinary test output"}]}),
+        );
+        assert!(screen.loop_report_missing.is_empty());
+        screen.loop_status(&serde_json::json!({"hibiscusLoop":{"state":"candidate_complete"}}));
+        assert!(screen.loop_candidate());
+        assert!(
+            !screen.loop_uat_observed(),
+            "guided completion must not invent verified evidence"
+        );
+    }
+
+    #[test]
+    fn loop_checklist_cannot_be_shrunk_or_renamed_to_claim_completion() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.reset_loop_goal(true).unwrap();
+        let steps = serde_json::json!({"hibiscusGoal":{"completed":2,"total":2,"steps":[
+            {"label":"Sign in works","done":true},{"label":"Sign out works","done":true}
+        ]}});
+        screen.set_goal(&steps);
+        assert!(
+            !screen.loop_goal_complete(),
+            "scope requires independent review"
+        );
+        screen.lock_loop_scope();
+        assert!(screen.loop_goal_complete());
+        screen.set_goal(&serde_json::json!({"hibiscusGoal":{"completed":1,"total":1,"steps":[{"label":"Sign in works","done":true}]}}));
+        assert!(
+            !screen.loop_goal_complete(),
+            "model must not drop an acceptance step"
+        );
+        screen.set_goal(&steps);
+        assert!(
+            screen.loop_goal_complete(),
+            "restoring the original scope permits completion"
+        );
+        screen.end_loop_scope().unwrap();
+        assert!(
+            !screen.loop_goal_complete(),
+            "scope is only active during /loop"
+        );
+    }
+
+    #[test]
+    fn loop_evidence_rejects_unstructured_results_and_image_without_a_report() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.reset_loop_goal(true).unwrap();
+        screen.set_goal(&serde_json::json!({"hibiscusGoal":{"completed":1,"total":1,"steps":[{"label":"Flow","done":true}]}}));
+        let image = serde_json::json!({"content":[{"type":"image","data":"aGVsbG8="}]});
+        screen.loop_screenshot_read("screenshot.png", &image);
+        assert!(!screen.loop_uat_observed());
+        screen.loop_test_finished(true, &serde_json::json!({}));
+        assert!(!screen.loop_uat_observed());
+        screen.loop_test_finished(false, &serde_json::json!({}));
+        screen.loop_screenshot_read("screenshot.png", &image);
+        assert!(!screen.loop_uat_observed());
+    }
+
+    #[test]
+    fn loop_invalidation_retains_passed_counts_with_an_explicit_stale_reason() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.reset_loop_goal(true).unwrap();
+        screen.goal = Some((3, 3));
+        screen.loop_report_verified = 3;
+        screen.loop_test_passed = true;
+        screen.loop_screenshot_checked = true;
+        screen.loop_report_summary = serde_json::json!({"counts":{"passed":3}});
+        assert!(screen.loop_uat_observed());
+        screen.loop_tool_changed();
+        assert_eq!(screen.loop_progress(), (3, 3, 3));
+        assert!(!screen.loop_uat_observed());
+        assert!(screen
+            .loop_missing()
+            .iter()
+            .any(|reason| reason.contains("Source check")));
+        assert_eq!(
+            screen.loop_evidence_summary()["report"]["counts"]["passed"],
+            3
+        );
+        screen.allow_loop_scope_revision();
+        assert_eq!(
+            screen.loop_report_verified, 3,
+            "scope review must not erase artifacts"
+        );
+        assert!(loop_footer(80, "✿", "Loop · review", 5, (3, 3, 3), true).contains("stale"));
+    }
+
+    #[test]
+    fn loop_footer_distinguishes_model_checklist_from_verified_browser_uat() {
+        let wide = loop_footer(80, "✿", "Loop · review", 12, (8, 8, 6), false);
+        assert!(wide.contains("Checklist 8/8 · UAT 6/8"), "{wide}");
+        assert!(wide.contains("Esc stop"), "{wide}");
+        assert_eq!(wide.chars().count(), 80);
+        let mobile = loop_footer(46, "✿", "Loop · review", 12, (8, 8, 6), false);
+        assert!(mobile.contains("UAT 6/8"), "{mobile}");
+        assert!(mobile.chars().count() <= 46);
     }
 
     #[test]
