@@ -4,6 +4,20 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-28
+
+### Added
+
+- Render completed assistant Mermaid code blocks as Unicode diagrams in full-screen chat after Pi settles, using the selected Pi installation's optional diagram renderer. Keep Markdown visible while streaming and as fallback when a diagram cannot be rendered or fit the transcript.
+
+### Fixed
+
+- Lay out Markdown tables as aligned, width-aware columns with cell wrapping and per-row separators; accept pipe-delimited model output without a separator line. Use rounded Unicode corners and raspberry-colored borders in color terminals.
+
+### Verification limits
+
+- Diagram replacement and table layout are covered by synthetic tests; live-provider, physical-terminal and macOS presentation remain to be checked. A `dev` push does not publish release artifacts.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added
@@ -187,7 +201,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.4

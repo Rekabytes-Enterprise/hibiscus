@@ -4,6 +4,7 @@ pub(crate) mod dialog;
 pub(crate) mod error;
 pub(crate) mod logout;
 pub(crate) mod loop_verify;
+pub(crate) mod mermaid;
 pub(crate) mod rpc;
 mod run;
 pub(crate) mod transport;
