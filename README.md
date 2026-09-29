@@ -61,6 +61,7 @@ Prefer to inspect the installer first, choose a version, or use a custom directo
 | **Clear conversations** | Ubuntu-style aubergine background, lighter user rows, visible `hibi` reply headings, and a scrolling transcript. |
 | **Readable Markdown** | Width-aware pipe tables with wrapped cells, per-row dividers and raspberry borders. In full-screen chat, completed assistant `mermaid` blocks become Unicode diagrams after Pi settles; the source stays visible while streaming or if rendering is unavailable. |
 | **Room to think** | A movable insertion cursor in a multiline composer that grows to five rows, then scrolls within the input. |
+| **Point to files** | Type `@` in the full-screen composer to search and insert a file path. Pi can choose to read it with its tools; Hibiscus does not silently send the file contents. |
 | **Show, don't describe** | Paste clipboard images alongside your prompt, with a visible attachment count. |
 | **Models at your fingertips** | A keyboard-and-wheel picker of Pi-configured models, grouped by provider. |
 | **Pick up where you left off** | Resume the latest session or choose another, with recent conversation context shown. |

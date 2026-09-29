@@ -10,6 +10,7 @@ use std::{
 
 use super::{
     activity::Timeline,
+    file_mentions,
     markdown::{self, Role, Tone},
     modal::{self, Modal},
     paint::{Cursor, Painter, SYNC_END},
@@ -547,6 +548,9 @@ pub(crate) struct Screen {
     modal: Option<Modal>,
     suggestions: Option<Picker>,
     suggestions_dismissed: bool,
+    file_search: Option<file_mentions::Search>,
+    file_prefix: Option<file_mentions::Prefix>,
+    file_matches: Vec<file_mentions::Entry>,
     pending_input: Option<u8>,
     deferred_input: VecDeque<u8>,
     secret_input: bool,
@@ -638,6 +642,9 @@ impl Screen {
             modal: None,
             suggestions: None,
             suggestions_dismissed: false,
+            file_search: None,
+            file_prefix: None,
+            file_matches: Vec::new(),
             pending_input: None,
             deferred_input: VecDeque::new(),
             secret_input: false,
@@ -849,6 +856,9 @@ impl Screen {
         self.clear_images();
         self.suggestions = None;
         self.suggestions_dismissed = false;
+        self.file_search = None;
+        self.file_prefix = None;
+        self.file_matches.clear();
         self.picker = None;
         self.modal = None;
         self.auth_url = None;
@@ -1491,7 +1501,32 @@ impl Screen {
         self.clipboard_notice.clear();
     }
 
+    fn clear_file_suggestions(&mut self) {
+        self.file_search = None;
+        self.file_prefix = None;
+        self.file_matches.clear();
+    }
+
     fn refresh_suggestions(&mut self) {
+        if let Some(prefix) = file_mentions::prefix(&self.draft, self.draft_cursor) {
+            if self.suggestions_dismissed {
+                self.file_search = None;
+                self.suggestions = None;
+                self.file_matches.clear();
+                return;
+            }
+            if self.file_prefix.as_ref() != Some(&prefix) {
+                self.file_search = Some(file_mentions::Search::start(
+                    env::current_dir().unwrap_or_else(|_| ".".into()),
+                    prefix.query.clone(),
+                ));
+                self.file_matches.clear();
+                self.suggestions = None;
+            }
+            self.file_prefix = Some(prefix);
+            return;
+        }
+        self.clear_file_suggestions();
         let options =
             if self.activity.is_some() || self.draft.contains('\n') || !self.images.is_empty() {
                 Vec::new()
@@ -1508,6 +1543,71 @@ impl Screen {
             let rows = self.size().1.saturating_sub(12).clamp(1, 5);
             Some(Picker::new("Commands".into(), items, None, rows))
         };
+    }
+
+    fn poll_file_suggestions(&mut self) -> io::Result<()> {
+        let Some(entries) = self
+            .file_search
+            .as_ref()
+            .and_then(file_mentions::Search::poll)
+        else {
+            return Ok(());
+        };
+        self.file_search = None;
+        if self.suggestions_dismissed || self.file_prefix.is_none() {
+            return Ok(());
+        }
+        self.file_matches = entries;
+        self.suggestions = if self.file_matches.is_empty() {
+            None
+        } else {
+            let items = self
+                .file_matches
+                .iter()
+                .map(file_mentions::Entry::display)
+                .collect();
+            let rows = self.size().1.saturating_sub(12).clamp(1, 5);
+            Some(Picker::new("Files".into(), items, None, rows))
+        };
+        self.render()
+    }
+
+    /// A completion edits only the @token before the cursor, never the rest of
+    /// the draft. This does not read the selected file or change RPC payloads.
+    fn complete_file(&mut self) -> io::Result<bool> {
+        let Some((prefix, entry)) = self.file_prefix.as_ref().zip(
+            self.suggestions
+                .as_ref()
+                .and_then(|picker| self.file_matches.get(picker.selected)),
+        ) else {
+            return Ok(false);
+        };
+        let (mut replacement, mut cursor) = entry.replacement(prefix.quoted);
+        if replacement.ends_with(' ')
+            && self.draft[self.draft_cursor..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+        {
+            replacement.pop();
+            cursor -= 1;
+        }
+        let start = prefix.start;
+        let mut end = self.draft_cursor;
+        if prefix.quoted && self.draft[end..].starts_with('"') {
+            end += 1;
+        }
+        self.draft.replace_range(start..end, &replacement);
+        self.draft_cursor = start + cursor;
+        self.suggestions = None;
+        self.file_search = None;
+        self.file_prefix = None;
+        self.file_matches.clear();
+        self.suggestions_dismissed = false;
+        self.ensure_cursor_visible();
+        self.refresh_suggestions();
+        self.render()?;
+        Ok(true)
     }
 
     // Only batch already available printable bytes. Control/escape sequences
@@ -1617,7 +1717,10 @@ impl Screen {
         if !matches!(key, Navigation::Up | Navigation::Down) {
             self.preferred_column = None;
         }
-        if key == Navigation::Delete || self.suggestions.is_some() {
+        if self.file_prefix.is_some() {
+            self.suggestions_dismissed = false;
+            self.refresh_suggestions();
+        } else if key == Navigation::Delete || self.suggestions.is_some() {
             self.suggestions_dismissed = true;
             self.refresh_suggestions();
         }
@@ -1640,6 +1743,9 @@ impl Screen {
     }
 
     fn send_active_draft(&mut self, mode: QueueMode) -> io::Result<ActiveAction> {
+        if self.complete_file()? {
+            return Ok(ActiveAction::None);
+        }
         if self.manual_compaction {
             self.input_notice =
                 Some("Compacting… draft kept · Enter after Pi finishes · Esc cancel".into());
@@ -1661,6 +1767,8 @@ impl Screen {
             self.draft_cursor = 0;
             self.draft_scroll = 0;
             self.active_utf8.clear();
+            self.suggestions = None;
+            self.clear_file_suggestions();
             self.input_notice = Some(
                 match mode {
                     QueueMode::Steer => "Sending steering message…",
@@ -1980,6 +2088,7 @@ impl Screen {
         let mut queued = self.pending_input.take();
         loop {
             self.poll_clipboard()?;
+            self.poll_file_suggestions()?;
             if self
                 .exit_armed
                 .is_some_and(|armed| armed.elapsed() >= Duration::from_secs(2))
@@ -2058,6 +2167,9 @@ impl Screen {
                 3 if self.idle_ctrl_c(&mut pending)? => return Ok(PromptAction::Text(None)),
                 3 => {}
                 b'\r' => {
+                    if self.complete_file()? {
+                        continue;
+                    }
                     if self.clipboard.is_some() {
                         self.clipboard_notice = "Reading clipboard… press Enter when ready".into();
                         self.render()?;
@@ -2079,6 +2191,7 @@ impl Screen {
                     self.draft_cursor = 0;
                     self.preferred_column = None;
                     self.suggestions = None;
+                    self.clear_file_suggestions();
                     self.render()?;
                     return Ok(PromptAction::Text(Some(message)));
                 }
@@ -2105,6 +2218,9 @@ impl Screen {
                 2 => self.input_navigation(Navigation::Left)?,
                 6 => self.input_navigation(Navigation::Right)?,
                 b'\t' => {
+                    if self.complete_file()? {
+                        continue;
+                    }
                     if let Some(picker) = self.suggestions.as_ref() {
                         if let Some(cmd) = commands::matches(&self.draft).get(picker.selected) {
                             self.draft = cmd.name.to_owned();
@@ -2547,6 +2663,8 @@ impl Screen {
             "Dialog · Esc cancels · your draft is preserved".into()
         } else if self.disconnected {
             "Pi disconnected · /reconnect · /restore · /quit".into()
+        } else if self.suggestions.is_some() && !self.file_matches.is_empty() {
+            "↑↓ choose  ·  Enter / Tab insert path  ·  Esc dismiss".into()
         } else if self.suggestions.is_some() {
             "↑↓ choose  ·  Tab complete  ·  Enter run  ·  Esc dismiss".into()
         } else if self.auth_url.is_some() {
@@ -2863,6 +2981,7 @@ impl ScrollDisplay for Screen {
 
     fn tick_work(&mut self) -> io::Result<()> {
         self.poll_clipboard()?;
+        self.poll_file_suggestions()?;
         let mut changed = false;
         if let Some(activity) = self.activity.as_mut() {
             let now = Instant::now();
@@ -3009,6 +3128,9 @@ impl ScrollDisplay for Screen {
         }
         match byte {
             b'\r' => return Ok(self.send_active_draft(QueueMode::Steer)?),
+            b'\t' => {
+                self.complete_file()?;
+            }
             17 => return Ok(self.send_active_draft(QueueMode::FollowUp)?), // Ctrl+Q (WSL)
             b'\n' => self.input_navigation(Navigation::Newline)?,
             22 => self.paste_image()?,
@@ -3027,6 +3149,8 @@ impl ScrollDisplay for Screen {
                     self.preferred_column = None;
                     self.clear_images();
                     self.active_utf8.clear();
+                    self.suggestions = None;
+                    self.clear_file_suggestions();
                 }
                 self.render()?;
             }
@@ -3037,6 +3161,9 @@ impl ScrollDisplay for Screen {
             2 => self.input_navigation(Navigation::Left)?,
             6 => self.input_navigation(Navigation::Right)?,
             27 => match escape_key(events) {
+                Navigation::Escape if !self.file_matches.is_empty() => {
+                    self.input_navigation(Navigation::Escape)?
+                }
                 Navigation::Escape => return Ok(ActiveAction::Stop),
                 Navigation::EscapeWith(next) => {
                     self.pending_input = Some(next);
@@ -3049,6 +3176,8 @@ impl ScrollDisplay for Screen {
                 let mut pending = std::mem::take(&mut self.active_utf8);
                 self.insert_input_batch(byte, events, &mut pending);
                 self.active_utf8 = pending;
+                self.suggestions_dismissed = false;
+                self.refresh_suggestions();
                 self.render()?;
             }
             _ => {}
@@ -4449,6 +4578,65 @@ mod tests {
             .unwrap();
         assert_eq!(screen.session, "01a0d19f");
         assert_eq!(screen.model, "openai-codex/gpt-5.5");
+    }
+
+    #[test]
+    fn enter_on_file_picker_during_a_run_does_not_queue_a_prompt() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.draft = "check @rea".into();
+        screen.draft_cursor = screen.draft.len();
+        screen.file_prefix = file_mentions::prefix(&screen.draft, screen.draft_cursor);
+        screen.file_matches = vec![file_mentions::Entry {
+            path: "README.md".into(),
+            directory: false,
+        }];
+        screen.suggestions = Some(Picker::new(
+            "Files".into(),
+            vec!["README.md".into()],
+            None,
+            5,
+        ));
+        let (_sender, events) = std::sync::mpsc::channel();
+        assert!(matches!(
+            screen.active_key(b'\r', &events).unwrap(),
+            ActiveAction::None
+        ));
+        assert_eq!(screen.draft, "check @README.md ");
+        assert!(screen.file_matches.is_empty());
+    }
+
+    #[test]
+    fn file_completion_replaces_only_the_cursor_token_and_keeps_suffix() {
+        let mut screen = Screen::new(false).unwrap();
+        screen.draft = "inspect @REA and continue".into();
+        screen.draft_cursor = "inspect @REA".len();
+        screen.file_prefix = file_mentions::prefix(&screen.draft, screen.draft_cursor);
+        screen.file_matches = vec![file_mentions::Entry {
+            path: "README.md".into(),
+            directory: false,
+        }];
+        screen.suggestions = Some(Picker::new(
+            "Files".into(),
+            vec!["README.md".into()],
+            None,
+            5,
+        ));
+        assert!(screen.complete_file().unwrap());
+        assert_eq!(screen.draft, "inspect @README.md and continue");
+        assert_eq!(screen.draft_cursor, "inspect @README.md".len());
+        assert!(screen.suggestions.is_none());
+
+        screen.draft = "see @\"my dir/\" later".into();
+        screen.draft_cursor = "see @\"my dir/".len();
+        screen.file_prefix = file_mentions::prefix(&screen.draft, screen.draft_cursor);
+        screen.file_matches = vec![file_mentions::Entry {
+            path: "my dir/sub".into(),
+            directory: true,
+        }];
+        screen.suggestions = Some(Picker::new("Files".into(), vec!["sub/".into()], None, 5));
+        assert!(screen.complete_file().unwrap());
+        assert_eq!(screen.draft, "see @\"my dir/sub/\" later");
+        assert_eq!(screen.draft_cursor, "see @\"my dir/sub/".len());
     }
 
     #[test]
