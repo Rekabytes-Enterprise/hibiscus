@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-28
+
+### Added
+
+- Full-screen `@path` completion searches local files and directories at the composer cursor, with quoted paths for spaces and continued directory completion. Enter or Tab inserts a path without sending the prompt or reading file contents. Search runs off the UI thread through bounded `fd` results where available, with a direct-directory fallback. Pi receives ordinary prompt text and may choose to read the referenced file; this is not Pi's CLI `@file` attachment expansion.
+
+### Verification limits
+
+- Synthetic file-picker/PTY tests check inserted prompt text and that file contents are not silently sent. Real-provider, physical-terminal and macOS acceptance remain pending; a dev push is not a tagged release.
+
 ## [0.3.1] - 2026-09-28
 
 ### Added
@@ -201,7 +211,8 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.2.5
