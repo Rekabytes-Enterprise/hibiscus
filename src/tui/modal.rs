@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 pub(crate) const BORDER: &str = "38;2;184;57;101";
 const TITLE: &str = "1;38;2;236;74;125";
 const SELECTED: &str = "1;38;2;255;155;187;48;2;77;27;51";
+const SEARCH_INPUT: &str = "38;2;255;220;230;48;2;55;24;43";
 const TEXT: &str = "38;2;255;220;230";
 
 pub(crate) struct Row {
@@ -101,15 +102,47 @@ pub(crate) fn picker_panel(
         } else {
             "↑↓ move · Enter select · Esc cancel"
         },
-        picker.selected + 1,
+        if picker.items.is_empty() {
+            0
+        } else {
+            picker.selected + 1
+        },
         picker.items.len()
     );
-    panel(
-        &picker.title,
-        choices(picker, width, height.saturating_sub(3)),
-        &hint,
-        width,
-    )
+    let mut body = Vec::new();
+    if let Some(query) = &picker.query {
+        body.push(inner("Search models", width, TEXT, '│'));
+        let input = if query.is_empty() {
+            "> ▏Type a provider or model…".to_owned()
+        } else {
+            // Keep the end of the query and caret visible while editing.
+            let capacity = width.saturating_sub(7);
+            let tail: String = query
+                .chars()
+                .rev()
+                .take(capacity)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            format!("> {tail}▏")
+        };
+        body.push(inner(&input, width, SEARCH_INPUT, '│'));
+        body.push(Row {
+            text: format!("├{}┤", "─".repeat(width.saturating_sub(2))),
+            style: BORDER,
+        });
+    }
+    if picker.items.is_empty() && picker.query.is_some() {
+        body.push(inner("No matching models", width, TEXT, '│'));
+    } else {
+        body.extend(choices(
+            picker,
+            width,
+            height.saturating_sub(3 + body.len()),
+        ));
+    }
+    panel(&picker.title, body, &hint, width)
 }
 
 pub(crate) struct Modal {

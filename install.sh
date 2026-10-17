@@ -4,6 +4,11 @@ set -eu
 REPOSITORY=${HIBISCUS_REPOSITORY:-Rekabytes-Enterprise/hibiscus}
 VERSION=${HIBISCUS_VERSION:-latest}
 INSTALL_DIR=${HIBISCUS_INSTALL_DIR:-"$HOME/.local/bin"}
+DATA_DIR=${HIBISCUS_HOME:-"$HOME/.hibiscus"}
+case "$DATA_DIR" in
+    /*) ;;
+    *) printf 'hibiscus installer: HIBISCUS_HOME must be an absolute path\n' >&2; exit 1 ;;
+esac
 
 fail() {
     printf 'hibiscus installer: %s\n' "$*" >&2
@@ -127,6 +132,12 @@ ensure_pi() {
 mkdir -p "$INSTALL_DIR"
 ensure_pi
 
+# Keep app-owned settings/cache together without overwriting existing settings.
+(umask 077; mkdir -p "$DATA_DIR/cache") || fail "could not create $DATA_DIR"
+if [ ! -e "$DATA_DIR/config.json" ]; then
+    (umask 077; set -C; printf '%s\n' '{"codexContextWindow":1000000}' > "$DATA_DIR/config.json") || fail "could not create $DATA_DIR/config.json"
+fi
+
 # Extract only the expected file; never let paths in the archive choose where to write.
 tar -xOzf "$tmp/$archive" hibiscus >"$tmp/hibiscus" || fail "release archive does not contain hibiscus"
 # Never truncate a running executable. Stage beside it, then atomically replace it.
@@ -139,4 +150,5 @@ case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
     *) printf 'Add %s to PATH to run hibiscus.\n' "$INSTALL_DIR" ;;
 esac
+printf 'Hibiscus settings and cache: %s\n' "$DATA_DIR"
 printf 'Pi is ready. Sign in to a provider with /login in Hibiscus or Pi.\n'

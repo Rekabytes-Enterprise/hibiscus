@@ -24,6 +24,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - run: node tests/npm-install.mjs
       - run: cargo test --locked
         timeout-minutes: 5
       - run: cargo clippy --locked --all-targets -- -D warnings

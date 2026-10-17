@@ -110,14 +110,50 @@ pub(crate) fn install(tag: &str) -> Result<()> {
     Ok(())
 }
 
+fn update_pi() -> Result<()> {
+    crate::pi::ensure_node_path();
+    let pi = env::var_os("HIBISCUS_PI").unwrap_or_else(|| "pi".into());
+    println!("Updating Pi using its own updater…");
+    let status = Command::new(&pi)
+        .args(["update", "--self"])
+        .status()
+        .map_err(|error| {
+            format!(
+                "could not run {} update --self: {error}",
+                pi.to_string_lossy()
+            )
+        })?;
+    if !status.success() {
+        return Err(format!("Pi updater failed: {status}; follow Pi's output above for installation-specific instructions").into());
+    }
+    println!("Pi update completed.");
+    Ok(())
+}
+
 pub(crate) fn update() -> Result<()> {
+    // Reject unsupported Hibiscus install locations before changing either app.
     install_path()?;
-    match check()? {
-        Some(tag) => {
-            install(&tag)?;
-            println!("Restart Hibiscus to use {tag}.");
+    let hibiscus: Result<()> = (|| {
+        match check()? {
+            Some(tag) => {
+                install(&tag)?;
+                println!("Restart Hibiscus to use {tag}.");
+            }
+            None => println!("Hibiscus {} is up to date.", env!("CARGO_PKG_VERSION")),
         }
-        None => println!("Hibiscus {} is up to date.", env!("CARGO_PKG_VERSION")),
+        Ok(())
+    })();
+    if let Err(error) = &hibiscus {
+        eprintln!("Hibiscus update failed: {error}");
+    }
+    // These are independent updates, not a transaction: still try Pi when
+    // GitHub is unavailable, and never imply a rollback of either component.
+    let pi = update_pi();
+    if let Err(error) = &pi {
+        eprintln!("Pi update failed: {error}");
+    }
+    if hibiscus.is_err() || pi.is_err() {
+        return Err("one or more updates failed; successful updates remain installed (see component results above)".into());
     }
     Ok(())
 }
@@ -125,10 +161,7 @@ pub(crate) fn update() -> Result<()> {
 /// Don't recheck or repeat a dismissed notice on each chat startup. An explicit
 /// `hibiscus update` always performs a fresh request.
 pub(crate) fn check_startup() -> Option<String> {
-    let cache = env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?
-        .join("hibiscus/update-check");
+    let cache = crate::paths::home().ok()?.join("cache/update-check");
     if let Ok(age) = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .and_then(|modified| {

@@ -83,7 +83,7 @@ function matches(grant, command) {
 }
 
 export default function (pi) {
-  const loopFlag = new URL('./loop-active', import.meta.url);
+  const approvalDisabled = new URL('./approval-disabled', import.meta.url);
   const identity = 'In this client you are presented to the user as Hibiscus. If asked who you are, answer as Hibiscus, the terminal assistant/interface powered by the Pi coding agent. Pi runs the agent, tools, authentication, and sessions; the selected provider/model supplies the intelligence. If asked for the platform, provider, or model, identify them truthfully when known. Do not claim Hibiscus is a model or provider, and do not add a brand disclaimer to unrelated answers.';
   const operational = 'When a request has multiple reasonable interpretations that would materially change the outcome, scope, risk, or cost, do not silently choose one. Use safe read-only inspection to resolve uncertainty where possible; otherwise ask one to three specific questions and wait before making changes. For minor reversible details, use a conservative conventional choice and briefly state your assumption instead of repeatedly asking. Clarify missing scope before destructive, publishing, credential-changing, or unusually costly external actions; tool approval is not a substitute for understanding the request. If the user says not to code yet, inspect and discuss without changing files. Separate observations from guesses and report only checks actually performed. Keep Pi responsible for tools, sessions, authentication, and agent behavior.';
   const guidance = { hibiscus_identity: identity, hibiscus_operational: operational };
@@ -171,44 +171,9 @@ export default function (pi) {
         details: { hibiscusGoal: { steps: steps.map(step => ({ ...step })), completed, total: steps.length, ...(error ? { error } : {}) } } };
     },
   });
-  pi.registerTool({
-    name: 'loop_status', label: 'Loop status',
-    description: 'Only in Hibiscus /loop: report candidate_complete when you judge the requested work and actual tests complete, or blocked with a genuine blocker. Guided mode accepts your assessment without independent verification. Only /loop --strict requires submit_evidence with projectDir/reportPath and a separate review; submit existing current reports before rerunning passing tests. Never print internal status markers in assistant text.',
-    parameters: { type: 'object', properties: {
-      action: { type: 'string', enum: ['candidate_complete', 'blocked', 'submit_evidence'] },
-      reason: { type: 'string', description: 'Required only for blocked; concise explanation' },
-      projectDir: { type: 'string', description: 'For submit_evidence: project directory relative to the workspace, or absolute' },
-      reportPath: { type: 'string', description: 'For submit_evidence: saved Playwright JSON report path relative to projectDir, or absolute. Submit existing results before rerunning tests.' },
-      supportFiles: { type: 'array', maxItems: 8, items: {type:'string'}, description: 'Explicit project-relative test-source, server-log and earlier failure-report files for review. Never include credentials.' },
-    }, required: ['action'], additionalProperties: false },
-    async execute(_id, params, _signal, _update, ctx) {
-      const error = !existsSync(loopFlag) ? 'Loop mode is not active.'
-        : params.action === 'blocked' && (typeof params.reason !== 'string' || !params.reason.trim() || params.reason.length > 500)
-          ? 'A blocked status needs a concise reason.'
-          : params.action === 'submit_evidence' && [params.projectDir, params.reportPath].some(value =>
-            typeof value !== 'string' || !value.trim() || value.length > 4096 || /[\x00-\x1f]/.test(value))
-            ? 'Evidence submission needs projectDir and reportPath.'
-          : params.supportFiles !== undefined && (!Array.isArray(params.supportFiles) || params.supportFiles.length>8 || params.supportFiles.some(p=>typeof p!=='string'||p.length>4096)) ? 'Invalid supportFiles.'
-          : !['candidate_complete', 'blocked', 'submit_evidence'].includes(params.action) ? 'Unknown loop action.' : undefined;
-      if (!error && params.action === 'submit_evidence') {
-        try {
-          const response = await ctx.ui.input('Hibiscus internal loop evidence', JSON.stringify(params));
-          const result = JSON.parse(response);
-          return { content: [{type:'text', text: JSON.stringify(result)}], details: {hibiscusLoop:{state:'submit_evidence',validatedByClient:true}} };
-        } catch {
-          return { content:[{type:'text',text:'Evidence validation bridge unavailable; no success was recorded.'}], details:{hibiscusLoop:{error:'Evidence bridge unavailable'}} };
-        }
-      }
-      return { content: [{ type: 'text', text: error ?? 'Loop status noted; Hibiscus will review the result.' }],
-        details: { hibiscusLoop: error ? { error } : {
-          state: params.action, ...(params.action === 'blocked' ? { reason: params.reason.trim() } : {}),
-          ...(params.action === 'submit_evidence' ? { projectDir: params.projectDir, reportPath: params.reportPath } : {}),
-        } } };
-    },
-  });
   pi.on('tool_call', async (event, ctx) => {
     if (event.toolName !== 'bash') return;
-    if (existsSync(loopFlag)) return; // Explicit /loop scope; normal chats remain gated.
+    if (existsSync(approvalDisabled)) return;
     const command = event.input?.command;
     const operations = typeof command === 'string'
       ? shellCommands(command).map(text => ({ text, reason: reasonFor(text), rule: permissionFor(text) }))

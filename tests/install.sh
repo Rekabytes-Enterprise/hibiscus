@@ -58,7 +58,7 @@ run_case() {
     version=$4
     mode=$5
     archive="hibiscus-$target.tar.gz"
-    rm -rf "$tmp/package" "$tmp/home/.local" "$tmp/pi-agent/bin"
+    rm -rf "$tmp/package" "$tmp/home/.local" "$tmp/pi-agent/bin" "$tmp/home/.hibiscus" "$tmp/custom-hibiscus"
     mkdir -p "$tmp/package" "$tmp/home/.local/bin"
     printf '#!/bin/sh\necho test hibiscus\n' >"$tmp/package/hibiscus"
     chmod +x "$tmp/package/hibiscus"
@@ -90,6 +90,17 @@ run_case() {
             printf '#!/bin/sh\necho custom-pi\n' > "$override_pi"
             chmod +x "$override_pi" ;;
     esac
+    data_dir="$tmp/home/.hibiscus"
+    custom_home=
+    if [ "$mode" = override ]; then
+        custom_home="$tmp/custom-hibiscus"
+        data_dir=$custom_home
+    fi
+    if [ "$mode" = existing ]; then
+        mkdir -p "$data_dir"
+        printf '{"enabled":false}\n' > "$data_dir/approval.json"
+        printf '{"codexContextWindow":null}\n' > "$data_dir/config.json"
+    fi
     status=0
     TEST_OS=$os TEST_ARCH=$arch TEST_FIXTURES="$tmp/fixtures" TEST_CURL_LOG="$tmp/curl.log" \
         TEST_PI_LOG="$tmp/pi.log" TEST_NPM_LOG="$tmp/npm.log" \
@@ -97,7 +108,7 @@ run_case() {
         TEST_PI_INSTALL_FAIL=$([ "$mode" = install_failure ] && echo 1 || echo 0) \
         TEST_NPM_INSTALL_FAIL=$([ "$mode" = npm_failure ] && echo 1 || echo 0) \
         PI_CODING_AGENT_DIR="$tmp/pi-agent" HOME="$tmp/home" HIBISCUS_PI="$override_pi" \
-        HIBISCUS_VERSION=$version HIBISCUS_INSTALL_DIR="$tmp/home/.local/bin" \
+        HIBISCUS_HOME="$custom_home" HIBISCUS_VERSION=$version HIBISCUS_INSTALL_DIR="$tmp/home/.local/bin" \
         PATH="$tmp/bin:$tmp/home/.local/bin:/usr/bin:/bin" sh "$root/install.sh" >/dev/null 2>"$tmp/stderr" || status=$?
 
     if [ "$mode" = download_failure ] || [ "$mode" = install_failure ] || [ "$mode" = npm_failure ]; then
@@ -106,6 +117,13 @@ run_case() {
         return
     fi
     [ "$status" -eq 0 ] || { printf 'Installer failed: %s\n' "$(awk 'NR == 1 {print; exit}' "$tmp/stderr")" >&2; exit 1; }
+    test -d "$data_dir/cache"
+    if [ "$mode" = existing ]; then
+        [ "$(cat "$data_dir/approval.json")" = '{"enabled":false}' ]
+        [ "$(cat "$data_dir/config.json")" = '{"codexContextWindow":null}' ]
+    else
+        [ "$(cat "$data_dir/config.json")" = '{"codexContextWindow":1000000}' ]
+    fi
     test -x "$tmp/home/.local/bin/hibiscus"
     "$tmp/home/.local/bin/hibiscus" | grep -q 'test hibiscus'
     grep -q "/$archive" "$tmp/curl.log"
@@ -132,7 +150,7 @@ run_case() {
 run_case Linux x86_64 x86_64-unknown-linux-musl latest existing
 run_case Linux aarch64 aarch64-unknown-linux-musl latest override
 run_case Darwin x86_64 x86_64-apple-darwin latest managed
-run_case Darwin arm64 aarch64-apple-darwin 0.3.2 missing
+run_case Darwin arm64 aarch64-apple-darwin 0.3.3 missing
 run_case Darwin arm64 aarch64-apple-darwin latest npm
 run_case Darwin x86_64 x86_64-apple-darwin latest npm_failure
 run_case Darwin x86_64 x86_64-apple-darwin latest download_failure

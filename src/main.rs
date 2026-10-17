@@ -1,4 +1,5 @@
 mod chat;
+mod paths;
 mod pi;
 mod tui;
 mod update;
@@ -70,11 +71,11 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Start> {
 
 fn run() -> Result<()> {
     let start = parse_args(env::args().skip(1))?;
-    let _approval = if matches!(
+    let _extensions = if matches!(
         start,
         Start::Chat { .. } | Start::Prompt(_) | Start::Sessions
     ) {
-        let guard = pi::ApprovalGuard::new()?;
+        let guard = pi::BuiltinExtensions::new()?;
         pi::ensure_node_path();
         Some(guard)
     } else {
@@ -87,7 +88,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Start::Help => {
-            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /loop [--strict] <goal>, /login, /logout, /restore, /reconnect, /quit.\n/login uses Pi's Codex SDK flow in the full-screen UI when available; other-provider login hands off to Pi. Finish there and type /quit to return.\n/logout removes a selected provider's stored credentials inside full-screen Hibiscus.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_PI to override the pi executable.");
+            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nThe update command updates Hibiscus and Pi.\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /approval [on|off], /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login uses Pi's Codex SDK flow in the full-screen UI when available; other-provider login hands off to Pi. Finish there and type /quit to return.\n/logout removes a selected provider's stored credentials inside full-screen Hibiscus.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_PI to override the pi executable.");
             Ok(())
         }
         Start::Prompt(prompt) => {

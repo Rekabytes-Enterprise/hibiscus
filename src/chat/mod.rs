@@ -1,5 +1,4 @@
 pub(crate) mod commands;
-mod loop_mode;
 mod models;
 pub(crate) mod sessions;
 
@@ -248,6 +247,42 @@ fn chat<R: BufRead>(
         let result: Result<()> = (|| {
             match message {
                 "/help" => ui.help(output)?,
+                _ if message == "/approval" || message.starts_with("/approval ") => {
+                    let mut setting = match message.strip_prefix("/approval").unwrap().trim() {
+                        "" => None,
+                        "on" | "enable" => Some(true),
+                        "off" | "disable" => Some(false),
+                        _ => {
+                            ui.info(output, "Usage: /approval [on|off|enable|disable]")?;
+                            return Ok(());
+                        }
+                    };
+                    if setting.is_none() && output.is_full() {
+                        if let Some(events) = events.as_ref() {
+                            let enabled = crate::pi::approval_enabled(None)?;
+                            let items = vec![
+                                "Enable — ask before risky shell commands".to_owned(),
+                                "Disable — run shell commands without approval prompts".to_owned(),
+                            ];
+                            let choice = output.select(
+                                "Shell approvals · saved preference",
+                                &items,
+                                Some(usize::from(!enabled)),
+                                &events.receiver,
+                            )?;
+                            let Some(choice) = choice else {
+                                return Ok(());
+                            };
+                            setting = Some(choice == 0);
+                        }
+                    }
+                    let enabled = crate::pi::approval_enabled(setting)?;
+                    ui.info(output, if enabled {
+                        "Approvals enabled: risky shell commands require approval."
+                    } else {
+                        "Approvals disabled: shell commands run without approval prompts. This setting persists across restarts. Use /approval on to enable."
+                    })?;
+                }
                 "/restore" => {
                     if !output.is_full() {
                         ui.info(
@@ -290,30 +325,6 @@ fn chat<R: BufRead>(
                         last_failed = Some((message.to_owned(), images.clone()));
                     }
                     ui.info(output, "Pi is disconnected. Use /reconnect, /restore, /help, or /quit. Nothing was sent.")?;
-                }
-                _ if message == "/loop" || message.starts_with("/loop ") => {
-                    if !images.is_empty() {
-                        output.restore_draft(message.to_owned(), images.clone());
-                        ui.info(
-                            output,
-                            "Remove attachments before using /loop; draft restored for review.",
-                        )?;
-                    } else {
-                        let goal = message.strip_prefix("/loop").unwrap_or("").trim();
-                        submitted = output.is_full() && !goal.is_empty();
-                        let result = loop_mode::run(
-                            goal,
-                            rpc,
-                            input,
-                            output,
-                            dialogs,
-                            raw,
-                            events.as_ref().map(|e| &e.receiver),
-                            ui,
-                        );
-                        output.end_loop_scope()?;
-                        result?;
-                    }
                 }
                 "/new" => {
                     rpc.command(

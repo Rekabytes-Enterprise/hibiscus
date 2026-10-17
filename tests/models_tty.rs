@@ -109,12 +109,25 @@ done
     std::thread::sleep(Duration::from_millis(120));
     send(master, b"/models\r");
     std::thread::sleep(Duration::from_millis(200));
+    send(master, b"nonexistent\r"); // Enter with no matches keeps the modal open.
+    std::thread::sleep(Duration::from_millis(120));
+    for _ in 0..11 {
+        send(master, b"\x7f");
+    }
+    send(master, b"\x1b[200~DEMO M4\x1b[201~"); // Pasted query, case-insensitive terms.
+    std::thread::sleep(Duration::from_millis(120));
+    send(master, b"\r"); // Filtered index zero must select original m4.
+    std::thread::sleep(Duration::from_millis(160));
+    send(master, b"/models\r");
+    std::thread::sleep(Duration::from_millis(160));
+    send(master, b"m8");
+    std::thread::sleep(Duration::from_millis(100));
     send(master, b"\x1b/quit\r"); // Esc cancels; the immediately typed / is not lost
     let status = child.wait().unwrap();
     let bytes = reader.join().unwrap();
     let display = String::from_utf8_lossy(&bytes);
     assert!(status.success(), "{status}: {display}");
-    assert_eq!(fs::read_to_string(&log).unwrap(), "m7\n");
+    assert_eq!(fs::read_to_string(&log).unwrap(), "m7\nm4\n");
     assert!(display.contains("H  ╭─ ✿ Commands"), "{display}");
     assert!(display.contains("Choose a model"), "{display}");
     assert!(
@@ -123,6 +136,8 @@ done
     );
     assert!(display.contains("demo/m7"), "{display}");
     assert!(display.contains("● current"), "{display}");
+    assert!(display.contains("No matching models"), "{display}");
+    assert!(display.contains("> DEMO M4"), "{display}");
     assert!(display.contains("7/8"), "{display}");
     assert!(display.contains("█"), "{display}");
     assert!(display.contains("demo/m7"), "{display}");
