@@ -46,6 +46,26 @@ To update a prebuilt installation and Pi together, run `hibiscus update`. For Hi
 
 Prebuilt Hibiscus does not require Rust or a C compiler. Pi is a runtime dependency; the prebuilt installer installs it when missing and links Pi's managed launcher alongside Hibiscus when needed. Pi requires Node.js 22.19+; when Node.js/npm are absent or too old, Pi's installer may prompt to bootstrap them. If the official Pi installer fails or a non-interactive shell cannot supply missing Node, installation stops instead of claiming Hibiscus is ready. Hibiscus can find Pi's standalone Node.js even if the calling shell has not loaded its new PATH. Source/Cargo installs still require you to install Pi separately. `HIBISCUS_PI` can select a custom existing Pi.
 
+## Install with npx
+
+Once the npm package and matching GitHub release are published:
+
+```sh
+npx @rekabytes/hibiscus@latest
+hibiscus
+```
+
+Requires Node.js 22.19+ and npm on Linux, WSL, or macOS (x86-64/ARM64), plus the same shell tools as the curl installer. Native Windows is unsupported; run inside WSL. The package is an installer, not the chat executable. It bundles `install.sh`, installs the native binary to `~/.local/bin`, verifies release checksums, sets up Pi if missing, and creates Hibiscus configuration. There are no npm lifecycle install scripts or npm runtime dependencies.
+
+An explicit npm package version installs the same Hibiscus release version. `HIBISCUS_VERSION` can override that target; `HIBISCUS_INSTALL_DIR`, `HIBISCUS_HOME`, `HIBISCUS_PI`, `HIBISCUS_REPOSITORY`, and `GITHUB_TOKEN` retain the shell installer's behavior. Use `npx @rekabytes/hibiscus@latest --help` for installer help. After installation, update with `hibiscus update` as usual.
+
+To check the unpublished package locally without installing Hibiscus:
+
+```sh
+npm exec --offline --package=. -- hibiscus-install --help
+node tests/npm-install.mjs
+```
+
 ## Build from source
 
 ```sh
@@ -62,7 +82,7 @@ sudo apt install -y build-essential
 
 ## Publishing a release
 
-The release version in `Cargo.toml`, `Cargo.lock`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.3.3` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
+The release version in `Cargo.toml`, `Cargo.lock`, `package.json`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.3.3` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
 
 ```sh
 git tag -a v0.3.3 -m "Hibiscus v0.3.3"
@@ -79,6 +99,18 @@ A previously pushed tag keeps pointing at its original commit; later changes to 
 - `aarch64-apple-darwin`
 
 The workflow can be dispatched manually to validate all four builds without publishing a release. Release publishing requires GitHub Actions to have `contents: write` permission. macOS artifacts are ad-hoc signed, not Apple Developer ID signed or notarized.
+
+### Publish the npm installer
+
+After the matching GitHub release assets and checksums exist, an npm account with publishing access to the `@rekabytes` scope can publish from the exact release checkout:
+
+```sh
+node tests/npm-install.mjs
+npm pack --dry-run
+npm publish --access public
+```
+
+Scope ownership and npm authentication must be configured by the maintainer before the first publication. The GitHub release workflow does not automatically publish to npm. Publishing the installer before its matching binary release would leave users unable to download that version. `scripts/bump-version.sh` keeps the npm package version synchronized with Cargo; do not bump it separately.
 
 ## Hibiscus data directory
 

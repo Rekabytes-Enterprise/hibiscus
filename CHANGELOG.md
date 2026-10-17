@@ -4,6 +4,10 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Publishable `@rekabytes/hibiscus` npm installer for npx, reusing the bundled checksum-verified shell installer and pinning downloads to the npm package version. Requires npm publication and matching GitHub release assets.
+
 ## [0.3.3] - 2026-10-17
 
 ### Added

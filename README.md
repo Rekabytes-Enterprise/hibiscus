@@ -42,6 +42,14 @@ Chat, switch models, pick up an earlier session, and share screenshots—without
 curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/main/install.sh | sh
 ```
 
+Alternatively, install through **npx** (requires Node.js 22.19+ and npm):
+
+```sh
+npx @rekabytes/hibiscus@latest
+```
+
+The npm installer uses the same verified release download and Pi setup as the curl installer. It installs Hibiscus permanently; after installation, start it with `hibiscus`. **Availability:** this command requires publication of `@rekabytes/hibiscus` and its matching GitHub release; adding the package to `dev` alone does not make it available on npm.
+
 Then start a conversation:
 
 ```sh
