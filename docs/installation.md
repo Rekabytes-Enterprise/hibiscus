@@ -24,7 +24,7 @@ The default destination is `~/.local/bin/hibiscus`. If Pi is absent, Hibiscus in
 HIBISCUS_INSTALL_DIR="$HOME/bin" sh install.sh
 ```
 
-Once the v0.3.2 release is published, install it specifically with `HIBISCUS_VERSION=v0.3.2`. A `dev` push alone does not publish release assets. For a private GitHub repository, export a token that can read repository releases, and fetch the script through GitHub's authenticated API:
+Once the v0.3.3 release is published, install it specifically with `HIBISCUS_VERSION=v0.3.3`. A `dev` push alone does not publish release assets. For a private GitHub repository, export a token that can read repository releases, and fetch the script through GitHub's authenticated API:
 
 ```sh
 export GITHUB_TOKEN=YOUR_TOKEN
@@ -42,7 +42,7 @@ Verify the result with:
 hibiscus --version
 ```
 
-To update a prebuilt installation later, run `hibiscus update`. This fetches the latest public GitHub release, verifies its SHA-256 checksum, and atomically replaces the installed binary without `sudo` or running a downloaded script. Restart Hibiscus afterward. The updater supports the default `~/.local/bin/hibiscus` install; if you installed elsewhere, set `HIBISCUS_INSTALL_DIR` to its directory. It will not replace a symlink or a source/Cargo build; use Cargo to update those. It needs `curl`, `tar`, `install`, and `sha256sum` or `shasum`, plus internet access. Offline failures leave the installed binary untouched. Full-screen chat checks at most once per day and offers Later / Update now; set `HIBISCUS_NO_UPDATE_CHECK=1` to opt out of automatic checks. The manual command still works. A new push alone isn't an update: publish a version-matching GitHub Release.
+To update a prebuilt installation and Pi together, run `hibiscus update`. For Hibiscus, this fetches the latest public GitHub release, verifies its SHA-256 checksum, and atomically replaces the installed binary without `sudo` or running a downloaded script. Restart Hibiscus afterward. The updater supports the default `~/.local/bin/hibiscus` install; if you installed elsewhere, set `HIBISCUS_INSTALL_DIR` to its directory. It will not replace a symlink or a source/Cargo build; use Cargo to update those. It needs `curl`, `tar`, `install`, and `sha256sum` or `shasum`, plus internet access. The manual command also runs `pi update --self` (or the executable selected by `HIBISCUS_PI`), letting Pi manage its own installation. This updates Pi itself, not its extension packages or model catalogs. Pi is attempted even when Hibiscus is current or its update fails. Each component reports its outcome; any failure returns a nonzero exit status, and successful changes are not rolled back. Pi installations managed externally may require their package manager, as reported by Pi. Unsupported Hibiscus install locations are rejected before either update starts. Full-screen chat checks at most once per day and offers Later / Update now for Hibiscus only (the running Pi is not updated during chat); set `HIBISCUS_NO_UPDATE_CHECK=1` to opt out of automatic checks. The manual command still works. A new push alone isn't an update: publish a version-matching GitHub Release.
 
 Prebuilt Hibiscus does not require Rust or a C compiler. Pi is a runtime dependency; the prebuilt installer installs it when missing and links Pi's managed launcher alongside Hibiscus when needed. Pi requires Node.js 22.19+; when Node.js/npm are absent or too old, Pi's installer may prompt to bootstrap them. If the official Pi installer fails or a non-interactive shell cannot supply missing Node, installation stops instead of claiming Hibiscus is ready. Hibiscus can find Pi's standalone Node.js even if the calling shell has not loaded its new PATH. Source/Cargo installs still require you to install Pi separately. `HIBISCUS_PI` can select a custom existing Pi.
 
@@ -62,11 +62,11 @@ sudo apt install -y build-essential
 
 ## Publishing a release
 
-The release version in `Cargo.toml`, `Cargo.lock`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.3.2` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
+The release version in `Cargo.toml`, `Cargo.lock`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.3.3` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
 
 ```sh
-git tag -a v0.3.2 -m "Hibiscus v0.3.2"
-git push origin v0.3.2
+git tag -a v0.3.3 -m "Hibiscus v0.3.3"
+git push origin v0.3.3
 ```
 
 A previously pushed tag keeps pointing at its original commit; later changes to `dev` or `main` do not fix that tag's release run. Do not force-move a public tag without coordinating with users; a new version tag is safer.
@@ -79,3 +79,25 @@ A previously pushed tag keeps pointing at its original commit; later changes to 
 - `aarch64-apple-darwin`
 
 The workflow can be dispatched manually to validate all four builds without publishing a release. Release publishing requires GitHub Actions to have `contents: write` permission. macOS artifacts are ad-hoc signed, not Apple Developer ID signed or notarized.
+
+## Hibiscus data directory
+
+The production installer creates `~/.hibiscus/` and `~/.hibiscus/cache/` without overwriting existing configuration. Set `HIBISCUS_HOME` to an absolute path to use another location; use the same value when installing and running Hibiscus. This directory belongs to the user, not the project or filesystem root.
+
+- `config.json` stores Hibiscus runtime options. The installer creates it with `{"codexContextWindow":1000000}`; existing files are preserved.
+- `approval.json` stores your approval choice and is created when you change the setting or migrate an existing preference.
+- `cache/update-check` records automatic update checks when they run.
+
+Existing approval settings from `$XDG_CONFIG_HOME/hibiscus/approval.json` or `~/.config/hibiscus/approval.json` are copied on first launch if the new file is absent. The old file is retained; an existing new file always takes precedence. The old update cache is disposable and is not migrated. Pi's credentials, sessions and configuration remain managed by Pi in its own agent directory. Binaries stay in the installation directory; transient bundled extensions are staged in the OS temporary directory and removed on exit.
+
+### Codex context window
+
+Hibiscus defaults `openai-codex` models `gpt-5.4`, `gpt-5.5`, `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`, and `gpt-6-luna` to **1,000,000 tokens**. Only exact IDs already available in Pi are adjusted; older models, unknown variants, and other providers keep Pi's metadata. The allowlist follows the [OpenAI model documentation](https://developers.openai.com/api/docs/models/compare). This config changes the SDK budget, not the provider's actual capability or account access.
+
+Edit `~/.hibiscus/config.json` (or `$HIBISCUS_HOME/config.json`) and restart Hibiscus:
+
+```json
+{"codexContextWindow": 1000000}
+```
+
+Set the value to `null` to use Pi's defaults, or an integer from 200000 through 1050000 to choose a budget for the supported models. Missing files/fields default to 1000000; malformed configuration fails at startup. Source installations can create this file manually. Pi's explicit `models.json` per-model overrides retain precedence. The bundled `model-context.mjs` updates Pi's registry and reselects the active model, so SDK compaction and RPC context usage use the same metadata. Standalone Pi is unchanged. Pi still reserves space for output/compaction; 1M is the total context window, not a promise of 1M input tokens.

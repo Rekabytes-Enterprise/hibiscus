@@ -58,7 +58,7 @@ pub(crate) fn choose_model<R: BufRead>(
                 )
             })
             .collect::<Vec<_>>();
-        output.select("Models · all providers", &labels, active, keys)?
+        output.select_searchable("Models · all providers", &labels, active, keys)?
     } else {
         writeln!(output, "Models (sorted by provider):")?;
         for (index, model) in models.iter().enumerate() {

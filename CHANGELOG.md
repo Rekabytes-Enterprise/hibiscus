@@ -4,6 +4,24 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-17
+
+### Added
+
+- Searchable `/models` picker with a labeled input, divider, case-insensitive provider/model filtering, paste support, and preserved current-model selection.
+- `/approval` Enable/Disable picker and persistent preference, restored across launches.
+- Hibiscus home directory (`~/.hibiscus`, configurable with `HIBISCUS_HOME`) for settings and update cache, with legacy approval-setting migration.
+- Configurable 1M context default for explicitly supported Codex models, applied through Pi's model registry and active-model selection.
+- Separate always-on writing guidance that preserves user-requested tone, code, quotations, and uncertainty.
+
+### Changed
+
+- `hibiscus update` now attempts both Hibiscus and Pi updates and reports partial failures. The in-chat update prompt remains Hibiscus-only.
+
+### Removed
+
+- `/loop`, including guided/strict controllers, reviewer integration, evidence bridge, and loop-specific tools and UI.
+
 ## [0.3.2] - 2026-09-28
 
 ### Added

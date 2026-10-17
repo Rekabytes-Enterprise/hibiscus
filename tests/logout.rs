@@ -257,8 +257,9 @@ export class ModelRuntime {
         if committed { 2 } else { 1 },
         "{launches}"
     );
-    assert!(launches.lines().all(|line| line
-        .starts_with("--mode rpc --no-extensions --tools read,bash,edit,write,goal,loop_status")));
+    assert!(launches.lines().all(
+        |line| line.starts_with("--mode rpc --no-extensions --tools read,bash,edit,write,goal")
+    ));
     if committed {
         if mode == "empty_session" {
             assert!(!launches.contains("--session"));

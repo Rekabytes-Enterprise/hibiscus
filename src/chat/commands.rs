@@ -9,6 +9,10 @@ pub(crate) struct Command {
 
 const COMMANDS: &[Command] = &[
     Command {
+        name: "/approval",
+        description: "Show or change shell approvals: on / off",
+    },
+    Command {
         name: "/compact",
         description: "Summarize old context with Pi",
     },
@@ -31,10 +35,6 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "/logout",
         description: "Remove a stored provider credential",
-    },
-    Command {
-        name: "/loop",
-        description: "Guided unattended work; --strict for evidence checks",
     },
     Command {
         name: "/models",
@@ -90,7 +90,7 @@ mod tests {
                 .iter()
                 .map(|cmd| cmd.name)
                 .collect::<Vec<_>>(),
-            ["/login", "/logout", "/loop"]
+            ["/login", "/logout"]
         );
         assert_eq!(
             matches("/thi")
@@ -109,5 +109,6 @@ mod tests {
         assert!(matches("/model ").is_empty());
         assert!(matches("hello").is_empty());
         assert!(!matches("/").iter().any(|cmd| cmd.name == "/fork"));
+        assert!(matches("/loop").is_empty());
     }
 }

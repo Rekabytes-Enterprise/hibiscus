@@ -52,7 +52,7 @@ jobs:
         with:
           node-version: '24'
       - name: Test bundled Pi helpers without providers
-        run: node tests/approval.mjs && node tests/loop_approval.mjs && node tests/loop_verify.mjs
+        run: node tests/model-context.mjs && node tests/writing-style.mjs && node tests/approval.mjs && node tests/approval_toggle.mjs
       - name: Run Rust tests
         timeout-minutes: 5
         # PTY fixtures must configure their own terminal, not inherit the runner's.

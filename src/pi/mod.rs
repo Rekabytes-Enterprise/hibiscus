@@ -1,9 +1,10 @@
+mod approval_settings;
 pub(crate) mod auth;
+mod context_settings;
 pub(crate) mod diagnostics;
 pub(crate) mod dialog;
 pub(crate) mod error;
 pub(crate) mod logout;
-pub(crate) mod loop_verify;
 pub(crate) mod mermaid;
 pub(crate) mod rpc;
 mod run;
@@ -13,16 +14,22 @@ use std::{fs, io, os::unix::fs::DirBuilderExt, path::PathBuf, sync::OnceLock};
 
 static APPROVAL_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Stage the one trusted built-in extension for this process. Do not load
-/// discovered Pi extensions; the file lives in a private temporary directory
+/// Stage the trusted built-in extensions for this process. Do not load
+/// discovered Pi extensions; the files live in a private temporary directory
 /// and is removed when the Hibiscus process returns.
-pub(crate) struct ApprovalGuard(PathBuf);
-impl ApprovalGuard {
+pub(crate) struct BuiltinExtensions(PathBuf);
+impl BuiltinExtensions {
     pub(crate) fn new() -> io::Result<Self> {
+        let context = context_settings::load().map_err(|error| {
+            io::Error::other(format!("could not load Hibiscus config.json: {error}"))
+        })?;
+        let enabled = approval_settings::load().map_err(|error| {
+            io::Error::other(format!("could not load Hibiscus approval setting: {error}"))
+        })?;
         let root = std::env::temp_dir();
         for attempt in 0..32 {
             let dir = root.join(format!(
-                "hibiscus-approval-{}-{}-{}",
+                "hibiscus-extensions-{}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -35,9 +42,32 @@ impl ApprovalGuard {
             match builder.create(&dir) {
                 Ok(()) => {
                     let path = dir.join("approval.mjs");
-                    if let Err(error) = fs::write(&path, include_str!("approval.mjs")) {
-                        let _ = fs::remove_dir(&dir);
+                    if let Err(error) = fs::write(&path, include_str!("approval.mjs"))
+                        .and_then(|_| {
+                            fs::write(
+                                dir.join("writing-style.mjs"),
+                                include_str!("writing-style.mjs"),
+                            )
+                        })
+                        .and_then(|_| {
+                            fs::write(
+                                dir.join("model-context.mjs"),
+                                include_str!("model-context.mjs"),
+                            )?;
+                            fs::write(
+                                dir.join("context-config.json"),
+                                serde_json::to_vec(&context)?,
+                            )
+                        })
+                    {
+                        let _ = fs::remove_dir_all(&dir);
                         return Err(error);
+                    }
+                    if !enabled {
+                        if let Err(error) = fs::write(dir.join("approval-disabled"), b"disabled") {
+                            let _ = fs::remove_dir_all(&dir);
+                            return Err(error);
+                        }
                     }
                     if APPROVAL_PATH.set(path).is_err() {
                         let _ = fs::remove_dir_all(&dir);
@@ -54,45 +84,50 @@ impl ApprovalGuard {
         ))
     }
 }
-impl Drop for ApprovalGuard {
+impl Drop for BuiltinExtensions {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
 
-/// A private, process-local switch for the explicitly requested unattended
-/// mode. Normal chats never create it; dropping the guard always removes it.
-pub(crate) struct LoopApprovalBypass(PathBuf);
-impl LoopApprovalBypass {
-    pub(crate) fn start() -> io::Result<Self> {
-        let path = APPROVAL_PATH
-            .get()
-            .and_then(|extension| extension.parent())
-            .ok_or_else(|| io::Error::other("approval extension not staged"))?
-            .join("loop-active");
-        fs::write(&path, b"active")?;
-        Ok(Self(path))
+/// Save changes for future launches and update this process's approval marker.
+pub(crate) fn approval_enabled(setting: Option<bool>) -> io::Result<bool> {
+    let path = APPROVAL_PATH
+        .get()
+        .and_then(|extension| extension.parent())
+        .ok_or_else(|| io::Error::other("approval extension not staged"))?
+        .join("approval-disabled");
+    if let Some(enabled) = setting {
+        approval_settings::save(enabled).map_err(|error| {
+            io::Error::other(format!("could not save Hibiscus approval setting: {error}"))
+        })?;
     }
-}
-impl Drop for LoopApprovalBypass {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+    match setting {
+        Some(false) => fs::write(&path, b"disabled")?,
+        Some(true) => match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        },
+        None => {}
     }
+    Ok(!path.try_exists()?)
 }
 
-/// Keep built-in tools and only the explicit approval gate. Standalone Pi and
+/// Keep built-in tools and only the explicit bundled extensions. Standalone Pi and
 /// user-installed extensions remain unchanged.
 pub(crate) fn configure_builtin_tools(command: &mut std::process::Command) {
-    command.args([
-        "--no-extensions",
-        "--tools",
-        "read,bash,edit,write,goal,loop_status",
-    ]);
-    command.arg("--extension").arg(
-        APPROVAL_PATH
-            .get()
-            .expect("approval guard must be staged before launching Pi"),
-    );
+    command.args(["--no-extensions", "--tools", "read,bash,edit,write,goal"]);
+    let approval = APPROVAL_PATH
+        .get()
+        .expect("extensions must be staged before launching Pi");
+    command.arg("--extension").arg(approval);
+    command
+        .arg("--extension")
+        .arg(approval.with_file_name("model-context.mjs"));
+    command
+        .arg("--extension")
+        .arg(approval.with_file_name("writing-style.mjs"));
 }
 
 /// Pi's installer can bootstrap standalone Node without changing the caller's

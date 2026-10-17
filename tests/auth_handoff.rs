@@ -117,12 +117,12 @@ fi
     let mut launches = rpc_launches.lines();
     let base = launches.next().unwrap();
     let extension = base
-        .strip_prefix(
-            "--mode rpc --no-extensions --tools read,bash,edit,write,goal,loop_status --extension ",
-        )
-        .expect("only the explicit approval extension may be loaded");
-    assert!(extension.ends_with("/approval.mjs"));
-    assert!(!std::path::Path::new(extension).exists());
+        .strip_prefix("--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension ")
+        .expect("only the explicit bundled extensions may be loaded");
+    assert!(extension.ends_with("/writing-style.mjs"));
+    for path in extension.split(" --extension ") {
+        assert!(!std::path::Path::new(path).exists());
+    }
     if saved {
         assert_eq!(
             launches.next(),
@@ -131,7 +131,7 @@ fi
         assert_eq!(
             handed_off,
             format!(
-                "--no-extensions --tools read,bash,edit,write,goal,loop_status --extension {extension} --session {}",
+                "--no-extensions --tools read,bash,edit,write,goal --extension {extension} --session {}",
                 session.display()
             )
         );
@@ -140,7 +140,7 @@ fi
         assert_eq!(
             handed_off,
             format!(
-                "--no-extensions --tools read,bash,edit,write,goal,loop_status --extension {extension} --no-session"
+                "--no-extensions --tools read,bash,edit,write,goal --extension {extension} --no-session"
             )
         );
     }

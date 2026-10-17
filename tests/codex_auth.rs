@@ -182,11 +182,11 @@ export class ModelRuntime {
         let extension = launch
             .trim()
             .strip_prefix(
-                "--mode rpc --no-extensions --tools read,bash,edit,write,goal,loop_status --extension ",
+                "--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension ",
             )
             .unwrap()
             .to_owned();
-        assert!(extension.ends_with("/approval.mjs"));
+        assert!(extension.ends_with("/writing-style.mjs"));
         drop(tty);
         fs::remove_dir_all(root).unwrap();
         return;
@@ -271,11 +271,11 @@ export class ModelRuntime {
     let base = log.lines().next().unwrap();
     assert!(
         base.starts_with(
-            "--mode rpc --no-extensions --tools read,bash,edit,write,goal,loop_status --extension "
+            "--mode rpc --no-extensions --tools read,bash,edit,write,goal --extension "
         ),
         "{log}"
     );
-    assert!(base.ends_with("/approval.mjs"), "{log}");
+    assert!(base.ends_with("/writing-style.mjs"), "{log}");
     if method == "logged_out" {
         assert!(shown.contains("Sign in to"), "{shown}");
         assert!(

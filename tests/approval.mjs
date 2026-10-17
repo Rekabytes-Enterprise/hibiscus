@@ -167,7 +167,6 @@ ctx.ui.select = () => { throw Error('UI failed'); };
 event.input.command = 'chown root file';
 assert.equal((await request()).block, true, 'UI errors fail closed');
 assert.equal(tools.goal.parameters.properties.action.type, 'string');
-assert.match((await tools.loop_status.execute('s', {action:'candidate_complete'})).details.hibiscusLoop.error, /not active/);
 const steps = Array.from({ length: 20 }, (_, i) => `Step ${i+1}`);
 const set = await tools.goal.execute('g1', { action: 'set', steps });
 assert.equal(set.details.hibiscusGoal.total, 20);

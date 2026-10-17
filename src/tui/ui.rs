@@ -122,7 +122,7 @@ impl Ui {
         )?;
         writeln!(
             out,
-            "  Unattended  /loop [--strict] <goal>  (Esc stops; bypasses approvals)"
+            "  Approvals   /approval [on|off]  (saved across restarts)"
         )?;
         writeln!(out, "  Account     /login  (Codex here; others in Pi)")?;
         writeln!(

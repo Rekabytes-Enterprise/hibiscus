@@ -95,6 +95,22 @@ esac
         )
         .unwrap();
         fs::set_permissions(curl, fs::Permissions::from_mode(0o755)).unwrap();
+        let pi = root.join("bin/pi");
+        fs::write(
+            &pi,
+            r#"#!/bin/sh
+case "$1" in
+ --version) echo fixture-pi ;;
+ update)
+  [ "$2" = "--self" ] && [ "$#" = 2 ] || exit 31
+  echo update >> "$HIBISCUS_TEST_ROOT/pi-updates"
+  [ ! -e "$HIBISCUS_TEST_ROOT/pi-fail" ] || exit 32 ;;
+ *) exit 33 ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(pi, fs::Permissions::from_mode(0o755)).unwrap();
         Self {
             root,
             binary,
@@ -112,7 +128,7 @@ esac
                 self.root.join("pi-version-checks"),
             )
             .env("HIBISCUS_INSTALL_DIR", self.root.join("install"))
-            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env("HIBISCUS_HOME", self.root.join("hibiscus"))
             .env("HIBISCUS_TEST_ROOT", &self.root)
             .env("HIBISCUS_TEST_LOG", self.root.join("downloads"))
             .env("HIBISCUS_TEST_OFFLINE", "")
@@ -131,6 +147,8 @@ esac
     fn run(&self, offline: bool) -> Output {
         Command::new(&self.binary)
             .arg("update")
+            .env("HIBISCUS_HOME", self.root.join("hibiscus"))
+            .env("HIBISCUS_PI", self.root.join("bin/pi"))
             .env("HIBISCUS_INSTALL_DIR", self.root.join("install"))
             .env("HIBISCUS_TEST_ROOT", &self.root)
             .env("HIBISCUS_TEST_LOG", self.root.join("downloads"))
@@ -239,7 +257,7 @@ done
     assert_eq!(fs::read(&fixture.binary).unwrap(), original);
     assert!(!fixture.root.join("pi-version-checks").exists());
     // Expire the once-per-day notice to exercise an explicit Update now.
-    fs::remove_file(fixture.root.join("cache/hibiscus/update-check")).unwrap();
+    fs::remove_file(fixture.root.join("hibiscus/cache/update-check")).unwrap();
     let mut command = fixture.chat_command(&pi);
     command.env("HIBISCUS_TEST_DELAY", "1");
     let mut tty = Pty::spawn(&mut command);
@@ -269,4 +287,51 @@ fn source_build_refuses_self_update_without_network() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("self-update is only available"));
+}
+
+#[test]
+fn current_hibiscus_still_updates_pi_and_honors_the_override() {
+    let mut fixture = Fixture::new();
+    fixture.latest = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let original = fs::read(&fixture.binary).unwrap();
+    // PATH Pi must not be selected when HIBISCUS_PI specifies another executable.
+    let selected = fixture.root.join("bin/pi");
+    fs::rename(&selected, fixture.root.join("selected-pi")).unwrap();
+    fs::write(&selected, "#!/bin/sh\nexit 99\n").unwrap();
+    fs::set_permissions(&selected, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = fixture
+        .chat_command(&fixture.root.join("selected-pi"))
+        .arg("update")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("pi-updates")).unwrap(),
+        "update\n"
+    );
+    assert_eq!(fs::read(&fixture.binary).unwrap(), original);
+}
+
+#[test]
+fn component_failures_are_reported_without_claiming_rollback() {
+    let fixture = Fixture::new();
+    let output = fixture.run(true);
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("pi-updates")).unwrap(),
+        "update\n"
+    );
+    fs::write(fixture.root.join("pi-fail"), "fail").unwrap();
+    let output = fixture.run(false);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Pi update failed"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("successful updates remain installed"));
+    assert_eq!(
+        fs::read_to_string(&fixture.binary).unwrap(),
+        "#!/bin/sh\necho updated-binary\n"
+    );
 }
