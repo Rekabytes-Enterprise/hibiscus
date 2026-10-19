@@ -41,6 +41,12 @@ Provider text is classified into authentication, access, billing/subscription/qu
 
 Visible details strip control characters, have a length bound, and redact URLs/common credential forms. This is best-effort sanitization, not a guarantee that arbitrary provider text contains no sensitive data. Avoid publishing error screenshots or raw Pi diagnostics without reviewing them.
 
+## Authentication errors
+
+`/login` and `/logout` remain inside Hibiscus and require full-screen input. Login maps missing Node, missing/incompatible Pi SDK, unsupported provider methods, empty API-key provider lists and failed authentication to recoverable local errors. Messages provide dependency/provider remedies and retry guidance without forwarding raw SDK exceptions or credentials. Failed sign-in keeps the existing backend/session available; successful login reconnects to refresh credentials as before. Esc remains a normal cancellation. Pi's interactive TUI is never launched as a fallback.
+
+`/logout` reports unavailable dependencies locally without changing credentials. Once credential removal is authorized, its existing backend refresh and uncertain-mutation handling still apply. `tests/auth_errors.rs`, `tests/codex_auth.rs` and `tests/logout.rs` cover synthetic failure, retry, cancellation and no-TUI-launch behavior; they do not verify real-provider access.
+
 ## Recovery commands
 
 ### `/restore`

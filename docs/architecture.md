@@ -58,7 +58,7 @@ A typical full-screen chat follows this path:
 3. User input is handled as a local slash command or sent to Pi as a `prompt` command with optional image parts.
 4. `pi/rpc.rs` writes JSONL commands to Pi, correlates responses by ID, and keeps reading events until the run settles.
 5. TUI modules render assistant text, tool activity, approvals, model/session pickers, queued follow-ups, images, and recovery notices.
-6. On exit or handoff to Pi's TUI, Hibiscus restores terminal state and closes/reopens RPC children deliberately to avoid concurrent session writers.
+6. On exit, Hibiscus restores terminal state and closes its RPC child. Authentication stays inside Hibiscus; successful login and authorized logout refresh the backend deliberately.
 
 One-shot and piped modes use the same Pi RPC boundary but avoid the full-screen UI so stdout remains script-friendly.
 
@@ -104,11 +104,11 @@ Pi RPC has no login/logout command. After a method/provider choice in full-scree
 
 Full-screen `/logout` uses a separate SDK helper to list stored credential metadata, then accepts an explicit provider selection and removal confirmation. The old RPC child is closed before the helper calls `ModelRuntime.logout`; the session is reopened afterward even if credential mutation cannot be confirmed. Cancellation before authorization leaves both credentials and the running backend alone. No credential values are serialized or edited by Rust, and unavailable SDK/line mode explains the limitation instead of automatically handing off.
 
-For other-provider login, line-mode login, or login with an unavailable Node/SDK helper, the Pi TUI handoff remains. Hibiscus first closes the idle RPC child, stops its terminal reader, and restores terminal mode and screen. Pi opens the saved session if one exists, or uses `--no-session` for an empty chat. On Pi exit Hibiscus restores the terminal and reopens its RPC child. No saved message is required, and the same JSONL session is never opened by two Pi children simultaneously. See [Terminal UI](terminal.md#authentication-handoff).
+Authentication never launches Pi's interactive TUI. Missing Node/SDK, incompatible SDKs, unsupported login methods and failed sign-in use Hibiscus's recoverable local error handler. Failure preserves the existing RPC backend and chat; dependency/provider problems can be corrected before retrying `/login`. Full-screen input is required for `/login` and `/logout`; line and piped modes report that limitation without changing credentials. See [Terminal UI](terminal.md#login).
 
 ## Terminal modes
 
-Interactive chat with compatible stdin/stdout uses a full-screen renderer with a fixed composer, transcript, and inline pickers. Pi still provides agent/tool behavior; Hibiscus formats the display only. Small or `TERM=dumb` terminals fall back to line mode. Piped input stays plain and script-friendly. The alternate screen and mouse reporting are disabled on exit and during the Pi TUI authentication fallback.
+Interactive chat with compatible stdin/stdout uses a full-screen renderer with a fixed composer, transcript, and inline pickers. Pi still provides agent/tool behavior; Hibiscus formats the display only. Small or `TERM=dumb` terminals fall back to line mode. Piped input stays plain and script-friendly. The alternate screen and mouse reporting are disabled on exit.
 
 ## Where to make changes
 

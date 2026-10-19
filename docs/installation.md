@@ -46,6 +46,8 @@ To update a prebuilt installation and Pi together, run `hibiscus update`. For Hi
 
 Prebuilt Hibiscus does not require Rust or a C compiler. Pi is a runtime dependency; the prebuilt installer installs it when missing and links Pi's managed launcher alongside Hibiscus when needed. Pi requires Node.js 22.19+; when Node.js/npm are absent or too old, Pi's installer may prompt to bootstrap them. If the official Pi installer fails or a non-interactive shell cannot supply missing Node, installation stops instead of claiming Hibiscus is ready. Hibiscus can find Pi's standalone Node.js even if the calling shell has not loaded its new PATH. Source/Cargo installs still require you to install Pi separately. `HIBISCUS_PI` can select a custom existing Pi.
 
+Authentication inside Hibiscus requires a compatible Pi SDK and Node.js 22.19+. If login reports a missing dependency, check `HIBISCUS_PI`, `HIBISCUS_AUTH_SDK` (for a trusted custom SDK path) or `HIBISCUS_NODE`, correct the installation, and retry `/login` in a full-screen terminal. Authentication errors remain inside Hibiscus; see [login and recovery](terminal.md#login).
+
 ## Install with npx
 
 Once the npm package and matching GitHub release are published:

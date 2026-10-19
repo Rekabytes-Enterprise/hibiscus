@@ -6,14 +6,13 @@ use self::models::{choose_model, choose_thinking};
 use crate::{
     pi::{
         auth::{sign_in, AuthOutcome},
-        configure_builtin_tools,
         dialog::Dialogs,
         error::{local, ChatError, RecoveryAction},
         logout::{sign_out, LogoutOutcome},
         rpc::{Rpc, SessionStart},
     },
     tui::{
-        screen::{compact_tokens, PromptAction, Screen, ScrollDisplay},
+        screen::{compact_tokens, PromptAction, Screen},
         terminal::{self, RawMode, Terminal, TerminalEvents},
         ui::Ui,
     },
@@ -23,7 +22,6 @@ use serde_json::json;
 use std::env;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 
 pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
@@ -97,7 +95,6 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
             &mut dialogs,
             &mut events,
             &mut raw,
-            tty.as_ref(),
             &ui,
             update_notice.as_ref(),
         )
@@ -197,7 +194,6 @@ fn chat<R: BufRead>(
     dialogs: &mut Dialogs,
     events: &mut Option<TerminalEvents>,
     raw: &mut Option<RawMode>,
-    tty: Option<&Terminal>,
     ui: &Ui,
     update_notice: Option<&Receiver<Option<String>>>,
 ) -> Result<()> {
@@ -467,17 +463,7 @@ fn chat<R: BufRead>(
                     )?;
                 }
                 "/login" => {
-                    inline_login(
-                        rpc,
-                        input,
-                        output,
-                        interactive,
-                        dialogs,
-                        events,
-                        raw,
-                        tty,
-                        ui,
-                    )?;
+                    inline_login(rpc, input, output, interactive, dialogs, events, raw, ui)?;
                 }
                 "/logout" => {
                     inline_logout(rpc, input, output, interactive, dialogs, events, raw, ui)?;
@@ -689,11 +675,10 @@ fn inline_login<R: BufRead>(
     dialogs: &mut Dialogs,
     events: &mut Option<TerminalEvents>,
     raw: &mut Option<RawMode>,
-    tty: Option<&Terminal>,
     ui: &Ui,
 ) -> Result<()> {
     if !interactive || !output.is_full() || events.is_none() {
-        return auth_handoff("/login", rpc, input, output, interactive, events, raw, tty);
+        return Err(local("Authentication requires a full-screen terminal. Start Hibiscus in a supported interactive terminal, then retry /login.").into());
     }
     let state = rpc.request(
         json!({"type":"get_state"}),
@@ -754,17 +739,6 @@ fn inline_login<R: BufRead>(
             )?;
         }
         AuthOutcome::Cancelled => ui.info(output, &format!("{label} sign-in cancelled."))?,
-        AuthOutcome::Failed => ui.info(
-            output,
-            &format!("{label} sign-in failed. Try again or use Pi /login for details."),
-        )?,
-        AuthOutcome::Unavailable => {
-            ui.info(
-                output,
-                "Pi SDK login or Node is unavailable; Pi's TUI can handle login instead.",
-            )?;
-            return auth_handoff("/login", rpc, input, output, interactive, events, raw, tty);
-        }
     }
     Ok(())
 }
@@ -781,8 +755,7 @@ fn inline_logout<R: BufRead>(
     ui: &Ui,
 ) -> Result<()> {
     let Some(keys) = events.as_ref().filter(|_| interactive && output.is_full()) else {
-        ui.info(output, "Inline /logout requires a full-screen terminal. Run pi and use /logout to manage stored credentials.")?;
-        return Ok(());
+        return Err(local("Authentication requires a full-screen terminal. Start Hibiscus in a supported interactive terminal, then retry /logout.").into());
     };
     let state = rpc.request(
         json!({"type":"get_state"}),
@@ -825,106 +798,7 @@ fn inline_logout<R: BufRead>(
         }
         LogoutOutcome::Cancelled => ui.info(output, "Logout cancelled.")?,
         LogoutOutcome::Empty => ui.info(output, "No stored credentials to remove. Environment variables and models.json may still provide access.")?,
-        LogoutOutcome::Unavailable => ui.info(output, "Inline logout needs Node and a compatible Pi SDK. No credentials were changed. Run pi and use /logout, or update Pi.")?,
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn auth_handoff<R: BufRead>(
-    action: &str,
-    rpc: &mut Rpc,
-    input: &mut R,
-    output: &mut Screen,
-    interactive: bool,
-    events: &mut Option<TerminalEvents>,
-    raw: &mut Option<RawMode>,
-    tty: Option<&Terminal>,
-) -> Result<()> {
-    if !interactive || tty.is_none() {
-        writeln!(
-            output,
-            "{action} requires an interactive terminal. Run `pi` to manage credentials."
-        )?;
-        return Ok(());
-    }
-    let (Some(keys), Some(editor)) = (events.as_ref(), raw.as_mut()) else {
-        return Ok(());
-    };
-    let confirmed = if output.is_full() {
-        output.select(
-            &format!("Hand off to Pi for {action}?"),
-            &["Cancel".into(), "Open Pi".into()],
-            None,
-            &keys.receiver,
-        )? == Some(1)
-    } else {
-        output.invalidate_screen();
-        editor.write(&format!("Hand off to Pi for {action}? [y/N] "))?;
-        terminal::read_line(&keys.receiver, editor)?
-            .is_some_and(|s| s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes"))
-    };
-    if !confirmed {
-        writeln!(output, "Cancelled.")?;
-        return Ok(());
-    }
-    let mut dialogs = Dialogs;
-    let state = rpc.request(
-        json!({"type":"get_state"}),
-        input,
-        output,
-        &mut dialogs,
-        raw,
-        events.as_ref().map(|e| &e.receiver),
-        interactive,
-    )?;
-    let session = state["sessionFile"]
-        .as_str()
-        .map(PathBuf::from)
-        .filter(|path| path.is_file());
-    let start = session.as_ref().map_or(SessionStart::New, |path| {
-        SessionStart::Selected(path.clone())
-    });
-    // Release Pi RPC before Pi TUI touches the same session file, then give
-    // Pi the terminal with no Hibiscus reader left to steal auth keystrokes.
-    rpc.close()?;
-    if let Err(error) = output.suspend() {
-        let _ = rpc.reopen(start);
-        return Err(error.into());
-    }
-    drop(events.take());
-    drop(raw.take());
-    let pi = env::var("HIBISCUS_PI").unwrap_or_else(|_| "pi".to_owned());
-    writeln!(
-        output,
-        "In Pi, type {action} then /quit to return to Hibiscus."
-    )?;
-    let mut command = Command::new(&pi);
-    configure_builtin_tools(&mut command);
-    if let Some(path) = &session {
-        command.arg("--session").arg(path);
-    } else {
-        command.arg("--no-session");
-    }
-    let result = command
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status();
-    // Restore terminal ownership and reconnect even if Pi failed or was cancelled.
-    *raw = tty.map(Terminal::raw).transpose()?;
-    *events = tty.map(Terminal::events).transpose()?;
-    let screen_result = output.resume();
-    let rpc_result = rpc.reopen(start);
-    screen_result?;
-    rpc_result?;
-    match result {
-        Ok(status) if status.success() => writeln!(
-            output,
-            "Returned from Pi. Authentication changes may require restarting Hibiscus."
-        )?,
-        Ok(status) => writeln!(output, "Pi exited with {status}; chat is unchanged.")?,
-        Err(error) => writeln!(output, "Pi handoff failed: {error}")?,
+        LogoutOutcome::Unavailable => return Err(local("Inline logout needs Node and a compatible Pi SDK. No credentials were changed. Check HIBISCUS_NODE and HIBISCUS_AUTH_SDK, or update Pi, then retry /logout.").into()),
     }
     Ok(())
 }

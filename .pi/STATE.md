@@ -2,6 +2,12 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
+## Current work — issue #23, 2026-10-20
+
+- Removed `auth_handoff` and its terminal/RPC ownership plumbing. Authentication stays inside Hibiscus. Login uses fixed helper error codes and recoverable local errors for missing Node/SDK, incompatible SDKs, unsupported methods, empty provider lists and failed sign-in. Helper exit/broken input is an error rather than cancellation or fatal terminal I/O. Full-screen cancellation remains normal; successful login still reconnects to refresh credentials. Line/piped login and logout report a full-screen requirement; piped errors exit nonzero.
+- Updated help, README, contributor, installation, architecture, terminal and recovery documentation. Replaced handoff tests with isolated failures followed by dependency repair/retry, same-session/backend preservation, masked failure, helper crash during input, `/restore` preservation and line/piped rejection. No real credentials or provider calls.
+- Verification: targeted auth error, login and logout suites passed. Formatting, JS syntax, diff checks and Clippy passed with the pre-existing clipboard `vec_init_then_push` lint allowed. Initial full suite stalled in the legacy sleep-based `dialog_tty` driver and was terminated; that fixture now uses the shared bounded PTY harness. Full-suite rerun passed (235 tests across 38 suites). No install or version bump. Work is on `codex/23-remove-auth-handoff`; existing untracked `.agents/` is untouched.
+
 ## Snapshot — 0.3.4 dev preparation, 2026-10-19
 
 - Bumped Cargo, npm package, installation docs and installer fixture to 0.3.4; changelog includes inline provider login, npm installer and quieter full-screen command/model presentation. Prepared for the requested dev commit/push; Git history and remote refs establish publication. No release tag, release assets, npm publication or reinstall.
