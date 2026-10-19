@@ -157,8 +157,8 @@ export class ModelRuntime {
             .write_all(b"/logout\n/quit\n")
             .unwrap();
         let result = child.wait_with_output().unwrap();
-        assert!(result.status.success());
-        assert!(String::from_utf8_lossy(&result.stdout).contains("requires a full-screen terminal"));
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("requires a full-screen terminal"));
         assert!(!root.join("removed").exists());
         let stored: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&store).unwrap()).unwrap();

@@ -1,4 +1,5 @@
 use crate::{
+    pi::error::{local, ChatError},
     tui::screen::{escape_key, Navigation, Screen},
     Result,
 };
@@ -15,8 +16,18 @@ use std::time::Duration;
 pub(crate) enum AuthOutcome {
     Success,
     Cancelled,
-    Failed,
-    Unavailable,
+}
+
+fn login_error(code: &str) -> ChatError {
+    local(match code {
+        "sdk_missing" => "Authentication unavailable: Pi SDK was not found. Check HIBISCUS_PI or HIBISCUS_AUTH_SDK, then retry /login.",
+        "node_missing" => "Authentication unavailable: Node.js was not found. Install Node.js 22.19+ or check HIBISCUS_NODE, then retry /login.",
+        "helper_start" => "Authentication unavailable: could not start the login helper. Check HIBISCUS_NODE and executable permissions, then retry /login.",
+        "sdk_incompatible" => "Authentication unavailable: Pi SDK could not be loaded or is incompatible. Update Pi or check HIBISCUS_AUTH_SDK, then retry /login.",
+        "unsupported_method" => "Authentication unavailable: the selected provider does not support this login method in the installed Pi SDK. Update Pi or choose another method with /login.",
+        "no_providers" => "Authentication unavailable: the installed Pi SDK lists no providers for API keys. Update Pi, then retry /login.",
+        _ => "Authentication failed: sign-in could not be completed. Check connectivity and provider access, then retry /login. Chat is preserved.",
+    })
 }
 
 /// Only load the SDK belonging to the selected Pi installation. The override
@@ -137,15 +148,24 @@ fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
             };
             if link_ready {
                 match record["url"].as_str().and_then(open_auth_url) {
-                    Some(true) => writeln!(output, "  · Open Codex sign-in ↗ (opened in browser; Ctrl+Y to copy link)")?,
-                    Some(false) => writeln!(output, "  · Open Codex sign-in ↗ (browser did not open; Ctrl+Y to copy link or retry with device code)")?,
-                    None => writeln!(output, "  · Open Codex sign-in ↗ (terminal link if supported; Ctrl+Y to copy link)")?,
+                    Some(true) => writeln!(
+                        output,
+                        "  · Open sign-in ↗ (opened in browser; Ctrl+Y to copy link)"
+                    )?,
+                    Some(false) => writeln!(
+                        output,
+                        "  · Open sign-in ↗ (browser did not open; Ctrl+Y to copy link)"
+                    )?,
+                    None => writeln!(
+                        output,
+                        "  · Open sign-in ↗ (terminal link if supported; Ctrl+Y to copy link)"
+                    )?,
                 }
-                writeln!(output, "  · If the browser callback fails, paste the redirect URL into the masked composer.")?;
+                writeln!(output, "  · If the browser callback fails, paste the redirect URL or authorization code into the masked input.")?;
             } else {
                 writeln!(
                     output,
-                    "  · Could not display a safe Codex sign-in URL. Cancel and use Pi /login."
+                    "  · Could not display a safe sign-in URL. Cancel and retry /login, or choose another login method."
                 )?;
             }
         }
@@ -159,7 +179,7 @@ fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
         }
         _ => {
             if let Some(message) = safe("message") {
-                writeln!(output, "  · Codex: {message}")?;
+                writeln!(output, "  · Sign-in: {message}")?;
             }
         }
     }
@@ -167,19 +187,26 @@ fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Result<AuthOutcome> {
+pub(crate) fn sign_in(
+    output: &mut Screen,
+    events: &Receiver<u8>,
+    provider: &str,
+    auth_type: &str,
+) -> Result<AuthOutcome> {
     let Some(sdk) = sdk_entry() else {
-        return Ok(AuthOutcome::Unavailable);
+        return Err(login_error("sdk_missing").into());
     };
     let node = env::var("HIBISCUS_NODE").unwrap_or_else(|_| "node".into());
     let mut child = match Command::new(node)
         .args([
             "--input-type=module",
             "--eval",
-            include_str!("codex-auth.mjs"),
+            include_str!("login.mjs"),
             "--",
         ])
         .arg(sdk)
+        .arg(provider)
+        .arg(auth_type)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -187,9 +214,9 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
     {
         Ok(child) => child,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(AuthOutcome::Unavailable)
+            return Err(login_error("node_missing").into())
         }
-        Err(error) => return Err(error.into()),
+        Err(_) => return Err(login_error("helper_start").into()),
     };
     let mut writer = child.stdin.take().ok_or("auth helper stdin unavailable")?;
     let stdout = child
@@ -212,7 +239,7 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
 
     let result = (|| -> Result<AuthOutcome> {
         let mut pending: Option<Result<Value>> = None;
-        let mut outcome = AuthOutcome::Failed;
+        let mut outcome: Result<AuthOutcome> = Err(login_error("sign_in_failed").into());
         loop {
             // Esc cancels even during device polling; Ctrl+Y requests a copy
             // without exposing the URL as broken transcript text.
@@ -227,7 +254,7 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                     )
                 {
                     let _ = send(&mut writer, json!({"type":"cancel"}));
-                    outcome = AuthOutcome::Cancelled;
+                    outcome = Ok(AuthOutcome::Cancelled);
                     break;
                 }
             }
@@ -251,12 +278,17 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                             .map(|item| item["label"].as_str().unwrap_or("option").to_owned())
                             .collect::<Vec<_>>();
                         output
-                            .select("Codex sign-in", &labels, None, events)?
+                            .select(
+                                record["message"].as_str().unwrap_or("Sign in"),
+                                &labels,
+                                None,
+                                events,
+                            )?
                             .and_then(|index| options[index]["id"].as_str().map(str::to_owned))
                     } else {
                         let question = record["message"]
                             .as_str()
-                            .unwrap_or("Enter Codex authorization response:");
+                            .unwrap_or("Enter authorization response:");
                         let question: String = question
                             .chars()
                             .filter(|ch| !ch.is_control())
@@ -265,7 +297,7 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                         writeln!(output, "  · {question}")?;
                         output.flush()?;
                         let mut cancelled = false;
-                        let secret = record["kind"] != "text";
+                        let secret = auth_type == "api_key" || record["kind"] != "text";
                         let answer = output.auth_input(events, secret, || {
                             match rx.try_recv() {
                                 Ok(Ok(event))
@@ -281,7 +313,10 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                                     pending = Some(record);
                                     cancelled = true;
                                 }
-                                Err(mpsc::TryRecvError::Disconnected) => cancelled = true,
+                                Err(mpsc::TryRecvError::Disconnected) => {
+                                    pending = Some(Err(login_error("sign_in_failed").into()));
+                                    cancelled = true;
+                                }
                                 Err(mpsc::TryRecvError::Empty) => {}
                             }
                             Ok(cancelled)
@@ -289,24 +324,28 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                         answer
                     };
                     if let Some(value) = answer {
-                        send(&mut writer, json!({"type":"answer","id":id,"value":value}))?;
+                        send(&mut writer, json!({"type":"answer","id":id,"value":value}))
+                            .map_err(|_| login_error("sign_in_failed"))?;
                     } else if pending.is_none() {
                         let _ = send(&mut writer, json!({"type":"cancel"}));
-                        outcome = AuthOutcome::Cancelled;
+                        outcome = Ok(AuthOutcome::Cancelled);
                         break;
                     }
+                }
+                Some("error") => {
+                    return Err(login_error(record["code"].as_str().unwrap_or("")).into())
                 }
                 Some("prompt_cancelled") => {}
                 Some("done") => {
                     if record["success"] == true {
-                        outcome = AuthOutcome::Success;
+                        outcome = Ok(AuthOutcome::Success);
                     }
                     break;
                 }
                 _ => {}
             }
         }
-        Ok(outcome)
+        outcome
     })();
     drop(writer);
     // `done` is authoritative: runtime.login has finished OAuth and storage.
@@ -321,7 +360,7 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
         Ok(())
     })();
     let cleared = output.clear_auth_url();
-    cleanup?;
+    cleanup.map_err(|_| local("Authentication helper cleanup failed. Retry /login; if the problem persists, restart Hibiscus."))?;
     cleared?;
     // A deliberate cleanup kill must not turn a completed login into failure.
     result

@@ -24,7 +24,7 @@ The default destination is `~/.local/bin/hibiscus`. If Pi is absent, Hibiscus in
 HIBISCUS_INSTALL_DIR="$HOME/bin" sh install.sh
 ```
 
-Once the v0.3.3 release is published, install it specifically with `HIBISCUS_VERSION=v0.3.3`. A `dev` push alone does not publish release assets. For a private GitHub repository, export a token that can read repository releases, and fetch the script through GitHub's authenticated API:
+Once the v0.3.4 release is published, install it specifically with `HIBISCUS_VERSION=v0.3.4`. A `dev` push alone does not publish release assets. For a private GitHub repository, export a token that can read repository releases, and fetch the script through GitHub's authenticated API:
 
 ```sh
 export GITHUB_TOKEN=YOUR_TOKEN
@@ -45,6 +45,8 @@ hibiscus --version
 To update a prebuilt installation and Pi together, run `hibiscus update`. For Hibiscus, this fetches the latest public GitHub release, verifies its SHA-256 checksum, and atomically replaces the installed binary without `sudo` or running a downloaded script. Restart Hibiscus afterward. The updater supports the default `~/.local/bin/hibiscus` install; if you installed elsewhere, set `HIBISCUS_INSTALL_DIR` to its directory. It will not replace a symlink or a source/Cargo build; use Cargo to update those. It needs `curl`, `tar`, `install`, and `sha256sum` or `shasum`, plus internet access. The manual command also runs `pi update --self` (or the executable selected by `HIBISCUS_PI`), letting Pi manage its own installation. This updates Pi itself, not its extension packages or model catalogs. Pi is attempted even when Hibiscus is current or its update fails. Each component reports its outcome; any failure returns a nonzero exit status, and successful changes are not rolled back. Pi installations managed externally may require their package manager, as reported by Pi. Unsupported Hibiscus install locations are rejected before either update starts. Full-screen chat checks at most once per day and offers Later / Update now for Hibiscus only (the running Pi is not updated during chat); set `HIBISCUS_NO_UPDATE_CHECK=1` to opt out of automatic checks. The manual command still works. A new push alone isn't an update: publish a version-matching GitHub Release.
 
 Prebuilt Hibiscus does not require Rust or a C compiler. Pi is a runtime dependency; the prebuilt installer installs it when missing and links Pi's managed launcher alongside Hibiscus when needed. Pi requires Node.js 22.19+; when Node.js/npm are absent or too old, Pi's installer may prompt to bootstrap them. If the official Pi installer fails or a non-interactive shell cannot supply missing Node, installation stops instead of claiming Hibiscus is ready. Hibiscus can find Pi's standalone Node.js even if the calling shell has not loaded its new PATH. Source/Cargo installs still require you to install Pi separately. `HIBISCUS_PI` can select a custom existing Pi.
+
+Authentication inside Hibiscus requires a compatible Pi SDK and Node.js 22.19+. If login reports a missing dependency, check `HIBISCUS_PI`, `HIBISCUS_AUTH_SDK` (for a trusted custom SDK path) or `HIBISCUS_NODE`, correct the installation, and retry `/login` in a full-screen terminal. Authentication errors remain inside Hibiscus; see [login and recovery](terminal.md#login).
 
 ## Install with npx
 
@@ -82,11 +84,11 @@ sudo apt install -y build-essential
 
 ## Publishing a release
 
-The release version in `Cargo.toml`, `Cargo.lock`, `package.json`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.3.3` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
+The release version in `Cargo.toml`, `Cargo.lock`, `package.json`, the docs, and Git tag must match. Before tagging, use `sh scripts/bump-version.sh 0.3.4` (substitute the intended version), review the diff, test, commit, and merge the bump into the intended release branch. The script does **not** create or move tags. Push an annotated version tag pointing at that exact release commit:
 
 ```sh
-git tag -a v0.3.3 -m "Hibiscus v0.3.3"
-git push origin v0.3.3
+git tag -a v0.3.4 -m "Hibiscus v0.3.4"
+git push origin v0.3.4
 ```
 
 A previously pushed tag keeps pointing at its original commit; later changes to `dev` or `main` do not fix that tag's release run. Do not force-move a public tag without coordinating with users; a new version tag is safer.

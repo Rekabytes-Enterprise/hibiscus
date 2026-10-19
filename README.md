@@ -122,7 +122,7 @@ Inside a chat:
 | `/models` | Search and choose a model across Pi-configured providers |
 | `/thinking [level]` | Choose a Pi-supported reasoning level for the active model |
 | `/compact [instructions]` | Ask Pi to summarize older context (model call; original history remains saved) |
-| `/login` | Sign in with Codex, or hand off to Pi for another provider |
+| `/login` | Browser login (Codex/Claude) or an API key via Pi |
 | `/logout` | Choose a provider and remove its stored credential inside Hibiscus |
 | `/restore` | Restore a failed prompt and images for review, without sending |
 | `/reconnect` | Reconnect a disconnected Pi backend without replaying requests |
@@ -151,7 +151,7 @@ Hibiscus also loads a separate, always-on writing-style extension that asks Pi f
 **A terminal interface, not another agent.** Hibiscus controls a long-lived `pi --mode rpc` process over JSONL. Pi remains responsible for authentication, model access, tools, agent behavior, and session persistence.
 
 - Hibiscus launches Pi with **installed extensions disabled**, its bundled extensions (approval, goal tracking, and writing guidance), and the built-in **read, bash, edit, and write** tools enabled. Your normal standalone Pi configuration is unaffected.
-- Codex sign-in and provider logout stay inside full-screen Hibiscus with the Pi SDK available. Logout asks for a provider and confirmation; it removes only that stored credential, not environment/config keys or provider-side access. Other-provider login hands off to Pi's TUI; `/quit` there returns to Hibiscus. [Authentication details →](docs/terminal.md#authentication-handoff)
+- Browser login for Codex/Claude, provider API keys and logout stay inside full-screen Hibiscus through Pi's SDK. Authentication failures show recoverable errors; fix the reported dependency or provider problem and retry. Logout asks for a provider and confirmation; it removes only that stored credential, not environment/config keys or provider-side access. [Authentication details →](docs/terminal.md#login)
 - `NO_COLOR=1` disables colors. Small terminals, `TERM=dumb`, and piped input use line mode.
 - Set `HIBISCUS_PI` to select a different Pi executable. Pi's session-directory settings are respected.
 

@@ -313,7 +313,6 @@ pub(crate) trait ScrollDisplay: Write {
     fn clear_queue_display(&mut self) -> io::Result<()> {
         Ok(())
     }
-    fn invalidate_screen(&mut self) {}
     fn extension_dialog(
         &mut self,
         _event: &Value,
@@ -1727,7 +1726,7 @@ impl Screen {
     ) -> Result<Option<String>> {
         if self.full {
             let modal = Modal::input(
-                "Codex authorization",
+                "Sign-in credentials",
                 String::new(),
                 "Enter authorization response".into(),
                 secret,
@@ -2066,9 +2065,9 @@ impl Screen {
                 .map(|cell| cell.ch)
                 .collect::<String>()
                 .trim_start()
-                .starts_with("· Open Codex sign-in ↗");
+                .starts_with("· Open sign-in ↗");
         if auth_notice {
-            let label = "Open Codex sign-in ↗";
+            let label = "Open sign-in ↗";
             if let (Some(url), Some(start)) = (self.auth_url.as_deref(), out.find(label)) {
                 out.insert_str(start + label.len(), "\x1b]8;;\x1b\\");
                 out.insert_str(start, &format!("\x1b]8;;{url}\x1b\\"));
@@ -2390,7 +2389,7 @@ impl Screen {
             if cfg!(target_os = "macos") {
                 "Browser sign-in  ·  Ctrl+Y copy link  ·  Esc cancel".into()
             } else {
-                "Open Codex sign-in ↗  ·  Ctrl+Y copy link  ·  Esc cancel".into()
+                "Open sign-in ↗  ·  Ctrl+Y copy link  ·  Esc cancel".into()
             }
         } else if let Some(activity) = &self.activity {
             let queue_hint = match (self.queue_steering, self.queue_follow_up) {
@@ -2476,10 +2475,6 @@ impl Screen {
 }
 
 impl ScrollDisplay for Screen {
-    fn invalidate_screen(&mut self) {
-        self.painter.invalidate();
-        self.last_paint = None;
-    }
     fn extension_dialog(&mut self, event: &Value, events: &Receiver<u8>) -> Result<Option<Value>> {
         if !self.full || self.suspended {
             return Ok(None);
@@ -4145,14 +4140,14 @@ mod tests {
         screen
             .set_auth_url("https://auth.openai.com/oauth/authorize?state=test")
             .unwrap();
-        let line = &markdown::format("  · Open Codex sign-in ↗ (Ctrl+Y to copy)", 80)[0];
+        let line = &markdown::format("  · Open sign-in ↗ (Ctrl+Y to copy)", 80)[0];
         let styled = screen.styled_line(line, 80);
-        assert!(styled.contains("\x1b]8;;https://auth.openai.com/oauth/authorize?state=test\x1b\\Open Codex sign-in ↗\x1b]8;;\x1b\\"));
+        assert!(styled.contains("\x1b]8;;https://auth.openai.com/oauth/authorize?state=test\x1b\\Open sign-in ↗\x1b]8;;\x1b\\"));
         assert!(!screen
             .transcript
             .windows(b"state=test".len())
             .any(|part| part == b"state=test"));
-        let unrelated = &markdown::format("hibi › Open Codex sign-in ↗", 80)[1];
+        let unrelated = &markdown::format("hibi › Open sign-in ↗", 80)[1];
         assert!(!screen.styled_line(unrelated, 80).contains("\x1b]8;;"));
         screen.clear_auth_url().unwrap();
         assert!(!screen.styled_line(line, 80).contains("\x1b]8;;"));
