@@ -30,7 +30,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/login",
-        description: "Sign in to Codex or open Pi",
+        description: "Browser login or API key",
     },
     Command {
         name: "/logout",

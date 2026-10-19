@@ -31,7 +31,7 @@ A successful **`/new`** opens a blank full-screen chat: it clears the visible tr
 | Accept a picker choice | Enter |
 | Cancel a picker | Esc |
 
-Full-screen dialogs share the `/models` panel style: raspberry rounded borders, the same outer margin, highlighted choices, a scrollbar when needed, and Enter/Esc hints. This includes model/session pickers, login/logout choices, Pi handoff confirmation, Pi `select`/`confirm`/`input`/`editor` requests, and masked Codex authorization input. Confirmations default to Cancel; approval menus default to Deny. Dialogs temporarily take keyboard focus and preserve any unsent composer draft. Text dialogs use end-of-input editing; secret input is masked. Long descriptions/commands wrap literally in a scrollable detail area (PgUp/PgDn). Explicit dialog timeouts and Esc cancel without approval.
+Full-screen dialogs share the `/models` panel style: raspberry rounded borders, the same outer margin, highlighted choices, a scrollbar when needed, and Enter/Esc hints. This includes model/session pickers, login/logout choices, Pi handoff confirmation, Pi `select`/`confirm`/`input`/`editor` requests, and masked authorization/API-key input. Confirmations default to Cancel; approval menus default to Deny. Dialogs temporarily take keyboard focus and preserve any unsent composer draft. Text dialogs use end-of-input editing; secret input is masked. Long descriptions/commands wrap literally in a scrollable detail area (PgUp/PgDn). Explicit dialog timeouts and Esc cancel without approval.
 
 Type `/` to see only Hibiscus's supported commands; a prefix such as `/m` filters the suggestions. Up/Down or the wheel changes the highlighted suggestion. **Tab** completes without running it, **Enter** runs it, and **Esc** dismisses the list without erasing the text. Type `/help` to see chat commands.
 
@@ -98,11 +98,21 @@ See [error handling and recovery](error-handling.md) for the event mapping, clas
 
 Prebuilt installs in full-screen mode check for a newer public GitHub release in the background at most once per day. When idle, the picker offers **Later** (the safe default) or **Update now**. A check never interrupts a draft in progress, and offline failures do not block chat. To check or update on demand, exit and run `hibiscus update`; see [Installation and releases](installation.md). Set `HIBISCUS_NO_UPDATE_CHECK=1` to disable automatic checks.
 
-## Authentication handoff
+Slash commands execute without adding a user-message row to the full-screen chat transcript. Their dialogs, results, and errors remain visible, except model-selection confirmations: the active model is shown in the header and picker instead of chat.
 
-In full-screen mode, `/login` offers **OpenAI Codex** or **another provider** regardless of the active model (which may be absent after logout). With Node.js and the matching Pi SDK available, choosing Codex stays in Hibiscus: select browser or device-code sign-in and wait for confirmation. On macOS, Hibiscus opens the validated browser sign-in URL with the system `open` command after you choose browser login, independent of terminal hyperlink support. The screen still shows **Open Codex sign-in ↗** as a short OSC 8 hyperlink where supported rather than a URL broken across rows. Press **Ctrl+Y** to ask an OSC 52-capable terminal to copy the complete URL. If the browser could not open and neither terminal feature works, cancel and retry using device-code sign-in. A browser callback can finish automatically; if it cannot reach WSL, paste the redirect URL into the masked composer instead. Press Esc to cancel. Once Pi's SDK reports login and credential storage complete, Hibiscus ends the dedicated helper itself; it does not wait for the browser tab or callback connection to close. The URL stays out of transcript text but still contains sensitive OAuth state; the device code is also short-lived and sensitive. Do not share screenshots of either. Pi handles credential storage and token refresh. On success Hibiscus reconnects its idle RPC child to the same saved session (or starts a fresh session if the chat is still empty). Ctrl+C is read as an input key while the terminal is in raw mode; use Esc to cancel the sign-in flow rather than expecting the shell's usual interrupt signal.
+## Login
 
-Non-Codex provider login, line-mode login, and login with an unavailable Node/SDK helper continue to use the **Pi TUI handoff**. No prior message is needed. Hibiscus closes its idle RPC child before Pi opens the saved session; for an empty chat Pi runs with `--no-session`. In Pi, run `/login`, then `/quit` to return. Hibiscus reconnects its RPC child afterward. Hibiscus never stores credentials itself.
+In full-screen mode, `/login` first offers **Browser Login** and **API Key**, regardless of the active model.
+
+- **Browser Login → Codex** uses the existing Pi browser/device-code flow.
+- **Browser Login → Claude** uses Pi's Anthropic OAuth flow for Claude subscriptions. Follow Pi's browser instructions and paste an authorization code or redirect URL when requested.
+- **API Key** lists providers that the installed Pi SDK reports as supporting API keys. Select one and enter its key in a masked input. Pi stores the credential; Hibiscus does not write an auth file or put the key in chat history.
+
+On macOS, Hibiscus opens the validated sign-in URL with the system `open` command. **Open sign-in ↗** is also clickable in terminals supporting OSC 8; **Ctrl+Y** copies the link through OSC 52. Browser callbacks can complete automatically where the provider supports them; manual codes and redirect URLs use a masked input. Esc cancels. Codex retains its device-code alternative. Available flows depend on the installed Pi SDK and provider account access.
+
+On successful login, Hibiscus reconnects Pi to the same saved chat (or starts a fresh session for an empty chat). Pi owns credential storage and refresh. The helper is terminated/reaped after its completion event, so retained browser sockets cannot hold the UI open. No real-provider login is implied by the mock regression tests.
+
+Line-mode login and unavailable SDK flows retain the Pi TUI handoff. Hibiscus releases the terminal and idle RPC child first; run `/login` in Pi, then `/quit` to return. For an empty chat the handoff uses `--no-session`.
 
 ### Logout inside Hibiscus
 

@@ -4,9 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-19
+
 ### Added
 
+- `/login` now offers Browser Login (Codex or Claude) and API Key, with Pi SDK provider discovery, masked credential entry and same-chat reconnect.
 - Publishable `@rekabytes/hibiscus` npm installer for npx, reusing the bundled checksum-verified shell installer and pinning downloads to the npm package version. Requires npm publication and matching GitHub release assets.
+
+### Changed
+
+- Keep slash-command submissions and model-selection confirmations out of full-screen chat; show the active model in the header and picker.
 
 ## [0.3.3] - 2026-10-17
 

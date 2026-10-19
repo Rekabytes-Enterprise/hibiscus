@@ -137,15 +137,24 @@ fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
             };
             if link_ready {
                 match record["url"].as_str().and_then(open_auth_url) {
-                    Some(true) => writeln!(output, "  · Open Codex sign-in ↗ (opened in browser; Ctrl+Y to copy link)")?,
-                    Some(false) => writeln!(output, "  · Open Codex sign-in ↗ (browser did not open; Ctrl+Y to copy link or retry with device code)")?,
-                    None => writeln!(output, "  · Open Codex sign-in ↗ (terminal link if supported; Ctrl+Y to copy link)")?,
+                    Some(true) => writeln!(
+                        output,
+                        "  · Open sign-in ↗ (opened in browser; Ctrl+Y to copy link)"
+                    )?,
+                    Some(false) => writeln!(
+                        output,
+                        "  · Open sign-in ↗ (browser did not open; Ctrl+Y to copy link)"
+                    )?,
+                    None => writeln!(
+                        output,
+                        "  · Open sign-in ↗ (terminal link if supported; Ctrl+Y to copy link)"
+                    )?,
                 }
-                writeln!(output, "  · If the browser callback fails, paste the redirect URL into the masked composer.")?;
+                writeln!(output, "  · If the browser callback fails, paste the redirect URL or authorization code into the masked input.")?;
             } else {
                 writeln!(
                     output,
-                    "  · Could not display a safe Codex sign-in URL. Cancel and use Pi /login."
+                    "  · Could not display a safe sign-in URL. Cancel and use Pi /login."
                 )?;
             }
         }
@@ -159,7 +168,7 @@ fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
         }
         _ => {
             if let Some(message) = safe("message") {
-                writeln!(output, "  · Codex: {message}")?;
+                writeln!(output, "  · Sign-in: {message}")?;
             }
         }
     }
@@ -167,7 +176,12 @@ fn show_notice(output: &mut Screen, record: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Result<AuthOutcome> {
+pub(crate) fn sign_in(
+    output: &mut Screen,
+    events: &Receiver<u8>,
+    provider: &str,
+    auth_type: &str,
+) -> Result<AuthOutcome> {
     let Some(sdk) = sdk_entry() else {
         return Ok(AuthOutcome::Unavailable);
     };
@@ -176,10 +190,12 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
         .args([
             "--input-type=module",
             "--eval",
-            include_str!("codex-auth.mjs"),
+            include_str!("login.mjs"),
             "--",
         ])
         .arg(sdk)
+        .arg(provider)
+        .arg(auth_type)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -251,12 +267,17 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                             .map(|item| item["label"].as_str().unwrap_or("option").to_owned())
                             .collect::<Vec<_>>();
                         output
-                            .select("Codex sign-in", &labels, None, events)?
+                            .select(
+                                record["message"].as_str().unwrap_or("Sign in"),
+                                &labels,
+                                None,
+                                events,
+                            )?
                             .and_then(|index| options[index]["id"].as_str().map(str::to_owned))
                     } else {
                         let question = record["message"]
                             .as_str()
-                            .unwrap_or("Enter Codex authorization response:");
+                            .unwrap_or("Enter authorization response:");
                         let question: String = question
                             .chars()
                             .filter(|ch| !ch.is_control())
@@ -265,7 +286,7 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                         writeln!(output, "  · {question}")?;
                         output.flush()?;
                         let mut cancelled = false;
-                        let secret = record["kind"] != "text";
+                        let secret = auth_type == "api_key" || record["kind"] != "text";
                         let answer = output.auth_input(events, secret, || {
                             match rx.try_recv() {
                                 Ok(Ok(event))
@@ -295,6 +316,10 @@ pub(crate) fn codex_sign_in(output: &mut Screen, events: &Receiver<u8>) -> Resul
                         outcome = AuthOutcome::Cancelled;
                         break;
                     }
+                }
+                Some("unavailable") => {
+                    outcome = AuthOutcome::Unavailable;
+                    break;
                 }
                 Some("prompt_cancelled") => {}
                 Some("done") => {

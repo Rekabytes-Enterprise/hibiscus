@@ -56,7 +56,33 @@ try {
   if (!sdkPath) throw new Error("missing Pi SDK");
   const { ModelRuntime } = await import(pathToFileURL(sdkPath).href);
   const runtime = await ModelRuntime.create({ refreshOnCreate: false });
-  await runtime.login("openai-codex", "oauth", {
+  let provider = process.argv[2] || '';
+  const authType = process.argv[3];
+  if (!['oauth', 'api_key'].includes(authType)) throw new Error('invalid auth method');
+  if (authType === 'api_key') {
+    if (typeof runtime.getProviders !== 'function') {
+      send({ type: 'unavailable' });
+      reader.close();
+      process.exit(0);
+    }
+    const providers = runtime.getProviders().filter(p => p.auth?.apiKey)
+      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+    if (!providers.length) throw new Error('no API key providers');
+    provider = await prompt({ type: 'select', message: 'API Key · provider',
+      options: providers.map(p => ({ id: p.id, label: p.name || p.id })) });
+    if (!providers.some(p => p.id === provider)) throw new Error('invalid provider');
+  } else if (!['openai-codex', 'anthropic'].includes(provider)) {
+    throw new Error('invalid OAuth provider');
+  }
+  if (typeof runtime.getProvider === 'function') {
+    const supported = runtime.getProvider(provider)?.auth;
+    if (!(authType === 'oauth' ? supported?.oauth : supported?.apiKey)) {
+      send({ type: 'unavailable' });
+      reader.close();
+      process.exit(0);
+    }
+  }
+  await runtime.login(provider, authType, {
     signal: controller.signal,
     prompt,
     notify(event) {

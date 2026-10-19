@@ -2,6 +2,23 @@
 
 This is a working snapshot, **not a certificate that the product is bug-free**. See `MEMORY.md` for enduring constraints; use Git/`CHANGELOG.md` for history.
 
+## Snapshot — 0.3.4 dev preparation, 2026-10-19
+
+- Bumped Cargo, npm package, installation docs and installer fixture to 0.3.4; changelog includes inline provider login, npm installer and quieter full-screen command/model presentation. Prepared for the requested dev commit/push; Git history and remote refs establish publication. No release tag, release assets, npm publication or reinstall.
+- Full `cargo test --locked` passed on this macOS host after correcting a second model-picker fixture that still waited for removed confirmation notices. Formatting, diff checks, login-helper syntax, all five bundled JS helper suites, installer/version-bump tests and Clippy passed (existing `vec_init_then_push` clipboard lint allowed locally). Login coverage uses synthetic credentials; real provider login and physical-terminal acceptance remain pending. Existing untracked `.agents/` is excluded from the commit.
+
+## Current local work — hide slash-command chat rows, 2026-10-19
+
+- Full-screen submission no longer echoes slash-prefixed commands as user-message rows. Command routing, dialogs, results/errors and normal messages are unchanged.
+- Full-screen model selection also omits `Selected` and `Already using` notices; the header and picker show the active model. Line mode retains confirmations. The model-picker test now uses the shared bounded PTY harness and visible UI waits after its previous fixed-delay harness stalled and was terminated.
+- Verification: all 13 login PTY tests and the model-picker PTY test passed; login tests assert `/login` and `/quit` never become transcript user rows. Clippy passed with the existing clipboard lint allowed; formatting and diff checks passed. No installation or push.
+- Follow-up verification: the bounded model-picker test passed with assertions that selection notices are absent; formatting, diff checks and Clippy with the existing clipboard lint allowed passed. No live terminal validation or reinstall.
+
+## Current local work — inline provider login, 2026-10-19
+
+- `/login` now offers Browser Login → Codex/Claude and API Key → providers discovered through the installed Pi SDK's `getProviders()` with `auth.apiKey`. Removed the normal Other provider/Open Pi choice; unavailable SDK and line-mode paths retain the explicit Pi handoff fallback. `login.mjs` replaces the Codex-only helper, delegates OAuth/API-key storage to Pi, and relays masked prompts; no custom credential store. Successful login reconnects the same chat, and `/models` continues querying Pi's available models.
+- Verification: full Rust suite passed before the final removal of the Other provider option; final targeted Codex/Claude/API-key and handoff suites passed (13 login tests and 3 handoff tests), including API-key cancellation, synthetic OpenRouter discovery, secret masking, browser callback cleanup and same-session reconnect. Installed Pi provider capabilities were checked offline with in-memory credentials; no real login/account was touched. Clippy passed with the existing clipboard lint allowed; formatting, JS syntax and diff checks passed. Initial wrapped-notice assertion was adjusted for the generic sign-in label. No installation, push or version bump. Existing untracked `.agents/` was left untouched.
+
 ## Current local work — npx installer, 2026-10-17
 
 - Added publishable `@rekabytes/hibiscus` package with a single `hibiscus-install` bin. `npx @rekabytes/hibiscus` runs the bundled shell installer and pins its download to the npm version unless `HIBISCUS_VERSION` overrides it. No npm dependencies or lifecycle install scripts. README/install docs describe the command and explicitly mark npm/matching GitHub release publication as prerequisites. Scope ownership/access remains unverified; no npm publication was attempted.

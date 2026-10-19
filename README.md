@@ -122,7 +122,7 @@ Inside a chat:
 | `/models` | Search and choose a model across Pi-configured providers |
 | `/thinking [level]` | Choose a Pi-supported reasoning level for the active model |
 | `/compact [instructions]` | Ask Pi to summarize older context (model call; original history remains saved) |
-| `/login` | Sign in with Codex, or hand off to Pi for another provider |
+| `/login` | Browser login (Codex/Claude) or an API key via Pi |
 | `/logout` | Choose a provider and remove its stored credential inside Hibiscus |
 | `/restore` | Restore a failed prompt and images for review, without sending |
 | `/reconnect` | Reconnect a disconnected Pi backend without replaying requests |

@@ -15,7 +15,7 @@ fn browser_callback_finishes_without_waiting_for_manual_code() {
 }
 
 #[test]
-fn failed_browser_open_keeps_login_and_device_code_fallback_available() {
+fn failed_browser_open_keeps_copy_link_available() {
     run("open_failure");
 }
 
@@ -49,7 +49,35 @@ fn delayed_sdk_startup_does_not_consume_keys_for_the_wrong_prompt() {
     run("slow");
 }
 
+#[test]
+fn claude_browser_login_uses_anthropic_oauth() {
+    run("claude");
+}
+
+#[test]
+fn api_key_login_is_masked_and_uses_pi_storage() {
+    run("api_key");
+}
+
+#[test]
+fn cancelling_api_key_entry_does_not_store_or_reconnect() {
+    run("api_cancel");
+}
+
+#[test]
+fn api_key_provider_is_discovered_from_pi_without_tui_handoff() {
+    run("api_other");
+}
+
 fn run(method: &str) {
+    let label = if method == "claude" {
+        "Claude"
+    } else if matches!(method, "api_key" | "api_cancel" | "api_other") {
+        "API key"
+    } else {
+        "Codex"
+    };
+    let completed = format!("{label} sign-in completed. Reconnected Pi to this chat.");
     let root = unique_temp_dir("hibiscus-auth-sdk");
     let session = root.join("chat.jsonl");
     if !matches!(method, "empty" | "logged_out") {
@@ -99,12 +127,20 @@ export class ModelRuntime {
     if (process.env.HIBISCUS_TEST_AUTH_METHOD === 'slow') {
       await new Promise(resolve => setTimeout(resolve, 1500));
     }
-    return { async login(provider, type, interaction) {
+    return {
+      getProviders() { return [{ id:'anthropic', name:'Anthropic', auth:{apiKey:{}} }, {id:'openai-codex',name:'Codex',auth:{oauth:{}}}, {id:'openrouter',name:'OpenRouter',auth:{apiKey:{}}}]; },
+      async login(provider, type, interaction) {
+      if (type === 'api_key') {
+        const key = await interaction.prompt({type:'secret',message:'Enter API key:'});
+        if (key !== 'FAKE-SECRET-CODE') throw new Error('unexpected key');
+        writeFileSync(process.env.HIBISCUS_TEST_AUTH_LOG, `${provider} ${type} api_key`);
+        return;
+      }
       const method = await interaction.prompt({type:'select',message:'Choose method', options:[
         {id:'browser',label:'Browser login'}, {id:'device_code',label:'Device code login'}]});
       if (method === 'browser') {
         interaction.notify({type:'auth_url',url:'https://auth.openai.com/oauth/authorize?response_type=code&client_id=TEST_CLIENT&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access&state=TEST_STATE_TO_PROVE_THE_URL_IS_NOT_BROKEN_ACROSS_TERMINAL_ROWS'});
-        if (process.env.HIBISCUS_TEST_AUTH_METHOD === 'manual') {
+        if (['manual', 'claude'].includes(process.env.HIBISCUS_TEST_AUTH_METHOD)) {
           const code = await interaction.prompt({type:'manual_code',message:'Paste redirect URL:'});
           if (code !== 'FAKE-SECRET-CODE') throw new Error('unexpected test code');
         } else {
@@ -169,11 +205,28 @@ export class ModelRuntime {
     }
     tty.send(b"/login\r");
     tty.wait_text("Sign in to");
-    tty.send(b"\r");
-    tty.wait_text("Browser login");
-    if method == "cancel" {
+    if matches!(method, "api_key" | "api_cancel" | "api_other") {
+        tty.send(b"\x1b[B\r");
+        tty.wait_text("API Key · provider");
+        tty.send(if method == "api_other" {
+            b"\x1b[B\r"
+        } else {
+            b"\r"
+        });
+        tty.wait_text("Enter API key:");
+    } else {
+        tty.send(b"\r");
+        tty.wait_text("Claude · browser login");
+        tty.send(if method == "claude" {
+            b"\x1b[B\r"
+        } else {
+            b"\r"
+        });
+        tty.wait_text("Browser login");
+    }
+    if matches!(method, "cancel" | "api_cancel") {
         tty.send(b"\x1b");
-        tty.wait_text("Codex sign-in cancelled.");
+        tty.wait_text(&format!("{label} sign-in cancelled."));
         tty.send(b"/quit\r");
         tty.finish();
         assert!(!auth_log.exists());
@@ -191,44 +244,73 @@ export class ModelRuntime {
         fs::remove_dir_all(root).unwrap();
         return;
     }
-    tty.send(if method == "device" {
-        b"\x1b[B\r"
+    if matches!(method, "api_key" | "api_cancel" | "api_other") {
+        tty.send(b"FAKE-SECRET-CODE\r");
     } else {
-        b"\r"
-    });
-    if method == "manual" {
+        tty.send(if method == "device" {
+            b"\x1b[B\r"
+        } else {
+            b"\r"
+        });
+    }
+    if matches!(method, "manual" | "claude") {
         tty.wait_text("Paste redirect URL:");
         tty.send(b"\x19");
         tty.wait_text("Sent sign-in URL to terminal clipboard");
         tty.send(b"FAKE-SECRET-CODE\r");
     }
-    tty.wait_text("Codex sign-in completed. Reconnected Pi to this chat.");
+    tty.wait_text(&completed);
     tty.send(b"after\r");
     tty.wait_text("MOCK_REPLY_AFTER");
     tty.wait_text("Enter send · Ctrl+Enter");
     tty.send(b"/quit\r");
     let shown = tty.finish();
-    let expected = if method == "device" {
+    for command in ["/login", "/quit"] {
+        assert!(
+            !shown.contains(&format!("┃  {command}")),
+            "slash command became a user row"
+        );
+        assert!(
+            !shown.contains(&format!("│  {command}")),
+            "slash command remained in chat history"
+        );
+    }
+
+    let expected = if matches!(method, "api_key" | "api_cancel" | "api_other") {
+        "api_key"
+    } else if method == "device" {
         "device_code"
     } else {
         "browser"
     };
     assert_eq!(
         fs::read_to_string(&auth_log).unwrap(),
-        format!("openai-codex oauth {expected}")
+        format!(
+            "{} {} {expected}",
+            if method == "api_other" {
+                "openrouter"
+            } else if matches!(method, "claude" | "api_key") {
+                "anthropic"
+            } else {
+                "openai-codex"
+            },
+            if matches!(method, "api_key" | "api_cancel" | "api_other") {
+                "api_key"
+            } else {
+                "oauth"
+            }
+        )
     );
-    assert!(
-        shown.contains("Codex sign-in completed. Reconnected Pi to this chat."),
-        "{shown}"
-    );
-    if method == "device" {
+    assert!(shown.contains(&completed), "{shown}");
+    if matches!(method, "api_key" | "api_cancel" | "api_other") {
+        assert!(!browser_log.exists());
+    } else if method == "device" {
         assert!(shown.contains("Enter device code: FAKE-CODE"), "{shown}");
         assert!(!browser_log.exists());
     } else {
         if method == "open_failure" {
             assert!(
-                shown.contains("browser did not open; Ctrl+Y to copy link or")
-                    && shown.contains("retry with device code"),
+                shown.contains("browser did not open; Ctrl+Y to copy link"),
                 "{shown}"
             );
             assert!(!browser_log.exists());
@@ -241,7 +323,7 @@ export class ModelRuntime {
                 .unwrap()
                 .starts_with("https://auth.openai.com/oauth/authorize?response_type=code"));
         }
-        assert!(shown.contains("Open Codex sign-in ↗"), "{shown}");
+        assert!(shown.contains("Open sign-in ↗"), "{shown}");
         assert!(
             shown.contains("\x1b]8;;https://auth.openai.com/oauth/authorize?response_type=code"),
             "{shown}"
@@ -250,7 +332,7 @@ export class ModelRuntime {
             !shown.contains("  · https://auth.openai.com/oauth/authorize"),
             "{shown}"
         );
-        if method == "manual" {
+        if matches!(method, "manual" | "claude") {
             assert!(shown.contains("\x1b]52;c;"), "{shown}");
             assert!(
                 shown.contains("Sent sign-in URL to terminal clipboard"),
@@ -278,10 +360,7 @@ export class ModelRuntime {
     assert!(base.ends_with("/writing-style.mjs"), "{log}");
     if method == "logged_out" {
         assert!(shown.contains("Sign in to"), "{shown}");
-        assert!(
-            shown.contains("OpenAI Codex · browser or device code"),
-            "{shown}"
-        );
+        assert!(shown.contains("Codex · browser or device code"), "{shown}");
         assert!(!shown.contains("Hand off to Pi"), "{shown}");
     }
     if matches!(method, "empty" | "logged_out") {

@@ -5,7 +5,7 @@ pub(crate) mod sessions;
 use self::models::{choose_model, choose_thinking};
 use crate::{
     pi::{
-        auth::{codex_sign_in, AuthOutcome},
+        auth::{sign_in, AuthOutcome},
         configure_builtin_tools,
         dialog::Dialogs,
         error::{local, ChatError, RecoveryAction},
@@ -229,7 +229,10 @@ fn chat<R: BufRead>(
         }
         let message = line.trim();
         let images = output.take_images();
-        if output.is_full() && (!message.is_empty() || !images.is_empty()) {
+        if output.is_full()
+            && !message.starts_with('/')
+            && (!message.is_empty() || !images.is_empty())
+        {
             let shown = if images.is_empty() {
                 message.to_owned()
             } else {
@@ -464,7 +467,7 @@ fn chat<R: BufRead>(
                     )?;
                 }
                 "/login" => {
-                    codex_login(
+                    inline_login(
                         rpc,
                         input,
                         output,
@@ -678,7 +681,7 @@ fn handle_chat_error(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn codex_login<R: BufRead>(
+fn inline_login<R: BufRead>(
     rpc: &mut Rpc,
     input: &mut R,
     output: &mut Screen,
@@ -703,26 +706,31 @@ fn codex_login<R: BufRead>(
     )?;
     // Login is a provider choice, not a property of the current model. A
     // logged-out Pi can select another model or have no model at all.
-    let choices = vec![
-        "OpenAI Codex · browser or device code".to_owned(),
-        "Other provider · open Pi".to_owned(),
-    ];
+    let choices = vec!["Browser Login".to_owned(), "API Key".to_owned()];
     let keys = &events
         .as_ref()
         .ok_or("terminal events unavailable")?
         .receiver;
-    match output.select("Sign in to", &choices, None, keys)? {
-        Some(0) => {}
-        Some(1) => {
-            return auth_handoff("/login", rpc, input, output, interactive, events, raw, tty)
+    let (provider, auth_type, label) = match output.select("Sign in to", &choices, None, keys)? {
+        Some(0) => {
+            let providers = vec![
+                "Codex · browser or device code".to_owned(),
+                "Claude · browser login".to_owned(),
+            ];
+            match output.select("Browser Login", &providers, None, keys)? {
+                Some(0) => ("openai-codex", "oauth", "Codex"),
+                Some(1) => ("anthropic", "oauth", "Claude"),
+                _ => return Ok(()),
+            }
         }
+        Some(1) => ("", "api_key", "API key"),
         _ => return Ok(()),
-    }
+    };
     let keys = &events
         .as_ref()
         .ok_or("terminal events unavailable")?
         .receiver;
-    match codex_sign_in(output, keys)? {
+    match sign_in(output, keys, provider, auth_type)? {
         AuthOutcome::Success => {
             let start = state["sessionFile"]
                 .as_str()
@@ -733,7 +741,7 @@ fn codex_login<R: BufRead>(
             rpc.reconnect(start)?;
             ui.info(
                 output,
-                "Codex sign-in completed. Reconnected Pi to this chat.",
+                &format!("{label} sign-in completed. Reconnected Pi to this chat."),
             )?;
             show_session_status(
                 rpc,
@@ -745,15 +753,15 @@ fn codex_login<R: BufRead>(
                 ui,
             )?;
         }
-        AuthOutcome::Cancelled => ui.info(output, "Codex sign-in cancelled.")?,
+        AuthOutcome::Cancelled => ui.info(output, &format!("{label} sign-in cancelled."))?,
         AuthOutcome::Failed => ui.info(
             output,
-            "Codex sign-in failed. Try again or use Pi /login for details.",
+            &format!("{label} sign-in failed. Try again or use Pi /login for details."),
         )?,
         AuthOutcome::Unavailable => {
             ui.info(
                 output,
-                "Codex SDK or Node is unavailable; Pi's TUI can handle login instead.",
+                "Pi SDK login or Node is unavailable; Pi's TUI can handle login instead.",
             )?;
             return auth_handoff("/login", rpc, input, output, interactive, events, raw, tty);
         }

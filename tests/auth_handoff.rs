@@ -13,7 +13,7 @@ fn login_handoff_without_saved_chat_uses_an_ephemeral_pi_session() {
     run(false, false);
 }
 #[test]
-fn other_provider_choice_uses_pi_tui_even_when_codex_sdk_is_available() {
+fn api_key_login_offers_handoff_when_sdk_is_unavailable() {
     run(false, true);
 }
 
@@ -69,14 +69,7 @@ fi
         .env("HIBISCUS_TEST_ARGS", &args)
         .env("HIBISCUS_TEST_RPC_ARGS", &rpc_args)
         .env("HIBISCUS_TEST_SDK_MARKER", &sdk_marker)
-        .env(
-            "HIBISCUS_AUTH_SDK",
-            if other_provider {
-                sdk.as_os_str()
-            } else {
-                std::ffi::OsStr::new("")
-            },
-        );
+        .env("HIBISCUS_AUTH_SDK", "");
     let mut tty = Pty::spawn(&mut command);
     tty.wait_text("hibiscus");
     if saved {
@@ -86,7 +79,13 @@ fi
     }
     tty.send(b"/login\r");
     tty.wait_text("Sign in to");
-    tty.send(if other_provider { b"\x1b[B\r" } else { b"\r" });
+    if other_provider {
+        tty.send(b"\x1b[B\r");
+    } else {
+        tty.send(b"\r");
+        tty.wait_text("Claude · browser login");
+        tty.send(b"\r");
+    }
     tty.wait_text("Hand off to Pi for /login?");
     tty.send(b"\x1b[B\r"); // shared confirmation defaults to Cancel
                            // This marker is emitted only after the old reader is joined and Pi owns
@@ -108,10 +107,7 @@ fi
         "terminal cursor must be restored on handoff and exit"
     );
     assert_eq!(fs::read_to_string(log).unwrap(), "pi-only-input");
-    assert!(
-        !sdk_marker.exists(),
-        "SDK must not run for an explicitly chosen other provider"
-    );
+    assert!(!sdk_marker.exists(), "SDK must not run when unavailable");
     let handed_off = fs::read_to_string(args).unwrap();
     let rpc_launches = fs::read_to_string(rpc_args).unwrap();
     let mut launches = rpc_launches.lines();

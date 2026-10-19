@@ -96,7 +96,9 @@ pub(crate) fn choose_model<R: BufRead>(
     let provider = models[index]["provider"].as_str().unwrap();
     let model_id = models[index]["id"].as_str().unwrap();
     if Some(index) == active {
-        writeln!(output, "Already using {provider}/{model_id}.")?;
+        if !output.is_full() {
+            writeln!(output, "Already using {provider}/{model_id}.")?;
+        }
         return Ok(());
     }
     rpc.request(
@@ -108,7 +110,9 @@ pub(crate) fn choose_model<R: BufRead>(
         events,
         interactive,
     )?;
-    writeln!(output, "Selected {provider}/{model_id}.")?;
+    if !output.is_full() {
+        writeln!(output, "Selected {provider}/{model_id}.")?;
+    }
     Ok(())
 }
 

@@ -27,8 +27,8 @@ src/
     error.rs         Typed errors, recovery disposition, safe presentation
     diagnostics.rs   Bounded Pi stderr summary for the bottom diagnostic row
     run.rs           Final run outcome across Pi retries and compaction
-    auth.rs          Codex SDK helper discovery and OAuth UI bridge
-    codex-auth.mjs    Embedded Node helper calling Pi ModelRuntime.login()
+    auth.rs          Pi SDK discovery and OAuth/API-key UI bridge
+    login.mjs    Embedded Node helper calling Pi ModelRuntime.login()
     logout.rs        In-chat provider picker, confirmation, helper lifecycle
     logout.mjs       Pi SDK credential metadata and logout protocol
     dialog.rs        Pi extension UI requests and responses
@@ -100,7 +100,7 @@ Pi persists sessions in its JSONL store. `chat/sessions.rs` discovers files for 
 
 `chat/models.rs` obtains the active model and all configured models from Pi, sorts them by provider then ID for display, and sends `set_model` with both provider and ID for a changed selection. `/thinking` also reads Pi's current state and available thinking levels before requesting `set_thinking_level`; no local per-model reasoning catalog is maintained. Screen reads the confirmed thinking level from Pi's state and cumulative context/usage/cache-read/cost data from `get_session_stats` after settled runs and state changes (cache writes are not displayed). The footer holds only a display snapshot and never computes its own token budget or subscription quota. `/compact` sends a separate long-running RPC command to Pi, which creates/persists the summary and responds when complete. Hibiscus waits for the correlated response and cancellation acknowledgements, not prompt settlement, and does not summarize or store context itself. Hibiscus does not maintain a second model catalog. Slash-command suggestions contain only commands implemented by Hibiscus, not arbitrary Pi commands.
 
-Pi RPC has no login/logout command. After an explicit Codex choice in the full-screen `/login` provider picker (independent of the active model), Hibiscus launches a small Node helper using the **installed Pi SDK's `ModelRuntime.login("openai-codex", "oauth", interaction)`**. It relays UI events over JSONL; Pi performs OAuth and writes its own credential store. Hibiscus never serializes returned credentials. Manual authorization responses are masked and excluded from chat history. The helper's `done` event is sent only after SDK login and credential synchronization finish; Rust treats that event—not natural Node process exit—as completion. It then terminates and reaps the dedicated helper rather than waiting for its HTTP callback sockets/browser connection to close, which can otherwise leave Node alive after the listener is closed. After successful login, Hibiscus gracefully closes the idle RPC child before opening the same saved session in a fresh child; for an unsaved/empty chat it starts a fresh session. This avoids concurrent session writers and stale in-process auth state.
+Pi RPC has no login/logout command. After a method/provider choice in full-screen `/login`, Hibiscus launches a small Node helper using the **installed Pi SDK’s `ModelRuntime.login(provider, type, interaction)`**. Browser choices map to `openai-codex` or `anthropic` with `oauth`; API-key choices come from `getProviders()` entries exposing `auth.apiKey` and use `api_key`. It relays UI events over JSONL; Pi performs OAuth and writes its own credential store. Hibiscus never serializes returned credentials. Manual authorization responses are masked and excluded from chat history. The helper's `done` event is sent only after SDK login and credential synchronization finish; Rust treats that event—not natural Node process exit—as completion. It then terminates and reaps the dedicated helper rather than waiting for its HTTP callback sockets/browser connection to close, which can otherwise leave Node alive after the listener is closed. After successful login, Hibiscus gracefully closes the idle RPC child before opening the same saved session in a fresh child; for an unsaved/empty chat it starts a fresh session. This avoids concurrent session writers and stale in-process auth state.
 
 Full-screen `/logout` uses a separate SDK helper to list stored credential metadata, then accepts an explicit provider selection and removal confirmation. The old RPC child is closed before the helper calls `ModelRuntime.logout`; the session is reopened afterward even if credential mutation cannot be confirmed. Cancellation before authorization leaves both credentials and the running backend alone. No credential values are serialized or edited by Rust, and unavailable SDK/line mode explains the limitation instead of automatically handing off.
 
@@ -121,7 +121,7 @@ Interactive chat with compatible stdin/stdout uses a full-screen renderer with a
 | Pi RPC transport, event handling, steering, aborts, settlement | `src/pi/rpc.rs`, `src/pi/run.rs` |
 | Error classification and recovery hints | `src/pi/error.rs`, `docs/error-handling.md` |
 | Tool approval policy or Pi dialog bridging | `src/pi/approval.mjs`, `src/pi/dialog.rs` |
-| Codex login or provider logout | `src/pi/auth.rs`, `src/pi/logout.rs`, `src/pi/*.mjs` helpers |
+| Provider login or logout | `src/pi/auth.rs`, `src/pi/logout.rs`, `src/pi/*.mjs` helpers |
 | Full-screen rendering, composer, queues, modals | `src/tui/screen.rs`, `src/tui/modal.rs`, `src/tui/paint.rs` |
 | Tool/activity display | `src/tui/activity.rs` |
 | Markdown/diff formatting | `src/tui/markdown.rs` |
