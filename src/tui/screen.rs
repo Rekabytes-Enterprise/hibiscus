@@ -313,7 +313,6 @@ pub(crate) trait ScrollDisplay: Write {
     fn clear_queue_display(&mut self) -> io::Result<()> {
         Ok(())
     }
-    fn invalidate_screen(&mut self) {}
     fn extension_dialog(
         &mut self,
         _event: &Value,
@@ -2476,10 +2475,6 @@ impl Screen {
 }
 
 impl ScrollDisplay for Screen {
-    fn invalidate_screen(&mut self) {
-        self.painter.invalidate();
-        self.last_paint = None;
-    }
     fn extension_dialog(&mut self, event: &Value, events: &Receiver<u8>) -> Result<Option<Value>> {
         if !self.full || self.suspended {
             return Ok(None);

@@ -4,6 +4,10 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Remove Pi TUI authentication handoff. Login dependency/provider failures now use recoverable errors inside Hibiscus; line/piped authentication reports that full-screen input is required.
+
 ## [0.3.4] - 2026-10-19
 
 ### Added
