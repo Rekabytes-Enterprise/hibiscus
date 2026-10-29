@@ -31,7 +31,7 @@ pub(crate) enum QueueMode {
 }
 
 /// A staged attachment can be owned by both the composer and the explicit
-/// recovery slot without copying its base64 payload. Pi wire shape is unchanged.
+/// recovery slot without copying its base64 payload. Runtime wire shape is unchanged.
 pub(crate) type SharedImage = Arc<Value>;
 
 pub(crate) struct DraftSubmission {
@@ -188,7 +188,7 @@ fn sgr_mouse(sequence: &str) -> Option<MouseEvent> {
 pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
     match events.recv_timeout(std::time::Duration::from_millis(25)) {
         Ok(b'[') => {}
-        Ok(b'v') => return Navigation::PasteImage, // legacy Alt+V (Pi's WSL default)
+        Ok(b'v') => return Navigation::PasteImage, // legacy Alt+V (Hibiscus's WSL default)
         Ok(b'\r' | b'\n') => return Navigation::FollowUp, // legacy Alt+Enter
         Ok(next) => return Navigation::EscapeWith(next),
         Err(_) => return Navigation::Escape,
@@ -385,8 +385,8 @@ struct Activity {
     flower_frame: usize,
 }
 
-/// Last confirmed Pi session snapshot, not an independently calculated budget.
-/// Decimal token units for display only; Pi's original counts stay untouched.
+/// Last confirmed Runtime session snapshot, not an independently calculated budget.
+/// Decimal token units for display only; Hibiscus's original counts stay untouched.
 pub(crate) fn compact_tokens(value: u64) -> String {
     for (unit, suffix, next) in [
         (1_000_000_000_000u64, "T", None),
@@ -418,7 +418,7 @@ struct SessionUsage {
     cost: Option<f64>,
 }
 impl SessionUsage {
-    fn from_pi(data: &Value) -> Option<Self> {
+    fn from_runtime(data: &Value) -> Option<Self> {
         if !data.is_object() {
             return None;
         }
@@ -438,7 +438,7 @@ impl SessionUsage {
                     compact_tokens(window)
                 ))
             }
-            _ => None, // Pi may report null immediately after compaction.
+            _ => None, // Runtime may report null immediately after compaction.
         };
         let cost = data["cost"].as_f64().filter(|n| n.is_finite() && *n >= 0.0);
         let usage = Self {
@@ -496,7 +496,7 @@ pub(crate) struct Screen {
     suspended: bool,
     color: bool,
     painter: Painter,
-    diagnostics: crate::pi::diagnostics::Diagnostics,
+    diagnostics: crate::runtime::diagnostics::Diagnostics,
     diagnostic_revision: u64,
     last_paint: Option<Instant>,
     paint_pending: bool,
@@ -563,7 +563,7 @@ impl Screen {
             suspended: true,
             color,
             painter: Painter::new(env::var_os("HIBISCUS_NO_SYNC_UPDATE").is_none()),
-            diagnostics: crate::pi::diagnostics::Diagnostics::default(),
+            diagnostics: crate::runtime::diagnostics::Diagnostics::default(),
             diagnostic_revision: 0,
             last_paint: None,
             paint_pending: false,
@@ -634,7 +634,7 @@ impl Screen {
         self.full
     }
 
-    pub(crate) fn diagnostic_feed(&self) -> Option<crate::pi::diagnostics::Diagnostics> {
+    pub(crate) fn diagnostic_feed(&self) -> Option<crate::runtime::diagnostics::Diagnostics> {
         self.full.then(|| self.diagnostics.clone())
     }
 
@@ -750,7 +750,7 @@ impl Screen {
     }
 
     pub(crate) fn session_usage(&mut self, stats: &Value) -> io::Result<()> {
-        self.usage = SessionUsage::from_pi(stats);
+        self.usage = SessionUsage::from_runtime(stats);
         self.render()
     }
 
@@ -781,8 +781,8 @@ impl Screen {
         }
     }
 
-    /// Reset only the local view after Pi has created a new session. Persisted
-    /// history belongs to Pi and is not deleted by clearing the screen.
+    /// Reset only the local view after Runtime has created a new session. Persisted
+    /// history belongs to Runtime and is not deleted by clearing the screen.
     pub(crate) fn clear_session(&mut self) -> io::Result<()> {
         self.dirty_transcript();
         self.transcript.clear();
@@ -1463,15 +1463,16 @@ impl Screen {
         }
         if self.manual_compaction {
             self.input_notice =
-                Some("Compacting… draft kept · Enter after Pi finishes · Esc cancel".into());
+                Some("Compacting… draft kept · Enter after Runtime finishes · Esc cancel".into());
             self.render()?;
             return Ok(ActiveAction::None);
         }
         if self.clipboard.is_some() {
             self.input_notice = Some("Reading clipboard… press Enter when ready".into());
         } else if self.draft.trim_start().starts_with('/') {
-            self.input_notice =
-                Some("Commands are available after Pi settles; keep this draft or clear it".into());
+            self.input_notice = Some(
+                "Commands are available after Runtime settles; keep this draft or clear it".into(),
+            );
         } else if !self.draft.trim().is_empty() || !self.images.is_empty() {
             let submission = DraftSubmission {
                 text: self.draft.trim().to_owned(),
@@ -1717,20 +1718,32 @@ impl Screen {
     }
 
     /// Read an OAuth answer without adding it to the transcript. The callback
-    /// can cancel a manual-code prompt when Pi's browser callback finishes.
+    /// can cancel a manual-code prompt when Hibiscus's browser callback finishes.
     pub(crate) fn auth_input(
         &mut self,
         events: &Receiver<u8>,
         secret: bool,
+        cancelled: impl FnMut() -> Result<bool>,
+    ) -> Result<Option<String>> {
+        self.auth_prompt(
+            events,
+            "Provider API key",
+            "Enter API key",
+            secret,
+            cancelled,
+        )
+    }
+
+    pub(crate) fn auth_prompt(
+        &mut self,
+        events: &Receiver<u8>,
+        title: &str,
+        placeholder: &str,
+        secret: bool,
         mut cancelled: impl FnMut() -> Result<bool>,
     ) -> Result<Option<String>> {
         if self.full {
-            let modal = Modal::input(
-                "Sign-in credentials",
-                String::new(),
-                "Enter authorization response".into(),
-                secret,
-            );
+            let modal = Modal::input(title, String::new(), placeholder.into(), secret);
             let response = self.run_modal(modal, events, &mut cancelled)?;
             return Ok(response.and_then(|response| response["value"].as_str().map(str::to_owned)));
         }
@@ -2316,7 +2329,7 @@ impl Screen {
             notice.clone()
         } else if self.manual_compaction {
             format!(
-                "Compacting… {} image(s) attached · Enter after Pi finishes · Esc cancel",
+                "Compacting… {} image(s) attached · Enter after Runtime finishes · Esc cancel",
                 self.images.len()
             )
         } else if !self.images.is_empty() && self.activity.is_some() {
@@ -2380,7 +2393,7 @@ impl Screen {
         let hint = if self.modal.is_some() {
             "Dialog · Esc cancels · your draft is preserved".into()
         } else if self.disconnected {
-            "Pi disconnected · /reconnect · /restore · /quit".into()
+            "Runtime disconnected · /reconnect · /restore · /quit".into()
         } else if self.suggestions.is_some() && !self.file_matches.is_empty() {
             "↑↓ choose  ·  Enter / Tab insert path  ·  Esc dismiss".into()
         } else if self.suggestions.is_some() {
@@ -2609,7 +2622,7 @@ impl ScrollDisplay for Screen {
         if pending.is_empty() {
             return Ok(());
         }
-        let rendered = crate::pi::mermaid::render(&pending);
+        let rendered = crate::runtime::mermaid::render(&pending);
         if self.diagrams.len() > 64 {
             self.diagrams.clear();
         }
@@ -2631,7 +2644,7 @@ impl ScrollDisplay for Screen {
         self.delivered_before_ack.clear();
         self.initial_user_pending = None;
         if self.input_notice.as_deref().is_some_and(|notice| {
-            notice.contains("accepted by Pi")
+            notice.contains("accepted by runtime")
                 || notice.starts_with("Sending")
                 || notice.starts_with("Queueing")
         }) {
@@ -2761,7 +2774,7 @@ impl ScrollDisplay for Screen {
             self.ensure_cursor_visible();
         }
         self.input_notice =
-            Some("Pi is starting; press Enter again after it accepts the prompt".into());
+            Some("Runtime is starting; press Enter again after it accepts the prompt".into());
         self.render()
     }
     fn expect_initial_user(&mut self, message: &str) {
@@ -2794,7 +2807,7 @@ impl ScrollDisplay for Screen {
             QueueMode::Steer => "steering",
             QueueMode::FollowUp => "follow-up",
         };
-        self.input_notice = Some(format!("{kind} accepted by Pi · waiting for delivery"));
+        self.input_notice = Some(format!("{kind} accepted by Runtime · waiting for delivery"));
         self.render()
     }
     fn delivered_user(&mut self, message: &Value) -> io::Result<bool> {
@@ -2851,11 +2864,11 @@ impl ScrollDisplay for Screen {
         let label = if error.contains("uncertain") {
             "Queued delivery uncertain"
         } else {
-            "Pi rejected queued message"
+            "Runtime rejected queued message"
         };
         self.input_notice = Some(format!(
             "{label}: {} · /restore after run",
-            crate::pi::error::safe_message(error)
+            crate::runtime::error::safe_message(error)
         ));
         self.render()
     }
@@ -2871,7 +2884,7 @@ impl ScrollDisplay for Screen {
             if let Some(messages) = update[field].as_array() {
                 let mut kept = Vec::new();
                 // Keep the newest matching entries when identical queued texts
-                // shrink: Pi drains the oldest first, and events have no IDs.
+                // shrink: Runtime drains the oldest first, and events have no IDs.
                 for text in messages.iter().filter_map(Value::as_str).rev() {
                     let mut item = if let Some(index) = old
                         .iter()
@@ -2895,7 +2908,7 @@ impl ScrollDisplay for Screen {
             }
         }
         for mut item in old {
-            item.sending = true; // removed from Pi's queue, awaiting message_start
+            item.sending = true; // removed from Hibiscus's queue, awaiting message_start
             current.push(item);
         }
         self.pending_queue = current;
@@ -3028,7 +3041,7 @@ impl Write for Screen {
             self.dirty_transcript();
             self.transcript.extend_from_slice(buf);
             // Rendering always reflows the visible transcript; bound retained
-            // screen text independently of Pi's persistent session history.
+            // screen text independently of Hibiscus's persistent session history.
             const MAX_TRANSCRIPT: usize = 256 * 1024;
             if self.transcript.len() > MAX_TRANSCRIPT {
                 let excess = self.transcript.len() - MAX_TRANSCRIPT;
@@ -3152,7 +3165,7 @@ fn strip_ansi(text: &str) -> String {
 }
 
 /// Visual input rows, preserving explicit newlines and the insertion row at
-/// an exact wrap boundary. Draft bytes sent to Pi are never reflowed.
+/// an exact wrap boundary. Draft bytes sent to Runtime are never reflowed.
 fn draft_cursor_position(text: &str, width: usize, cursor: usize) -> (usize, usize) {
     let (mut row, mut col) = (0, 0);
     for (index, ch) in text.char_indices() {
@@ -3376,7 +3389,7 @@ mod tests {
             (0.45, "Cost ~$0.45"),
             (0.6634, "Cost ~$0.66"),
         ] {
-            let usage = SessionUsage::from_pi(&serde_json::json!({"cost":cost})).unwrap();
+            let usage = SessionUsage::from_runtime(&serde_json::json!({"cost":cost})).unwrap();
             assert_eq!(usage.parts(), [label]);
         }
     }
@@ -3409,7 +3422,7 @@ mod tests {
         screen.session_usage(&serde_json::json!({})).unwrap();
         assert!(
             screen.usage.is_none(),
-            "missing Pi stats must not invent values"
+            "missing Runtime stats must not invent values"
         );
         screen
             .status(&serde_json::json!({"model":null,"thinkingLevel":"high"}))
@@ -3430,7 +3443,7 @@ mod tests {
             mobile_header("openai-codex/gpt-6-sol", Some("medium"), "session-id", 15),
             "gpt-6-sol"
         );
-        let usage = SessionUsage::from_pi(&serde_json::json!({
+        let usage = SessionUsage::from_runtime(&serde_json::json!({
             "contextUsage":{"tokens":3900,"contextWindow":272000,"percent":1.4},
             "tokens":{"input":19000,"output":9000},"cost":0.62
         }))

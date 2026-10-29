@@ -118,13 +118,13 @@ impl Ui {
         )?;
         writeln!(
             out,
-            "  Context     /compact [summary instructions]  (Pi model call)"
+            "  Context     /compact [summary instructions]  (Runtime model call)"
         )?;
         writeln!(
             out,
             "  Approvals   /approval [on|off]  (saved across restarts)"
         )?;
-        writeln!(out, "  Account     /login  (Codex here; others in Pi)")?;
+        writeln!(out, "  Account     /login  (Codex here; others in runtime)")?;
         writeln!(
             out,
             "              /logout  (remove stored credentials here)"

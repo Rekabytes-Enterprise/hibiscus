@@ -9,9 +9,10 @@ fn desktop_copy(text: &str) -> bool {
     if text.len() > 2048 {
         return false;
     }
-    let mut candidates: Vec<(&str, &[&str])> = Vec::new();
     #[cfg(target_os = "macos")]
-    candidates.push(("pbcopy", &[]));
+    let candidates: Vec<(&str, &[&str])> = vec![("pbcopy", &[])];
+    #[cfg(not(target_os = "macos"))]
+    let mut candidates: Vec<(&str, &[&str])> = Vec::new();
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -69,7 +70,7 @@ pub(super) fn copy(out: &mut impl Write, text: &str) -> io::Result<()> {
         return Ok(());
     }
     // Unsupported terminals may ignore OSC 52. Do not claim success in the UI.
-    // Bound the encoded escape (Pi also caps OSC 52 payloads).
+    // Bound the encoded escape (Runtime also caps OSC 52 payloads).
     if text.len() <= 75_000 {
         write!(
             out,

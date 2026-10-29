@@ -1,5 +1,5 @@
 /// Commands implemented by Hibiscus itself. Suggestions must not advertise
-/// Pi-only or unimplemented commands: anything selected here is submitted to
+/// runtime-only or unimplemented commands: anything selected here is submitted to
 /// the same chat command dispatcher as a manually typed name.
 #[derive(Clone, Copy)]
 pub(crate) struct Command {
@@ -14,7 +14,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/compact",
-        description: "Summarize old context with Pi",
+        description: "Summarize old context with runtime",
     },
     Command {
         name: "/continue",
@@ -50,7 +50,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/reconnect",
-        description: "Reconnect Pi without resending",
+        description: "Reconnect Runtime without resending",
     },
     Command {
         name: "/restore",
@@ -62,7 +62,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/thinking",
-        description: "Choose Pi reasoning level",
+        description: "Choose Runtime reasoning level",
     },
 ];
 

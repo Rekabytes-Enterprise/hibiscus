@@ -4,12 +4,12 @@ pub(crate) mod sessions;
 
 use self::models::{choose_model, choose_thinking};
 use crate::{
-    pi::{
+    runtime::{
         auth::{sign_in, AuthOutcome},
+        bridge::{Client, SessionStart},
         dialog::Dialogs,
         error::{local, ChatError, RecoveryAction},
         logout::{sign_out, LogoutOutcome},
-        rpc::{Rpc, SessionStart},
     },
     tui::{
         screen::{compact_tokens, PromptAction, Screen},
@@ -40,7 +40,7 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
     let mut screen = Screen::new(stdin.is_terminal() && tty.is_some())?;
     // Decide routing before the child starts: startup warnings must not race
     // alternate-screen setup and write directly over the composer.
-    let mut rpc = Rpc::start_with_diagnostics(session, screen.diagnostic_feed())?;
+    let mut rpc = Client::start_with_diagnostics(session, screen.diagnostic_feed())?;
     let update_notice = if screen.is_full()
         && env::var_os("HIBISCUS_NO_UPDATE_CHECK").is_none()
         && update::installed_prebuilt()
@@ -110,7 +110,7 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 fn show_session_status<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
     output: &mut Screen,
     dialogs: &mut Dialogs,
@@ -141,7 +141,7 @@ fn show_session_status<R: BufRead>(
 
 #[allow(clippy::too_many_arguments)]
 fn show_history_for<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     output: &mut Screen,
     fallback: &mut R,
     dialogs: &mut Dialogs,
@@ -187,7 +187,7 @@ fn offer_update(output: &mut Screen, keys: &Receiver<u8>, tag: &str) -> Result<(
 
 #[allow(clippy::too_many_arguments)]
 fn chat<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
     output: &mut Screen,
     interactive: bool,
@@ -258,7 +258,7 @@ fn chat<R: BufRead>(
                     };
                     if setting.is_none() && output.is_full() {
                         if let Some(events) = events.as_ref() {
-                            let enabled = crate::pi::approval_enabled(None)?;
+                            let enabled = crate::runtime::approval_enabled(None)?;
                             let items = vec![
                                 "Enable — ask before risky shell commands".to_owned(),
                                 "Disable — run shell commands without approval prompts".to_owned(),
@@ -275,7 +275,7 @@ fn chat<R: BufRead>(
                             setting = Some(choice == 0);
                         }
                     }
-                    let enabled = crate::pi::approval_enabled(setting)?;
+                    let enabled = crate::runtime::approval_enabled(setting)?;
                     ui.info(output, if enabled {
                         "Approvals enabled: risky shell commands require approval."
                     } else {
@@ -297,10 +297,10 @@ fn chat<R: BufRead>(
                 }
                 "/reconnect" => {
                     if rpc.is_connected() {
-                        ui.info(output, "Pi is already connected.")?;
+                        ui.info(output, "Runtime is already connected.")?;
                     } else {
                         if !rpc.has_saved_session() {
-                            ui.info(output, "No saved session path was confirmed; reconnecting opens a new Pi session. Existing sessions remain available via /sessions.")?;
+                            ui.info(output, "No saved session path was confirmed; reconnecting opens a new Runtime session. Existing sessions remain available via /sessions.")?;
                         }
                         rpc.recover_connection()?;
                         if let Err(error) = show_session_status(
@@ -316,14 +316,14 @@ fn chat<R: BufRead>(
                             return Err(error);
                         }
                         output.set_disconnected(false)?;
-                        ui.info(output, "Reconnected to Pi. No prompt was resent.")?;
+                        ui.info(output, "Reconnected to runtime. No prompt was resent.")?;
                     }
                 }
                 _ if !rpc.is_connected() => {
                     if !message.starts_with('/') {
                         last_failed = Some((message.to_owned(), images.clone()));
                     }
-                    ui.info(output, "Pi is disconnected. Use /reconnect, /restore, /help, or /quit. Nothing was sent.")?;
+                    ui.info(output, "Runtime is disconnected. Use /reconnect, /restore, /help, or /quit. Nothing was sent.")?;
                 }
                 "/new" => {
                     rpc.command(
@@ -336,7 +336,7 @@ fn chat<R: BufRead>(
                         raw,
                         interactive,
                     )?;
-                    // Clear only after Pi confirms creation. A rejected or
+                    // Clear only after Runtime confirms creation. A rejected or
                     // cancelled command must leave the current view intact.
                     last_failed = None;
                     if output.is_full() {
@@ -444,13 +444,16 @@ fn chat<R: BufRead>(
                         ui.info(
                             output,
                             &format!(
-                                "Pi compacted context: {} → ~{} tokens. Original history is saved.",
+                                "Runtime compacted context: {} → ~{} tokens. Original history is saved.",
                                 compact_tokens(before),
                                 compact_tokens(after)
                             ),
                         )?;
                     } else {
-                        ui.info(output, "Pi compacted context. Original history is saved.")?;
+                        ui.info(
+                            output,
+                            "Runtime compacted context. Original history is saved.",
+                        )?;
                     }
                     show_session_status(
                         rpc,
@@ -558,7 +561,7 @@ fn chat<R: BufRead>(
         if let Some(rejected) = output.take_rejected_queue() {
             last_failed = Some(rejected);
         }
-        // Capture the authoritative session path once Pi has settled. A
+        // Capture the authoritative session path once Runtime has settled. A
         // reconnect never guesses another session from the workspace's latest.
         if (submitted || failed) && rpc.is_connected() && interactive {
             if let Err(error) = show_session_status(
@@ -577,7 +580,7 @@ fn chat<R: BufRead>(
     }
 }
 
-/// Only full-screen scans run off-thread. Keep Pi's files authoritative and
+/// Only full-screen scans run off-thread. Keep Hibiscus's files authoritative and
 /// preserve typing that arrives while a slow first-time scan is running.
 fn list_sessions_for_chat(
     cwd: PathBuf,
@@ -633,7 +636,7 @@ fn list_sessions_for_chat(
 
 fn handle_chat_error(
     error: Box<dyn std::error::Error + Send + Sync>,
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     output: &mut Screen,
     ui: &Ui,
 ) -> Result<()> {
@@ -659,7 +662,7 @@ fn handle_chat_error(
     } else {
         ui.info(
             output,
-            "Pi disconnected. Use /reconnect; nothing is resent automatically.",
+            "Runtime disconnected. Use /reconnect; nothing is resent automatically.",
         )?;
     }
     output.flush()?;
@@ -668,7 +671,7 @@ fn handle_chat_error(
 
 #[allow(clippy::too_many_arguments)]
 fn inline_login<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
     output: &mut Screen,
     interactive: bool,
@@ -690,27 +693,40 @@ fn inline_login<R: BufRead>(
         interactive,
     )?;
     // Login is a provider choice, not a property of the current model. A
-    // logged-out Pi can select another model or have no model at all.
-    let choices = vec!["Browser Login".to_owned(), "API Key".to_owned()];
+    // logged-out Runtime can select another model or have no model at all.
+    let providers = crate::runtime::config::load()?.providers;
     let keys = &events
         .as_ref()
         .ok_or("terminal events unavailable")?
         .receiver;
-    let (provider, auth_type, label) = match output.select("Sign in to", &choices, None, keys)? {
-        Some(0) => {
-            let providers = vec![
-                "Codex · browser or device code".to_owned(),
-                "Claude · browser login".to_owned(),
-            ];
-            match output.select("Browser Login", &providers, None, keys)? {
-                Some(0) => ("openai-codex", "oauth", "Codex"),
-                Some(1) => ("anthropic", "oauth", "Claude"),
-                _ => return Ok(()),
-            }
-        }
-        Some(1) => ("", "api_key", "API key"),
-        _ => return Ok(()),
+    let methods = vec!["Browser Login".into(), "API Key".into()];
+    let Some(method) = output.select("Sign in to Hibiscus", &methods, None, keys)? else {
+        return Ok(());
     };
+    let choices = if method == 0 {
+        vec!["Codex · ChatGPT account".into()]
+    } else {
+        providers
+            .iter()
+            .filter(|p| p.authentication == crate::runtime::config::Authentication::ApiKey)
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let title = if method == 0 {
+        "Browser Login"
+    } else {
+        "API Key · provider"
+    };
+    let Some(index) = output.select(title, &choices, None, keys)? else {
+        return Ok(());
+    };
+    let provider = if method == 0 {
+        "openai-codex"
+    } else {
+        choices[index].as_str()
+    };
+    let auth_type = if method == 0 { "oauth" } else { "api_key" };
+    let label = provider;
     let keys = &events
         .as_ref()
         .ok_or("terminal events unavailable")?
@@ -724,9 +740,27 @@ fn inline_login<R: BufRead>(
                 .map(SessionStart::Selected)
                 .unwrap_or(SessionStart::New);
             rpc.reconnect(start)?;
+            if method == 0 {
+                if let Some(model) = crate::runtime::config::load()?
+                    .providers
+                    .iter()
+                    .find(|p| p.id == "openai-codex")
+                    .and_then(|p| p.models.first())
+                {
+                    rpc.request(
+                        json!({"type":"set_model","provider":"openai-codex","modelId":model.id}),
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|keys| &keys.receiver),
+                        interactive,
+                    )?;
+                }
+            }
             ui.info(
                 output,
-                &format!("{label} sign-in completed. Reconnected Pi to this chat."),
+                &format!("{label} sign-in completed. Reconnected Runtime to this chat."),
             )?;
             show_session_status(
                 rpc,
@@ -745,7 +779,7 @@ fn inline_login<R: BufRead>(
 
 #[allow(clippy::too_many_arguments)]
 fn inline_logout<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
     output: &mut Screen,
     interactive: bool,
@@ -773,18 +807,11 @@ fn inline_logout<R: BufRead>(
         .map(SessionStart::Selected)
         .unwrap_or(SessionStart::New);
     let result = sign_out(output, &keys.receiver, || rpc.close());
-    if let Ok(LogoutOutcome::Removed {
-        provider,
-        synchronization_warning,
-    }) = &result
-    {
+    if let Ok(LogoutOutcome::Removed { provider }) = &result {
         ui.info(
             output,
             &format!("Removed stored credentials for {provider}."),
         )?;
-        if *synchronization_warning {
-            ui.info(output, "Pi removed the credential but could not synchronize its helper state; reopening the chat backend.")?;
-        }
     }
     // Once removal was authorized, discard cached credentials even when the
     // helper fails or times out after a possible storage mutation.
@@ -794,18 +821,20 @@ fn inline_logout<R: BufRead>(
     }
     match result? {
         LogoutOutcome::Removed { .. } => {
-            ui.info(output, "Logout complete. Chat is preserved. Environment variables and models.json are unchanged; provider tokens are not revoked.")?;
+            ui.info(output, "Logout complete. Chat is preserved. Environment variables and config.json are unchanged; provider tokens are not revoked.")?;
         }
         LogoutOutcome::Cancelled => ui.info(output, "Logout cancelled.")?,
-        LogoutOutcome::Empty => ui.info(output, "No stored credentials to remove. Environment variables and models.json may still provide access.")?,
-        LogoutOutcome::Unavailable => return Err(local("Inline logout needs Node and a compatible Pi SDK. No credentials were changed. Check HIBISCUS_NODE and HIBISCUS_AUTH_SDK, or update Pi, then retry /logout.").into()),
+        LogoutOutcome::Empty => ui.info(
+            output,
+            "No stored credentials. Environment variables may still provide API access.",
+        )?,
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn open_session<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     path: &std::path::Path,
     output: &mut Screen,
     input: &mut R,

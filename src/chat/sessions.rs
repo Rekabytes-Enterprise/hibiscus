@@ -1,7 +1,6 @@
 use crate::{tui::ui::Ui, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::MetadataExt;
@@ -19,44 +18,8 @@ pub(crate) struct SessionInfo {
     modified: SystemTime,
 }
 
-fn session_dir(cwd: &Path) -> Result<PathBuf> {
-    if let Some(path) = env::var_os("PI_CODING_AGENT_SESSION_DIR") {
-        if !path.is_empty() {
-            return Ok(resolve(PathBuf::from(path), cwd));
-        }
-    }
-    let project_settings = cwd.join(".pi/settings.json");
-    let agent_dir = match env::var_os("PI_CODING_AGENT_DIR") {
-        Some(path) if !path.is_empty() => resolve(PathBuf::from(path), cwd),
-        _ => PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?).join(".pi/agent"),
-    };
-    for settings in [project_settings, agent_dir.join("settings.json")] {
-        match File::open(settings) {
-            Ok(file) => {
-                let data: Value = serde_json::from_reader(file)?;
-                if let Some(dir) = data["sessionDir"].as_str() {
-                    if !dir.is_empty() {
-                        return Ok(resolve(PathBuf::from(dir), cwd));
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    let encoded = cwd
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace(['/', '\\', ':'], "-");
-    Ok(agent_dir.join("sessions").join(format!("--{encoded}--")))
-}
-
-fn resolve(path: PathBuf, cwd: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path
-    } else {
-        cwd.join(path)
-    }
+fn session_dir(_cwd: &Path) -> Result<PathBuf> {
+    Ok(crate::paths::home()?.join("sessions"))
 }
 
 pub(crate) fn list(cwd: &Path) -> Result<Vec<SessionInfo>> {
@@ -68,7 +31,7 @@ fn list_cancelled(cwd: &Path, cancelled: &AtomicBool) -> Result<Vec<SessionInfo>
 }
 
 /// Scan on a worker only for full-screen /sessions and /continue. No second
-/// session index: Pi's files and the same disposable display cache are used.
+/// session index: Hibiscus's files and the same disposable display cache are used.
 pub(crate) struct Scan {
     receiver: Receiver<Result<Vec<SessionInfo>>>,
     cancelled: Arc<AtomicBool>,
@@ -111,7 +74,7 @@ impl Drop for Scan {
     }
 }
 
-// Disposable, process-local presentation cache. Pi's files remain authoritative.
+// Disposable, process-local presentation cache. Hibiscus's files remain authoritative.
 // Include inode and ctime as well as size/mtime: equal-size edits, replacements
 // and restored mtimes must not silently reuse an old title.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -214,7 +177,7 @@ impl SessionCache {
                     }
                     let title = inspect(&path, cwd, cancelled)?;
                     // Don't cache a file observed changing during the scan. Bound
-                    // cache memory independently of how many sessions Pi retains.
+                    // cache memory independently of how many sessions Runtime retains.
                     if path
                         .metadata()
                         .is_ok_and(|after| Stamp::of(&after) == stamp)

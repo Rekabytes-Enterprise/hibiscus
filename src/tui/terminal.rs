@@ -51,8 +51,8 @@ impl Terminal {
         // select supports Darwin's controlling tty device. Nonblocking reads
         // also prevent stale readiness from trapping stop()/join().
         let (sender, receiver) = mpsc::channel();
-        // Each reader is stopped and joined before handing the tty to Pi. A
-        // detached reader could steal Pi's login keystrokes even after raw mode
+        // Each reader is stopped and joined before handing the tty to runtime. A
+        // detached reader could steal Hibiscus's login keystrokes even after raw mode
         // was restored.
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopped = stop.clone();
@@ -97,7 +97,7 @@ impl Terminal {
                                 return;
                             }
                         }
-                        crate::pi::transport::signal_activity();
+                        crate::runtime::transport::signal_activity();
                     }
                     Err(error)
                         if matches!(

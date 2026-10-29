@@ -1,5 +1,5 @@
-//! Display-only @path completion. Pi receives the selected path as ordinary
-//! prompt text; unlike Pi's CLI @file arguments, RPC does not expand it.
+//! Display-only @path completion. Runtime receives the selected path as ordinary
+//! prompt text; unlike Hibiscus's CLI @file arguments, RPC does not expand it.
 use std::{
     fs,
     io::Read,

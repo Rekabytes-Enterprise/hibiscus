@@ -1,6 +1,6 @@
 mod chat;
 mod paths;
-mod pi;
+mod runtime;
 mod tui;
 mod update;
 
@@ -9,9 +9,9 @@ use std::error::Error;
 use std::io::{self, IsTerminal};
 
 use chat::{sessions, start_chat};
-use pi::{
+use runtime::{
+    bridge::{Client, SessionStart},
     dialog::Dialogs,
-    rpc::{Rpc, SessionStart},
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -71,16 +71,6 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Start> {
 
 fn run() -> Result<()> {
     let start = parse_args(env::args().skip(1))?;
-    let _extensions = if matches!(
-        start,
-        Start::Chat { .. } | Start::Prompt(_) | Start::Sessions
-    ) {
-        let guard = pi::BuiltinExtensions::new()?;
-        pi::ensure_node_path();
-        Some(guard)
-    } else {
-        None
-    };
     match start {
         Start::Update => update::update(),
         Start::Version => {
@@ -88,14 +78,14 @@ fn run() -> Result<()> {
             Ok(())
         }
         Start::Help => {
-            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nThe update command updates Hibiscus and Pi.\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /approval [on|off], /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login offers browser login for Codex/Claude or API keys through Pi's SDK; API-key providers come from Pi. Authentication errors stay inside Hibiscus; fix the reported dependency or provider problem and retry.\n/logout removes a selected provider's stored credentials inside full-screen Hibiscus.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_PI to override the pi executable.");
+            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nThe update command updates Hibiscus.\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /approval [on|off], /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login stores a provider API key in Hibiscus. Providers and models are configured in ~/.hibiscus/config.json. Authentication errors stay inside Hibiscus; fix the reported dependency or provider problem and retry.\n/logout removes a selected provider's stored credentials inside full-screen Hibiscus.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_HOME to override the Hibiscus data directory.");
             Ok(())
         }
         Start::Prompt(prompt) => {
             if prompt.trim().is_empty() {
                 return Err("prompt cannot be empty".into());
             }
-            let mut rpc = Rpc::start(SessionStart::New)?;
+            let mut rpc = Client::start(SessionStart::New)?;
             let mut dialogs = Dialogs;
             let outcome = rpc.prompt(
                 &prompt,

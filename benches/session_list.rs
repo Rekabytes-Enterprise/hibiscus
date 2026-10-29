@@ -2,6 +2,8 @@
 // Source modules include #[cfg(test)] imports under Clippy's bench build,
 // which has no test harness. They remain checked normally in the binary tests.
 #![allow(dead_code, unused_imports)]
+#[path = "../src/paths.rs"]
+mod paths;
 #[path = "../src/chat/sessions.rs"]
 mod sessions;
 #[path = "../src/tui/ui.rs"]

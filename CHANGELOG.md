@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Native runtime migration
+
+- Replace the Pi SDK/runtime with native Rust provider adapters, tools, sessions, API-key authentication, approvals, queueing and compaction. Runtime no longer needs Pi or Node.
+- Support OpenAI Responses, compatible Chat Completions and Anthropic Messages through HTTPS. Automatic Pi-data import is unavailable in the native version; explicit model configuration replaces the Pi catalog/context override.
+- Add native Codex browser OAuth with PKCE/state validation, masked redirect input, private token storage, serialized refresh and subscription transport. No Pi SDK or personal client ID is required.
+- Installer and updater manage Hibiscus only. This source change does not publish native release assets or npm packages.
+
 ### Changed
 
 - Remove Pi TUI authentication handoff. Login dependency/provider failures now use recoverable errors inside Hibiscus; line/piped authentication reports that full-screen input is required.

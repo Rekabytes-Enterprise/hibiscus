@@ -1,4 +1,4 @@
-//! Shared docked dialog chrome and state. Models/sessions and Pi extension
+//! Shared docked dialog chrome and state. Models/sessions and Runtime extension
 //! dialogs use the same borders, margins, selection rows and keyboard hints.
 use super::{picker::Picker, screen::Navigation};
 use serde_json::{json, Value};
@@ -188,7 +188,7 @@ impl Modal {
         }
     }
     pub(crate) fn from_rpc(event: &Value) -> Option<Self> {
-        let raw_title = event["title"].as_str().unwrap_or("Pi request");
+        let raw_title = event["title"].as_str().unwrap_or("Runtime request");
         if raw_title.len() > 16_384 {
             return None;
         }

@@ -1,4 +1,4 @@
-//! Display-only activity for one portion of a Pi run. Routine reads and bash
+//! Display-only activity for one portion of a Runtime run. Routine reads and bash
 //! calls contribute to one compact summary; edits and failures stay reviewable.
 use std::collections::HashMap;
 

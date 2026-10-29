@@ -2,13 +2,18 @@
 name = "hibiscus"
 version = "0.3.4"
 edition = "2021"
-description = "A Rust CLI for the Pi agent over RPC"
+description = "A standalone Rust coding agent"
 license = "MIT"
 
 [dependencies]
-serde = { version = "1", features = ["rc"] }
+serde = { version = "1", features = ["rc", "derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "process", "macros"] }
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"
 
 [dev-dependencies]
 # Integration tests use only the standard library.
