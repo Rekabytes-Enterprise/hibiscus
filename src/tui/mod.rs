@@ -1,11 +1,18 @@
 mod activity;
 mod clipboard;
 mod file_mentions;
+mod inline;
+mod inline_tools;
+pub(crate) mod line_editor;
 pub(crate) mod markdown;
 mod modal;
+pub(crate) mod mode;
 mod paint;
+mod paste;
 pub(crate) mod picker;
 pub(crate) mod screen;
 pub(crate) mod terminal;
 mod text_clipboard;
+pub(crate) mod tool;
 pub(crate) mod ui;
+mod welcome;

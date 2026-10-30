@@ -4,7 +4,7 @@ Thanks for helping improve Hibiscus. Start with the [architecture](docs/architec
 
 ## Scope
 
-Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, sessions and terminal presentation. Keep external provider formats inside adapters. Validate tool arguments before execution and never run tools from an incomplete stream. Use native typed session/event data and preserve cancellation, approvals and request settlement. Do not restore a Pi SDK/runtime dependency. See [native migration](docs/native-runtime.md).
+Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, sessions and terminal presentation. Keep external provider formats inside adapters. Validate tool arguments before execution and never run tools from an incomplete stream. Use native typed session/event data and preserve cancellation and request settlement. Do not restore a Pi SDK/runtime dependency. See [native migration](docs/native-runtime.md).
 
 ## Fork, branch, and open a pull request
 
@@ -47,6 +47,6 @@ Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, se
 
 ## Safety and privacy
 
-Never commit API keys, OAuth data, `~/.hibiscus/auth.json`, private sessions, chat transcripts, or user-specific paths. Don't place real credentials in fixtures, logs, screenshots, or issue reports. Approval dialogs must never auto-approve in non-interactive mode. Preserve bounded local framing, request-ID correlation and the run-settlement boundary.
+Never commit API keys, OAuth data, `~/.hibiscus/auth.json`, private sessions, chat transcripts, or user-specific paths. Don't place real credentials in fixtures, logs, screenshots, or issue reports. Native tools execute directly after validation, including shell commands in non-interactive mode. Preserve bounded local framing, request-ID correlation and the run-settlement boundary.
 
 For `/login`, keep key entry masked and store credentials only in Hibiscus's private auth file. Do not log provider response bodies or keys. Authentication never launches another agent. Test with local HTTP fixtures and synthetic credentials. Preserve the existing session and recoverable draft after failures, and never replay a tool with an unknown outcome automatically.

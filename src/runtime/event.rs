@@ -17,6 +17,7 @@ pub enum Event<'a> {
         name: &'a str,
         failed: bool,
         result: &'a Value,
+        elapsed: std::time::Duration,
     },
     Failed(&'a str),
     Settled,
@@ -38,8 +39,10 @@ impl Event<'_> {
                 name,
                 failed,
                 result,
+                elapsed,
             } => {
-                json!({"type":"tool_execution_end","toolCallId":id,"toolName":name,"isError":failed,"result":result})
+                let duration_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+                json!({"type":"tool_execution_end","toolCallId":id,"toolName":name,"isError":failed,"result":result,"durationMs":duration_ms})
             }
             Self::Failed(message) => {
                 json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":super::error::safe_message(message)}})

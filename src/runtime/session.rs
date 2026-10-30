@@ -97,6 +97,7 @@ impl Session {
             config
                 .providers
                 .iter()
+                .filter(|p| config::key(p).is_ok())
                 .flat_map(|p| p.models.iter().map(move |m| format!("{}/{}", p.id, m.id)))
                 .next()
         });
@@ -193,7 +194,7 @@ impl Session {
         let (p, m) = self
             .model
             .as_ref()
-            .ok_or("No model configured. Add providers/models to config.json and use /models.")?;
+            .ok_or("No active model. Use /login to sign in, then choose a model with /models.")?;
         let provider = config
             .providers
             .iter()
@@ -210,8 +211,10 @@ impl Session {
         let model = self
             .selected(config)
             .ok()
+            .filter(|(p, _)| config::key(p).is_ok())
             .map(|(p, m)| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window}));
-        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"model":model,"thinkingLevel":self.thinking})
+        let has_credentials = config.providers.iter().any(|p| config::key(p).is_ok());
+        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"model":model,"thinkingLevel":self.thinking,"hasCredentials":has_credentials})
     }
     pub fn stats(&self, config: &Config) -> Value {
         let window = self

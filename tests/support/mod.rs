@@ -49,11 +49,15 @@ impl Pty {
     }
 
     pub fn spawn_with_color(command: &mut Command, color: bool) -> Self {
+        Self::spawn_with_size(command, color, 80, 24)
+    }
+
+    pub fn spawn_with_size(command: &mut Command, color: bool, columns: u16, rows: u16) -> Self {
         let mut master = -1;
         let mut slave = -1;
         let mut size = libc::winsize {
-            ws_row: 24,
-            ws_col: 80,
+            ws_row: rows,
+            ws_col: columns,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
@@ -83,9 +87,10 @@ impl Pty {
             unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
             -1
         );
-        command
-            .env("TERM", "xterm-256color")
-            .env_remove("HIBISCUS_NO_SYNC_UPDATE");
+        if !command.get_envs().any(|(key, _)| key == "TERM") {
+            command.env("TERM", "xterm-256color");
+        }
+        command.env_remove("HIBISCUS_NO_SYNC_UPDATE");
         if color {
             command.env_remove("NO_COLOR");
         } else {
@@ -111,7 +116,7 @@ impl Pty {
         }
     }
 
-    fn pump(&mut self) {
+    pub fn pump(&mut self) {
         let mut buf = [0; 8192];
         // Bound work per iteration even if the child writes continuously.
         for _ in 0..128 {
@@ -239,12 +244,33 @@ impl Pty {
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        // Every fixture child starts its own session/process group. Terminate
-        // its mock Pi and Node descendants as well as the direct child.
+        // Every fixture child owns its session/process group. Bound reaping as
+        // well as normal PTY waits: macOS can leave a killed tty child exiting.
         unsafe {
             libc::kill(-(self.child.id() as i32), libc::SIGKILL);
         }
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) => {}
+            }
+            if Instant::now() >= deadline {
+                if std::thread::panicking() {
+                    eprintln!(
+                        "PTY cleanup: killed child {} did not exit within two seconds",
+                        self.child.id()
+                    );
+                } else {
+                    panic!(
+                        "PTY cleanup: killed child {} did not exit within two seconds",
+                        self.child.id()
+                    );
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

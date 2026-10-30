@@ -9,8 +9,12 @@ pub(crate) struct Command {
 
 const COMMANDS: &[Command] = &[
     Command {
-        name: "/approval",
-        description: "Show or change shell approvals: on / off",
+        name: "/cli",
+        description: "Switch to inline terminal chat",
+    },
+    Command {
+        name: "/tui",
+        description: "Switch to full-screen terminal chat",
     },
     Command {
         name: "/compact",
@@ -43,6 +47,10 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "/new",
         description: "Start a new session",
+    },
+    Command {
+        name: "/output",
+        description: "Inspect saved tool output locally",
     },
     Command {
         name: "/quit",
@@ -110,5 +118,6 @@ mod tests {
         assert!(matches("hello").is_empty());
         assert!(!matches("/").iter().any(|cmd| cmd.name == "/fork"));
         assert!(matches("/loop").is_empty());
+        assert!(matches("/approval").is_empty());
     }
 }

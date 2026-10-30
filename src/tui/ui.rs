@@ -112,6 +112,15 @@ impl Ui {
 
     pub(crate) fn help(&self, out: &mut impl Write) -> io::Result<()> {
         writeln!(out, "\n  Chat        /new  /continue  /sessions  /quit")?;
+        writeln!(out, "  CLI input   Enter send · Alt+Enter / Ctrl+J newline · arrows edit · paste keeps lines")?;
+        writeln!(
+            out,
+            "  Output      /output  /output list  /output <number>  (saved results)"
+        )?;
+        writeln!(
+            out,
+            "  View        /cli  (inline)  /tui  (full screen, default)"
+        )?;
         writeln!(
             out,
             "  Models      /models  /thinking [level]  (↑↓ / wheel, Enter, Esc)"
@@ -122,9 +131,8 @@ impl Ui {
         )?;
         writeln!(
             out,
-            "  Approvals   /approval [on|off]  (saved across restarts)"
+            "  Account     /login  (browser login or provider API key)"
         )?;
-        writeln!(out, "  Account     /login  (Codex here; others in runtime)")?;
         writeln!(
             out,
             "              /logout  (remove stored credentials here)"

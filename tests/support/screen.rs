@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 pub fn snapshots(output: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut rows = BTreeMap::<usize, Vec<char>>::new();
-    let (mut row, mut col) = (1, 0);
+    let (mut row, mut col) = (1usize, 0usize);
     let mut chars = output.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
@@ -22,6 +22,15 @@ pub fn snapshots(output: &str) -> Vec<String> {
                         args.push(ch);
                     };
                     match end {
+                        'A' => {
+                            row = row
+                                .saturating_sub(args.parse::<usize>().unwrap_or(1).max(1))
+                                .max(1)
+                        }
+                        'B' => row += args.parse::<usize>().unwrap_or(1).max(1),
+                        'C' => col += args.parse::<usize>().unwrap_or(1).max(1),
+                        'D' => col = col.saturating_sub(args.parse::<usize>().unwrap_or(1).max(1)),
+                        'G' => col = args.parse::<usize>().unwrap_or(1).saturating_sub(1),
                         'H' | 'f' => {
                             let mut parts = args.split(';');
                             row = parts.next().and_then(|x| x.parse().ok()).unwrap_or(1);

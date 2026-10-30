@@ -9,7 +9,7 @@ use crate::Result;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     os::unix::net::UnixStream,
     sync::{Arc, Mutex},
 };
@@ -37,6 +37,10 @@ enum Command {
     },
     GetState,
     GetMessages,
+    GetToolOutputs,
+    GetToolOutput {
+        index: Option<std::num::NonZeroUsize>,
+    },
     GetAvailableModels,
     GetAvailableThinkingLevels,
     GetSessionStats,
@@ -58,12 +62,6 @@ enum Command {
     Compact {
         #[serde(default, rename = "customInstructions")]
         custom_instructions: Option<String>,
-    },
-    ExtensionUiResponse {
-        #[serde(default)]
-        value: Option<String>,
-        #[serde(default)]
-        cancelled: bool,
     },
 }
 #[derive(Clone, serde::Serialize, Deserialize)]
@@ -133,8 +131,6 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
     let queue = Arc::new(Mutex::new(Queue::default()));
     let config = Arc::new(config);
     let (cancel, _) = watch::channel(false);
-    let (approvals, approval_rx) = mpsc::unbounded_channel();
-    let approval_receiver = Arc::new(tokio::sync::Mutex::new(approval_rx));
     let mut active: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(bytes) = input.recv().await {
         let request: Envelope = match serde_json::from_slice(&bytes) {
@@ -153,10 +149,6 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
             }
         };
         let id = request.id;
-        if let Command::ExtensionUiResponse { value, cancelled } = request.command {
-            let _ = approvals.send((id, value.filter(|_| !cancelled)));
-            continue;
-        }
         let busy = queue.lock().unwrap().running;
         match request.command {
             Command::Abort => {
@@ -251,10 +243,7 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                     queue.clone(),
                     cancel.subscribe(),
                 );
-                let approval_receiver = approval_receiver.clone();
                 active = Some(tokio::spawn(async move {
-                    let mut rx = approval_receiver.lock().await;
-                    while rx.try_recv().is_ok() {}
                     let result = run_turns(
                         Prompt {
                             text: message,
@@ -266,7 +255,6 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                         &o,
                         &q,
                         &mut stop,
-                        &mut rx,
                     )
                     .await;
                     if let Err(e) = result {
@@ -326,6 +314,12 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                     match command {
                         Command::GetState => Ok(s.state(&config)),
                         Command::GetMessages => Ok(json!({"messages":s.messages})),
+                        Command::GetToolOutputs => {
+                            Ok(json!({"outputs":super::tool_output::list(&s.messages)}))
+                        }
+                        Command::GetToolOutput { index } => {
+                            Ok(json!({"output":super::tool_output::get(&s.messages, index)}))
+                        }
                         Command::GetSessionStats => Ok(s.stats(&config)),
                         Command::GetAvailableModels => Ok(
                             json!({"models":config.providers.iter().flat_map(|p|p.models.iter().map(move|m|json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window,"reasoning":m.reasoning}))).collect::<Vec<_>>()}),
@@ -402,9 +396,7 @@ async fn run_turns(
     out: &mpsc::Sender<Value>,
     queue: &Arc<Mutex<Queue>>,
     cancel: &mut watch::Receiver<bool>,
-    approvals: &mut mpsc::UnboundedReceiver<(String, Option<String>)>,
 ) -> Result<()> {
-    let mut grants = HashSet::<String>::new();
     emit(out, Event::Started.wire()).await?;
     loop {
         maybe_compact(&session, &config, out, cancel).await?;
@@ -510,24 +502,21 @@ async fn run_turns(
                 .await?;
                 let mut steps = session.lock().unwrap().steps.clone();
                 let cwd = snapshot.cwd.clone();
-                let result=async{
-                    tools::validate(&name,&args)?;
-                    if *cancel.borrow(){return Err("Tool cancelled before execution".into());}
-                    if name=="bash"&&super::approval_enabled(None)?{
-                        let command=args["command"].as_str().ok_or("Invalid shell command")?;
-                        if !grants.contains(command){
-                            let question=format!("approval-{}-{id}",config::unique());emit(out,json!({"type":"extension_ui_request","id":question,"method":"select","title":"Approval needed: bash","message":format!("Run this exact command in {}?\n\n{command}\n\nAlways Allow applies only to this exact command in this run.",cwd.display()),"options":["Deny","Allow","Always Allow"]})).await?;
-                            loop{let answer=tokio::select!{v=approvals.recv()=>v,_=cancel.changed()=>return Err("Approval cancelled".into())};match answer{Some((reply,answer)) if reply==question=>{match answer.as_deref(){Some("Allow")=>{},Some("Always Allow")=>{grants.insert(command.into());},_=>return Err("Shell execution denied".into())}break;},Some(_)=>{},None=>return Err("Approval input unavailable".into())}}
-                        }
-                    }
-                    tools::execute(&name,&args,&cwd,&mut steps,cancel).await
-                }.await;
+                let started = std::time::Instant::now();
+                let result = tools::execute(&name, &args, &cwd, &mut steps, cancel).await;
+                let elapsed = started.elapsed();
                 let (is_error, result) = match result {
                     Ok(v) => (false, v),
-                    Err(e) => (
-                        true,
-                        json!({"content":[{"type":"text","text":e.to_string()}],"details":{}}),
-                    ),
+                    Err(e) => {
+                        let details = match e.downcast_ref::<tools::ShellExit>() {
+                            Some(shell) => json!({"exitCode":shell.code()}),
+                            None => json!({}),
+                        };
+                        (
+                            true,
+                            json!({"content":[{"type":"text","text":e.to_string()}],"details":details}),
+                        )
+                    }
                 };
                 let message = Message::ToolResult {
                     tool_call_id: id.clone(),
@@ -551,6 +540,7 @@ async fn run_turns(
                         name: &name,
                         failed: is_error,
                         result: &result,
+                        elapsed,
                     }
                     .wire(),
                 )

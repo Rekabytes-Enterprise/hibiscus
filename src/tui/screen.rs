@@ -1,3 +1,4 @@
+use super::paste::Input as PasteInput;
 use serde_json::Value;
 use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsRawFd;
@@ -10,11 +11,13 @@ use std::{
 
 use super::{
     activity::Timeline,
-    file_mentions,
+    file_mentions, inline,
     markdown::{self, Role, Tone},
     modal::{self, Modal},
+    mode::Mode,
     paint::{Cursor, Painter, SYNC_END},
     picker::Picker,
+    welcome,
 };
 use crate::{chat::commands, Result};
 
@@ -119,54 +122,6 @@ impl TextSelection {
     }
 }
 
-#[derive(Default)]
-struct PasteInput {
-    bytes: Vec<u8>,
-    overflow: bool,
-}
-
-impl PasteInput {
-    const END: &'static [u8] = b"\x1b[201~";
-    fn push(&mut self, byte: u8) -> Option<Option<String>> {
-        self.bytes.push(byte);
-        if self.bytes.ends_with(Self::END) {
-            self.bytes.truncate(self.bytes.len() - Self::END.len());
-            if self.overflow {
-                return Some(None);
-            }
-            let text = match std::str::from_utf8(&self.bytes) {
-                Ok(text) => text,
-                Err(_) => return Some(None),
-            };
-            let mut clean = String::new();
-            // tmux can re-encode pasted Ctrl+J as CSI-u; treat it as text
-            // rather than allowing it to become a submit/keyboard event.
-            let decoded = text.replace("\x1b[106;5u", "\n");
-            let mut chars = decoded.chars().peekable();
-            while let Some(ch) = chars.next() {
-                match ch {
-                    '\r' => {
-                        if chars.peek() == Some(&'\n') {
-                            chars.next();
-                        }
-                        clean.push('\n');
-                    }
-                    '\n' => clean.push('\n'),
-                    '\t' => clean.push_str("    "),
-                    ch if !ch.is_control() => clean.push(ch),
-                    _ => {}
-                }
-            }
-            return Some(Some(clean));
-        }
-        if self.bytes.len() > 8192 + Self::END.len() {
-            self.overflow = true;
-            self.bytes.drain(..self.bytes.len() - Self::END.len());
-        }
-        None
-    }
-}
-
 fn sgr_mouse(sequence: &str) -> Option<MouseEvent> {
     let release = sequence.ends_with('m');
     let fields = sequence.strip_prefix('<')?.trim_end_matches(['M', 'm']);
@@ -232,6 +187,22 @@ pub(crate) fn escape_key(events: &Receiver<u8>) -> Navigation {
 }
 
 pub(crate) trait ScrollDisplay: Write {
+    fn assistant_start(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn assistant_text(&mut self, text: &str) -> io::Result<()> {
+        self.write_all(text.as_bytes())
+    }
+    fn end_assistant_text(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    fn end_turn(&mut self) -> io::Result<()> {
+        self.end_assistant_text()
+    }
+    fn diff_line(&mut self, line: &str) -> io::Result<()> {
+        writeln!(self, "    {line}")
+    }
+
     fn scroll(&mut self, _navigation: Navigation) -> io::Result<()> {
         Ok(())
     }
@@ -252,6 +223,7 @@ pub(crate) trait ScrollDisplay: Write {
         Ok(())
     }
     fn stop_work(&mut self) -> io::Result<()> {
+        self.end_assistant_text()?;
         Ok(())
     }
     fn complete_diagrams(&mut self) -> io::Result<()> {
@@ -266,16 +238,14 @@ pub(crate) trait ScrollDisplay: Write {
     fn thinking_end(&mut self) -> io::Result<bool> {
         Ok(false)
     }
-    fn tool_start(&mut self, _id: &str, _name: &str, _path: &str) -> io::Result<bool> {
+    fn tool_start(&mut self, _id: &str, _call: &super::tool::Call) -> io::Result<bool> {
         Ok(false)
     }
     fn tool_end(
         &mut self,
         _id: &str,
-        _name: &str,
-        _path: &str,
-        _failed: bool,
-        _diff: Option<&str>,
+        _call: &super::tool::Call,
+        _result: &super::tool::Outcome<'_>,
     ) -> io::Result<bool> {
         Ok(false)
     }
@@ -325,8 +295,8 @@ impl ScrollDisplay for io::Stdout {}
 impl ScrollDisplay for Vec<u8> {}
 
 const FLOWERS: [&str; 4] = ["✿", "❀", "✾", "❁"];
-// Ubuntu's aubergine terminal background. Set SGR only inside the alternate
-// screen; never change the terminal's configured background with OSC 11.
+// TUI keeps the aubergine theme; CLI uses a local dark SGR fill.
+// Neither view changes the terminal's configured palette with OSC 11.
 const BASE_BACKGROUND: &str = "\x1b[48;2;48;10;36m";
 
 // Give narrow terminals one margin cell instead of two. Keep Markdown,
@@ -493,6 +463,14 @@ fn with_usage(mut left: String, limit: usize, usage: Option<&SessionUsage>) -> S
 pub(crate) struct Screen {
     out: io::Stdout,
     full: bool,
+    terminal: bool,
+    full_available: bool,
+    has_credentials: bool,
+    inline_active: bool,
+    inline_diff: inline::Diff,
+    inline_tools: super::inline_tools::Tools,
+    inline_speaker: bool,
+    inline_waiting: Option<bool>,
     suspended: bool,
     color: bool,
     painter: Painter,
@@ -553,13 +531,26 @@ pub(crate) struct Screen {
 
 impl Screen {
     pub(crate) fn new(interactive: bool) -> io::Result<Self> {
+        Self::with_mode(interactive, Mode::Tui)
+    }
+
+    pub(crate) fn with_mode(interactive: bool, mode: Mode) -> io::Result<Self> {
         let out = io::stdout();
-        let full =
-            interactive && out.is_terminal() && env::var("TERM").is_ok_and(|term| term != "dumb");
-        let color = full && env::var_os("NO_COLOR").is_none();
+        let terminal = interactive && out.is_terminal();
+        let full_available = terminal && env::var("TERM").is_ok_and(|term| term != "dumb");
+        let full = full_available && mode == Mode::Tui;
+        let color = full_available && env::var_os("NO_COLOR").is_none();
         let mut screen = Self {
             out,
             full,
+            terminal,
+            full_available,
+            has_credentials: false,
+            inline_active: false,
+            inline_diff: inline::Diff::default(),
+            inline_tools: super::inline_tools::Tools::default(),
+            inline_speaker: false,
+            inline_waiting: None,
             suspended: true,
             color,
             painter: Painter::new(env::var_os("HIBISCUS_NO_SYNC_UPDATE").is_none()),
@@ -593,7 +584,7 @@ impl Screen {
             initial_user_pending: None,
             rejected_queued: None,
             active_utf8: Vec::new(),
-            model: "no model".into(),
+            model: "no active model".into(),
             thinking: None,
             session: "new chat".into(),
             usage: None,
@@ -624,14 +615,75 @@ impl Screen {
             screen.full = false;
             screen.color = false;
         }
-        if screen.full {
-            screen.resume()?;
-        }
+        screen.resume()?;
         Ok(screen)
     }
 
     pub(crate) fn is_full(&self) -> bool {
         self.full
+    }
+
+    pub(crate) fn is_terminal_chat(&self) -> bool {
+        self.terminal
+    }
+
+    pub(crate) fn set_mode(&mut self, mode: Mode) -> io::Result<()> {
+        if mode == Mode::Tui && (!self.full_available || self.size().0 < 40 || self.size().1 < 14) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "TUI requires an interactive terminal at least 40 columns by 14 rows.",
+            ));
+        }
+        self.suspend()?;
+        self.full = mode == Mode::Tui;
+        self.resume()?;
+        Ok(())
+    }
+
+    pub(crate) fn inline_welcome(&mut self) -> io::Result<()> {
+        if !self.terminal || self.full {
+            return Ok(());
+        }
+        let context = welcome::Context {
+            workspace: &self.workspace,
+            model: &self.model,
+            mode: Mode::Cli,
+            has_credentials: self.has_credentials,
+        };
+        let text = welcome::inline(context, self.inline_active);
+        write!(self, "\n{text}\n")?;
+        self.flush()
+    }
+    pub(crate) fn inline_input_style(&self) -> Option<bool> {
+        (self.terminal && self.full_available && !self.full).then_some(self.inline_active)
+    }
+
+    pub(crate) fn saved_tool_outputs(
+        &mut self,
+        entries: &[crate::runtime::tool_output::Summary],
+    ) -> io::Result<()> {
+        let text = super::inline_tools::saved_list(entries, self.inline_active, self.size().0);
+        self.write_all(text.as_bytes())?;
+        self.flush()
+    }
+    pub(crate) fn saved_tool_output(
+        &mut self,
+        entry: Option<&crate::runtime::tool_output::Output>,
+    ) -> io::Result<()> {
+        let text = super::inline_tools::saved_output(entry, self.inline_active, self.size().0);
+        self.write_all(text.as_bytes())?;
+        self.flush()
+    }
+    fn end_inline_wait(&mut self) -> io::Result<bool> {
+        match self.inline_waiting.take() {
+            Some(rewrite) => {
+                if rewrite {
+                    self.write_all(b"\r\x1b[2K")?;
+                }
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     pub(crate) fn diagnostic_feed(&self) -> Option<crate::runtime::diagnostics::Diagnostics> {
@@ -673,6 +725,16 @@ impl Screen {
     }
 
     pub(crate) fn suspend(&mut self) -> io::Result<()> {
+        self.end_inline_wait()?;
+        if self.terminal && self.full_available && !self.full {
+            self.out.write_all(b"\x1b[?2004l")?;
+        }
+        if self.inline_active {
+            self.end_assistant_text()?;
+            self.out.write_all(b"\x1b[0m")?;
+            self.inline_active = false;
+            self.out.flush()?;
+        }
         if self.full && !self.suspended {
             self.painter.invalidate();
             self.last_paint = None;
@@ -695,6 +757,11 @@ impl Screen {
     }
 
     pub(crate) fn resume(&mut self) -> io::Result<()> {
+        if !self.full && self.terminal && self.color && !self.inline_active {
+            write!(self.out, "{}\x1b[J", inline::BASE)?;
+            self.inline_active = true;
+            self.out.flush()?;
+        }
         if self.full && self.suspended {
             self.painter.invalidate();
             self.last_paint = None;
@@ -717,8 +784,11 @@ impl Screen {
     }
 
     pub(crate) fn status(&mut self, state: &Value) -> io::Result<()> {
+        self.has_credentials = state["hasCredentials"]
+            .as_bool()
+            .unwrap_or_else(|| state["model"].is_object());
         let provider = state["model"]["provider"].as_str().unwrap_or("");
-        let model = state["model"]["id"].as_str().unwrap_or("no model");
+        let model = state["model"]["id"].as_str().unwrap_or("no active model");
         self.model = if provider.is_empty() {
             clean(model)
         } else {
@@ -1242,12 +1312,17 @@ impl Screen {
             return;
         }
         self.clear_file_suggestions();
-        let options =
-            if self.activity.is_some() || self.draft.contains('\n') || !self.images.is_empty() {
-                Vec::new()
-            } else {
-                commands::matches(&self.draft)
-            };
+        let options = if self.activity.is_some()
+            || self.draft.contains('\n')
+            || !self.images.is_empty()
+        {
+            Vec::new()
+        } else {
+            commands::matches(&self.draft)
+                .into_iter()
+                .filter(|cmd| (!self.has_credentials || cmd.name != "/login") && cmd.name != "/tui")
+                .collect()
+        };
         self.suggestions = if self.suggestions_dismissed || options.is_empty() {
             None
         } else {
@@ -2242,6 +2317,20 @@ impl Screen {
         let available = rows.saturating_sub(8 + draft_height + pending_height);
         let modal = self.picker_rows(width, available, &left);
         let transcript_rows = modal.as_ref().map_or(available, |(top, _)| *top);
+        let welcome = if self.transcript.is_empty() && self.activity.is_none() {
+            welcome::rows(
+                width,
+                transcript_rows,
+                welcome::Context {
+                    workspace: &self.workspace,
+                    model: &self.model,
+                    mode: Mode::Tui,
+                    has_credentials: self.has_credentials,
+                },
+            )
+        } else {
+            Vec::new()
+        };
         let viewport = transcript_viewport(lines.len(), transcript_rows, self.scroll);
         self.scroll = viewport.scroll;
         let start = viewport.start;
@@ -2285,6 +2374,8 @@ impl Screen {
                     "{}\x1b[K\r\n",
                     self.transcript_line_selected(line, width, columns, &left, row)
                 ));
+            } else if let Some(line) = welcome.get(row) {
+                frame.push_str(&format!("{left}{}\x1b[K\r\n", line.render(self.color)));
             } else {
                 frame.push_str("\x1b[K\r\n");
             }
@@ -2488,6 +2579,52 @@ impl Screen {
 }
 
 impl ScrollDisplay for Screen {
+    fn assistant_start(&mut self) -> io::Result<bool> {
+        if self.full || !self.terminal {
+            return Ok(false);
+        }
+        let was_waiting = self.end_inline_wait()?;
+        let pending = self.inline_tools.flush(self.inline_active, self.size().0);
+        self.write_all(pending.as_bytes())?;
+        if !self.inline_speaker {
+            self.inline_speaker = true;
+            if self.inline_active {
+                write!(self, "\n\x1b[1;38;2;225;80;130mhibi\x1b[0m\n")?;
+            } else {
+                write!(self, "\nhibi\n")?;
+            }
+        } else if !was_waiting {
+            writeln!(self)?;
+        }
+        Ok(true)
+    }
+    fn assistant_text(&mut self, text: &str) -> io::Result<()> {
+        if self.inline_active {
+            let styled = self.inline_diff.push(text);
+            self.write_all(styled.as_bytes())
+        } else {
+            self.write_all(text.as_bytes())
+        }
+    }
+    fn end_assistant_text(&mut self) -> io::Result<()> {
+        let tail = self.inline_diff.finish();
+        self.write_all(tail.as_bytes())
+    }
+    fn end_turn(&mut self) -> io::Result<()> {
+        self.end_inline_wait()?;
+        self.end_assistant_text()?;
+        let pending = self.inline_tools.flush(self.inline_active, self.size().0);
+        self.write_all(pending.as_bytes())
+    }
+    fn diff_line(&mut self, line: &str) -> io::Result<()> {
+        let line = if self.inline_active {
+            inline::patch_line(line)
+        } else {
+            line.to_owned()
+        };
+        writeln!(self, "    {line}")
+    }
+
     fn extension_dialog(&mut self, event: &Value, events: &Receiver<u8>) -> Result<Option<Value>> {
         if !self.full || self.suspended {
             return Ok(None);
@@ -2529,12 +2666,24 @@ impl ScrollDisplay for Screen {
     }
 
     fn start_work(&mut self) -> io::Result<()> {
+        self.inline_speaker = false;
         self.exit_armed = None;
         if self.input_notice.as_deref() == Some("Press Ctrl+C again within 2s to quit") {
             self.input_notice = None;
         }
         self.current_timeline = None;
         if !self.full {
+            if self.terminal {
+                self.assistant_start()?;
+                self.inline_waiting = Some(self.inline_active);
+                let status = super::inline_tools::waiting(self.size().0);
+                if self.inline_active {
+                    write!(self, "\x1b[38;2;155;155;155m{status}{}", inline::BASE)?;
+                } else {
+                    writeln!(self, "{status}")?;
+                }
+                self.flush()?;
+            }
             return Ok(());
         }
         let now = Instant::now();
@@ -2637,6 +2786,7 @@ impl ScrollDisplay for Screen {
         self.render()
     }
     fn stop_work(&mut self) -> io::Result<()> {
+        self.end_turn()?;
         self.freeze_timeline();
         self.queue_steering = 0;
         self.queue_follow_up = 0;
@@ -2670,27 +2820,55 @@ impl ScrollDisplay for Screen {
         Ok(())
     }
     fn thinking_end(&mut self) -> io::Result<bool> {
-        Ok(self.full)
+        Ok(self.terminal)
     }
-    fn tool_start(&mut self, id: &str, name: &str, path: &str) -> io::Result<bool> {
+    fn tool_start(&mut self, id: &str, call: &super::tool::Call) -> io::Result<bool> {
         if !self.full {
-            return Ok(false);
+            if !self.terminal {
+                return Ok(false);
+            }
+            self.end_inline_wait()?;
+            if !self.inline_speaker {
+                self.assistant_start()?;
+            }
+            let row = self
+                .inline_tools
+                .start(id, call, self.inline_active, self.size().0);
+            self.write_all(row.as_bytes())?;
+            return Ok(true);
         }
-        self.update_timeline(|timeline| timeline.tool_start(id, name, path))?;
+        let path = if call.name == "bash" {
+            ""
+        } else {
+            &call.target
+        };
+        self.update_timeline(|timeline| timeline.tool_start(id, &call.name, path))?;
         Ok(true)
     }
     fn tool_end(
         &mut self,
         id: &str,
-        name: &str,
-        path: &str,
-        failed: bool,
-        diff: Option<&str>,
+        call: &super::tool::Call,
+        result: &super::tool::Outcome<'_>,
     ) -> io::Result<bool> {
         if !self.full {
-            return Ok(false);
+            if !self.terminal {
+                return Ok(false);
+            }
+            let row = self
+                .inline_tools
+                .end(id, call, result, self.inline_active, self.size().0);
+            self.write_all(row.as_bytes())?;
+            return Ok(true);
         }
-        self.update_timeline(|timeline| timeline.tool_end(id, name, path, failed, diff))?;
+        let path = if call.name == "bash" {
+            ""
+        } else {
+            &call.target
+        };
+        self.update_timeline(|timeline| {
+            timeline.tool_end(id, &call.name, path, result.failed, result.diff)
+        })?;
         Ok(true)
     }
     fn split_timeline(&mut self) -> io::Result<()> {
@@ -3054,6 +3232,29 @@ impl Write for Screen {
                 self.scroll = 0;
             }
             Ok(buf.len())
+        } else if self.terminal {
+            let styled = if self.inline_active {
+                inline::background(buf)
+            } else {
+                std::borrow::Cow::Borrowed(buf)
+            };
+            let original_len = buf.len();
+            let buf = styled.as_ref();
+            // The shared terminal reader keeps raw mode active in CLI.
+            // Normalize output newlines without changing piped output.
+            let mut start = 0;
+            for (index, byte) in buf.iter().enumerate() {
+                if *byte == b'\n' {
+                    self.out.write_all(&buf[start..index])?;
+                    if index == 0 || buf[index - 1] != b'\r' {
+                        self.out.write_all(b"\r")?;
+                    }
+                    self.out.write_all(b"\n")?;
+                    start = index + 1;
+                }
+            }
+            self.out.write_all(&buf[start..])?;
+            Ok(original_len)
         } else {
             self.out.write(buf)
         }
@@ -3235,6 +3436,21 @@ fn draft_lines(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connected_command_picker_hides_login_without_an_empty_panel() {
+        let mut screen = Screen::new(false).unwrap();
+        screen
+            .status(&serde_json::json!({"hasCredentials":true}))
+            .unwrap();
+        screen.insert_draft("/login");
+        screen.refresh_suggestions();
+        assert!(screen.suggestions.is_none());
+        screen.draft = "/cli".into();
+        screen.draft_cursor = 4;
+        screen.refresh_suggestions();
+        assert!(screen.suggestions.is_some());
+    }
 
     #[test]
     fn sgr_drag_release_and_wheel_are_distinct_from_escape() {
@@ -3965,9 +4181,24 @@ mod tests {
         screen.suspended = true; // test the state machine without writing ANSI to stdout
         screen.start_work().unwrap();
         assert_eq!(screen.activity.as_ref().unwrap().phase, "Working…");
-        screen.tool_start("r", "read", "src/main.rs").unwrap();
+        let read = super::super::tool::Call {
+            name: "read".into(),
+            target: "src/main.rs".into(),
+        };
+        screen.tool_start("r", &read).unwrap();
         screen
-            .tool_end("r", "read", "src/main.rs", false, None)
+            .tool_end(
+                "r",
+                &read,
+                &super::super::tool::Outcome {
+                    failed: false,
+                    diff: None,
+                    output: "",
+                    exit_code: None,
+                    changes: None,
+                    elapsed: None,
+                },
+            )
             .unwrap();
         assert!(screen.rendered_transcript().contains("◐ Exploring"));
         screen.activity.as_mut().unwrap().last_spinner -= Duration::from_millis(400);
@@ -3977,7 +4208,15 @@ mod tests {
         screen.activity.as_mut().unwrap().last_refresh -= Duration::from_secs(2);
         screen.tick_work().unwrap();
         assert!(screen.activity.as_ref().unwrap().last_refresh.elapsed() < Duration::from_secs(1));
-        screen.tool_start("e", "edit", "src/main.rs").unwrap();
+        screen
+            .tool_start(
+                "e",
+                &super::super::tool::Call {
+                    name: "edit".into(),
+                    target: "src/main.rs".into(),
+                },
+            )
+            .unwrap();
         let settled = screen.rendered_transcript();
         assert!(settled.contains("✓ Explored"));
         screen.activity.as_mut().unwrap().last_spinner -= Duration::from_millis(400);

@@ -13,7 +13,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"read","description":"Read a UTF-8 text file. Offset and limit are one-based line bounds. Output is bounded.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
-        json!({"name":"bash","description":"Run a POSIX /bin/sh command in the workspace. Output and duration are bounded. Shell execution requires approval when enabled.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
+        json!({"name":"bash","description":"Run a POSIX /bin/sh command in the workspace. Output and duration are bounded.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ]
 }
@@ -67,6 +67,25 @@ fn read_file(path: &Path) -> Result<String> {
 fn result(text: String, details: Value) -> Value {
     json!({"content":[{"type":"text","text":text}],"details":details})
 }
+
+/// Keep the OS exit status typed through the error path. Human-readable errors
+/// still retain all bounded output; the UI need not parse a formatted status.
+#[derive(Debug)]
+pub(super) struct ShellExit {
+    status: std::process::ExitStatus,
+    output: String,
+}
+impl ShellExit {
+    pub(super) fn code(&self) -> Option<i32> {
+        self.status.code()
+    }
+}
+impl std::fmt::Display for ShellExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Shell exited with {}\n{}", self.status, self.output)
+    }
+}
+impl std::error::Error for ShellExit {}
 pub fn validate(name: &str, args: &Value) -> Result<()> {
     match name {
         "read" => {
@@ -160,27 +179,11 @@ pub async fn execute(
             if next.len() > 16 * 1024 * 1024 {
                 return Err("Edited file would exceed 16 MiB; file unchanged".into());
             }
-            let first = old
-                .find(&a.old_text)
-                .map(|i| old[..i].bytes().filter(|c| *c == b'\n').count() + 1)
-                .unwrap();
-            let diff = format!(
-                "@@ line {first} @@\n{}\n{}",
-                a.old_text
-                    .lines()
-                    .map(|l| format!("-{l}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                a.new_text
-                    .lines()
-                    .map(|l| format!("+{l}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
             write_file(&target, next.as_bytes())?;
+            let (diff, added, removed) = edit_diff(&old, &next);
             Ok(result(
                 format!("Edited {}", a.path),
-                json!({"diff":bounded(&diff,65536).0}),
+                json!({"diff":diff,"addedLines":added,"removedLines":removed}),
             ))
         }
         "bash" => {
@@ -218,9 +221,11 @@ pub async fn execute(
                     String::from_utf8_lossy(&err)
                 );
                 if !status.success() {
-                    return Err(
-                        format!("Shell exited with {status}\n{}", bounded(&text, 65536).0).into(),
-                    );
+                    return Err(ShellExit {
+                        status,
+                        output: bounded(&text, 65536).0,
+                    }
+                    .into());
                 }
                 Ok(result(text, json!({"exitCode":status.code()})))
             };
@@ -273,6 +278,64 @@ pub async fn execute(
         _ => unreachable!("validated tool"),
     }
 }
+
+/// One exact replacement has a contiguous changed region. Trim equal lines at
+/// both ends and retain one context line, without a quadratic diff algorithm.
+fn edit_diff(before: &str, after: &str) -> (String, usize, usize) {
+    let old = before.split_inclusive('\n').collect::<Vec<_>>();
+    let new = after.split_inclusive('\n').collect::<Vec<_>>();
+    let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    if prefix == old.len() && prefix == new.len() {
+        return (String::new(), 0, 0);
+    }
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let removed = old.len() - prefix - suffix;
+    let added = new.len() - prefix - suffix;
+    let start = prefix.saturating_sub(1);
+    let context = usize::from(suffix > 0);
+    let old_end = old.len() - suffix;
+    let new_end = new.len() - suffix;
+    let mut diff = format!(
+        "@@ -{},{} +{},{} @@\n",
+        start + 1,
+        old_end + context - start,
+        start + 1,
+        new_end + context - start
+    );
+    let mut append = |sign: char, line: &str| {
+        if diff.len() >= 65536 {
+            return;
+        }
+        diff.push(sign);
+        diff.push_str(line.strip_suffix('\n').unwrap_or(line));
+        diff.push('\n');
+        if !line.ends_with('\n') {
+            diff.push_str("\\ No newline at end of file\n");
+        }
+    };
+    for line in &old[start..prefix] {
+        append(' ', line);
+    }
+    for line in &old[prefix..old_end] {
+        append('-', line);
+    }
+    for line in &new[prefix..new_end] {
+        append('+', line);
+    }
+    for line in &new[new_end..new_end + context] {
+        append(' ', line);
+    }
+    let (mut text, truncated) = bounded(&diff, 65536);
+    if truncated || diff.len() >= 65536 {
+        text.push_str("\n[Diff truncated]\n");
+    }
+    (text, added, removed)
+}
 struct Group(u32);
 impl Drop for Group {
     fn drop(&mut self) {
@@ -301,4 +364,40 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         std::fs::set_permissions(path, permissions)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::edit_diff;
+    #[test]
+    fn edit_diff_trims_unchanged_lines_and_tracks_actual_line_numbers() {
+        let before = "intro\ndef greet(name):\n    return name\nend\nfooter\n";
+        let after =
+            "intro\ndef greet(name):\n    name = name.strip()\n    return name\nend\nfooter\n";
+        let (diff, added, removed) = edit_diff(before, after);
+        assert_eq!((added, removed), (1, 0));
+        assert_eq!(
+            diff,
+            "@@ -2,2 +2,3 @@\n def greet(name):\n+    name = name.strip()\n     return name\n"
+        );
+        assert!(!diff.contains("intro") && !diff.contains("footer"));
+        let (diff, added, removed) = edit_diff(after, before);
+        assert_eq!((added, removed), (0, 1));
+        assert!(diff.contains("-    name = name.strip()"));
+    }
+    #[test]
+    fn edit_diff_handles_empty_files_final_newlines_and_bounded_previews() {
+        assert_eq!(edit_diff("same", "same"), (String::new(), 0, 0));
+        assert_eq!(
+            edit_diff("", "hi\n"),
+            ("@@ -1,0 +1,1 @@\n+hi\n".into(), 1, 0)
+        );
+        assert!(edit_diff("hi", "hi\n")
+            .0
+            .contains("\\ No newline at end of file"));
+        assert_eq!((edit_diff("hi\n", "").1, edit_diff("hi\n", "").2), (0, 1));
+        let (diff, added, removed) = edit_diff(&"old\n".repeat(30000), &"new\n".repeat(30000));
+        assert_eq!((added, removed), (30000, 30000));
+        assert!(diff.len() < 65600 && diff.ends_with("[Diff truncated]\n"));
+    }
 }

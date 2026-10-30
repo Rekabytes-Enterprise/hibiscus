@@ -5,8 +5,7 @@ use crate::tui::{
 use crate::Result;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::Receiver;
 
 pub(crate) struct Dialogs;
 
@@ -49,8 +48,7 @@ impl Dialogs {
         if !matches!(method, "select" | "confirm" | "input" | "editor") {
             return Ok(());
         }
-        // Only a real terminal can approve. Fallback input is not used for
-        // authorizing tool actions, even if prompts were piped into stdin.
+        // Dialogs need interactive input; piped chat never consumes dialog answers.
         let modal_response = if interactive {
             match events {
                 Some(events) => display.extension_dialog(event, events)?,
@@ -65,15 +63,7 @@ impl Dialogs {
             if let (Some(raw), Some(events)) = (raw.as_mut(), events) {
                 response_for(event, |question| {
                     raw.write(question)?;
-                    if method == "select"
-                        && event["title"]
-                            .as_str()
-                            .is_some_and(|title| title.starts_with("Approval needed:"))
-                    {
-                        read_approval(events, raw, event["timeout"].as_u64())
-                    } else {
-                        terminal::read_line(events, raw)
-                    }
+                    terminal::read_line(events, raw)
                 })?
             } else {
                 response_for(event, |question| {
@@ -102,64 +92,7 @@ impl Dialogs {
         }
         writeln!(input, "{reply}").map_err(super::error::transport)?;
         input.flush().map_err(super::error::transport)?;
-        if method == "select"
-            && event["title"]
-                .as_str()
-                .is_some_and(|title| title.starts_with("Approval needed:"))
-            && interactive
-        {
-            let decision = match response["value"].as_str() {
-                Some("Allow") => "✓ approval · Allow once",
-                Some("Always Allow") => "✓ approval · Always Allow (exact command)",
-                _ => "✗ approval · Denied",
-            };
-            writeln!(display, "  · {decision}")?;
-        }
         Ok(())
-    }
-}
-
-/// A default-deny reader for tool approval. Wait for an explicit decision
-/// unless the requesting extension supplies a timeout; unlike read_line,
-/// Esc must cancel rather than leave an approval pending.
-fn read_approval(
-    events: &Receiver<u8>,
-    raw: &mut RawMode,
-    timeout_ms: Option<u64>,
-) -> Result<Option<String>> {
-    let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms.min(60_000)));
-    let mut choice = None;
-    loop {
-        let next = if let Some(deadline) = deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(None);
-            }
-            events.recv_timeout(remaining)
-        } else {
-            events.recv().map_err(|_| RecvTimeoutError::Disconnected)
-        };
-        match next {
-            Ok(b'\r' | b'\n') => {
-                raw.write("\r\n")?;
-                return Ok(choice.map(str::to_owned));
-            }
-            Ok(27 | 3 | 4) => return Ok(None),
-            Ok(8 | 127) => {
-                choice = None;
-                raw.write("\x08 \x08")?;
-            }
-            Ok(key @ b'1'..=b'3') => {
-                choice = Some(match key {
-                    b'1' => "1",
-                    b'2' => "2",
-                    _ => "3",
-                });
-                raw.write(&char::from(key).to_string())?;
-            }
-            Ok(_) => {}
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return Ok(None),
-        }
     }
 }
 
@@ -171,7 +104,7 @@ fn response_for(
     match event["method"].as_str().unwrap_or("") {
         "confirm" => {
             let message = event["message"].as_str().unwrap_or("");
-            let answer = ask(&format!("\r\n[pi] {title}: {message} [y/N] "))?;
+            let answer = ask(&format!("\r\n[hibiscus] {title}: {message} [y/N] "))?;
             Ok(
                 json!({"confirmed":answer.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes"))}),
             )
@@ -180,7 +113,7 @@ fn response_for(
             let Some(options) = event["options"].as_array() else {
                 return Ok(json!({"cancelled":true}));
             };
-            let mut question = format!("\r\n[pi] {title}\r\n");
+            let mut question = format!("\r\n[hibiscus] {title}\r\n");
             for (i, option) in options.iter().enumerate() {
                 question.push_str(&format!(
                     "  {}. {}\r\n",
@@ -206,7 +139,7 @@ fn response_for(
                 .as_str()
                 .or_else(|| event["prefill"].as_str())
                 .unwrap_or("");
-            let answer = ask(&format!("\r\n[pi] {title} {hint}: "))?;
+            let answer = ask(&format!("\r\n[hibiscus] {title} {hint}: "))?;
             Ok(match answer {
                 Some(value) if !value.is_empty() => json!({"value":value}),
                 _ => json!({"cancelled":true}),
@@ -221,7 +154,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn approvals_default_to_no_and_select_requires_valid_option() {
+    fn confirmation_defaults_to_no_and_select_requires_valid_option() {
         let confirm = json!({"method":"confirm","title":"Run command","message":"rm something"});
         assert_eq!(
             response_for(&confirm, |_| Ok(Some("".into()))).unwrap()["confirmed"],

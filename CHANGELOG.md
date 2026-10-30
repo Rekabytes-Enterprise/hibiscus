@@ -4,16 +4,30 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
-### Native runtime migration
+## [0.3.5] - 2026-10-31
 
-- Replace the Pi SDK/runtime with native Rust provider adapters, tools, sessions, API-key authentication, approvals, queueing and compaction. Runtime no longer needs Pi or Node.
-- Support OpenAI Responses, compatible Chat Completions and Anthropic Messages through HTTPS. Automatic Pi-data import is unavailable in the native version; explicit model configuration replaces the Pi catalog/context override.
-- Add native Codex browser OAuth with PKCE/state validation, masked redirect input, private token storage, serialized refresh and subscription transport. No Pi SDK or personal client ID is required.
-- Installer and updater manage Hibiscus only. This source change does not publish native release assets or npm packages.
+### Added
+
+- Native Rust provider adapters, tools, authentication, sessions, queues and compaction, replacing the Pi SDK and subprocess runtime.
+- Native Codex browser OAuth with PKCE/state validation, masked redirect input, private token storage and serialized refresh.
+- `/cli` and `/tui` switch views without reconnecting or resending prompts. TUI remains the default; CLI supports multiline editing and bracketed paste.
+- `/output`, `/output list` and numbered saved-result inspection, with no provider call or tool rerun.
+- Compact CLI tool rows with green/red status backgrounds, measured timing, exit codes, wrapped commands, numbered edit previews and colored Git diffs.
 
 ### Changed
 
-- Remove Pi TUI authentication handoff. Login dependency/provider failures now use recoverable errors inside Hibiscus; line/piped authentication reports that full-screen input is required.
+- Restore the raspberry HIBI welcome design and hide login hints when a provider has credentials. Signing out clears an unavailable model from the header.
+- Installer and updater manage Hibiscus only. The agent requires neither Pi nor Node; the optional npm installer still requires Node/npm and separate publication.
+- Authentication failures remain inside Hibiscus. Browser login supports native Codex; API-key login uses configured providers.
+
+### Removed
+
+- Remove `/approval`, approval settings, grants and tool confirmation dialogs. Validated native tools execute directly, including shell commands in piped mode. Tools are not sandboxed.
+
+### Migration
+
+- Configure native providers/models in `~/.hibiscus/config.json`. Pi credentials and legacy sessions are not imported automatically. Back up existing data and read [native configuration and migration](docs/native-runtime.md).
+- Provider protocols include OpenAI Responses, compatible Chat Completions and Anthropic Messages. Model IDs and capabilities are explicit configuration.
 
 ## [0.3.4] - 2026-10-19
 

@@ -12,6 +12,7 @@ use crate::{
             SharedImage,
         },
         terminal::RawMode,
+        tool,
         ui::Ui,
     },
     Result,
@@ -497,7 +498,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
     interactive: bool,
 ) -> Result<bool> {
     let ui = Ui::new(interactive);
-    let mut active_tools = HashMap::<String, String>::new();
+    let mut active_tools = HashMap::<String, (String, tool::Call)>::new();
     let mut reasoning_since = None;
     let mut accepted = false;
     let mut settled = false;
@@ -709,9 +710,11 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                             }
                             if !printed_text && !pending_newline {
                                 display.split_timeline()?;
-                                ui.assistant(display)?;
+                                if !display.assistant_start()? {
+                                    ui.assistant(display)?;
+                                }
                             }
-                            write!(display, "{delta}")?;
+                            display.assistant_text(delta)?;
                             display.flush()?;
                             printed_text = true;
                         }
@@ -736,9 +739,11 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                                     }
                                     if !printed_text && !pending_newline {
                                         display.split_timeline()?;
-                                        ui.assistant(display)?;
+                                        if !display.assistant_start()? {
+                                            ui.assistant(display)?;
+                                        }
                                     }
-                                    write!(display, "{text}")?;
+                                    display.assistant_text(text)?;
                                     printed_text = true;
                                 }
                             }
@@ -746,6 +751,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         display.flush()?;
                     }
                 }
+                display.end_assistant_text()?;
                 if printed_text {
                     pending_newline = true;
                     printed_text = false;
@@ -755,8 +761,9 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 show_reasoning(&ui, display, &mut reasoning_since)?;
                 let name = event["toolName"].as_str().unwrap_or("unknown");
                 let label = tool_label(name, &event["args"]);
+                let call = tool_call(name, &event["args"]);
                 if let Some(call_id) = event["toolCallId"].as_str() {
-                    active_tools.insert(call_id.to_owned(), label.clone());
+                    active_tools.insert(call_id.to_owned(), (label.clone(), call.clone()));
                 }
                 display.set_work(&format!("Running {label}…"))?;
                 if interactive {
@@ -764,13 +771,8 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         writeln!(display)?;
                         pending_newline = false;
                     }
-                    let path = label.split_once(" · ").map_or("", |(_, path)| path);
                     if name != "goal"
-                        && !display.tool_start(
-                            event["toolCallId"].as_str().unwrap_or(""),
-                            name,
-                            path,
-                        )?
+                        && !display.tool_start(event["toolCallId"].as_str().unwrap_or(""), &call)?
                     {
                         ui.info(display, &format!("↳ {label} …"))?;
                     }
@@ -781,10 +783,10 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             }
             Some("tool_execution_end") if kind == "prompt" => {
                 let name = event["toolName"].as_str().unwrap_or("tool");
-                let label = event["toolCallId"]
+                let (label, call) = event["toolCallId"]
                     .as_str()
                     .and_then(|id| active_tools.remove(id))
-                    .unwrap_or_else(|| safe_detail(name));
+                    .unwrap_or_else(|| (safe_detail(name), tool_call(name, &Value::Null)));
                 display.set_work("Working…")?;
                 if name == "goal" && event["isError"] != true {
                     display.goal(&event["result"]["details"])?;
@@ -795,16 +797,32 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     } else {
                         "✓ done"
                     };
-                    let path = label.split_once(" · ").map_or("", |(_, path)| path);
                     let diff = (name == "edit" && event["isError"] != true)
                         .then(|| event["result"]["details"]["diff"].as_str())
                         .flatten();
+                    let output = event["result"]["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|block| block["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let result = tool::Outcome {
+                        failed: event["isError"] == true,
+                        diff,
+                        output: &output,
+                        exit_code: event["result"]["details"]["exitCode"].as_i64(),
+                        changes: event["result"]["details"]["addedLines"]
+                            .as_u64()
+                            .zip(event["result"]["details"]["removedLines"].as_u64()),
+                        elapsed: event["durationMs"]
+                            .as_u64()
+                            .map(std::time::Duration::from_millis),
+                    };
                     if !display.tool_end(
                         event["toolCallId"].as_str().unwrap_or(""),
-                        name,
-                        path,
-                        event["isError"] == true,
-                        diff,
+                        &call,
+                        &result,
                     )? {
                         ui.info(display, &format!("{outcome} · {label}"))?;
                         if name == "edit" && event["isError"] != true {
@@ -962,7 +980,12 @@ fn show_reasoning<W: ScrollDisplay>(
 
 /// Hibiscus's built-in edit tool supplies the authoritative post-edit diff here.
 /// Never synthesize a preview from requested edits or display one on failure.
-fn show_edit_diff<W: Write>(ui: &Ui, display: &mut W, label: &str, result: &Value) -> Result<()> {
+fn show_edit_diff<W: ScrollDisplay>(
+    ui: &Ui,
+    display: &mut W,
+    label: &str,
+    result: &Value,
+) -> Result<()> {
     let Some(diff) = result["details"]["diff"]
         .as_str()
         .filter(|diff| !diff.is_empty())
@@ -975,7 +998,7 @@ fn show_edit_diff<W: Write>(ui: &Ui, display: &mut W, label: &str, result: &Valu
     let mut remaining = 0;
     for (index, line) in diff.lines().enumerate() {
         if index < MAX_LINES {
-            writeln!(display, "    {}", safe_diff_line(line))?;
+            display.diff_line(&safe_diff_line(line))?;
         } else {
             remaining += 1;
         }
@@ -1008,6 +1031,34 @@ fn tool_label(name: &str, args: &Value) -> String {
         }
     }
     name
+}
+
+fn tool_call(name: &str, args: &Value) -> tool::Call {
+    let target = match name {
+        "bash" => args["command"].as_str(),
+        "read" | "edit" | "write" => args["path"].as_str().or_else(|| args["filePath"].as_str()),
+        _ => None,
+    }
+    .unwrap_or("");
+    tool::Call {
+        name: safe_detail(name),
+        target: if name == "bash" {
+            target.to_owned()
+        } else {
+            target
+                .chars()
+                .map(|c| {
+                    if matches!(c, '\n' | '\r' | '\t') {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .filter(|c| !c.is_control())
+                .take(400)
+                .collect()
+        },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1247,13 +1298,14 @@ fn write_command(input: &mut impl Write, command: &Value, images: &[SharedImage]
     result
 }
 
-fn finish_turn<W: Write>(
+fn finish_turn<W: ScrollDisplay>(
     ui: &Ui,
     display: &mut W,
     has_text: bool,
     outcome: RunOutcome,
     interrupted: bool,
 ) -> Result<bool> {
+    display.end_turn()?;
     if has_text {
         writeln!(display)?;
     }

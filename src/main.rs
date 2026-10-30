@@ -25,6 +25,7 @@ fn main() {
 
 enum Start {
     Chat { resume: bool },
+    Cli { resume: bool },
     Sessions,
     Prompt(String),
     Help,
@@ -35,6 +36,18 @@ enum Start {
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Start> {
     match args.next().as_deref() {
         Some("--help" | "-h") => Ok(Start::Help),
+        Some(mode @ ("--cli" | "--tui")) => {
+            let resume = match args.next().as_deref() {
+                None => false,
+                Some("--continue" | "-c") if args.next().is_none() => true,
+                _ => return Err("Use --cli or --tui, optionally followed by --continue.".into()),
+            };
+            Ok(if mode == "--cli" {
+                Start::Cli { resume }
+            } else {
+                Start::Chat { resume }
+            })
+        }
         Some("update") => {
             if args.next().is_some() {
                 return Err("update takes no arguments".into());
@@ -78,7 +91,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Start::Help => {
-            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nThe update command updates Hibiscus.\nWithout a prompt, start a chat (or read prompts from piped stdin).\nIn chat: /approval [on|off], /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login stores a provider API key in Hibiscus. Providers and models are configured in ~/.hibiscus/config.json. Authentication errors stay inside Hibiscus; fix the reported dependency or provider problem and retry.\n/logout removes a selected provider's stored credentials inside full-screen Hibiscus.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_HOME to override the Hibiscus data directory.");
+            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --cli [--continue]\n       hibiscus --tui [--continue]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nThe update command updates Hibiscus.\nWithout a prompt, start a chat (or read prompts from piped stdin).\nTUI is the default interactive view. Use /cli for inline chat or /tui to return to full screen.\nIn chat: /cli, /tui, /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login offers native Codex browser login or a provider API key. Providers and models are configured in ~/.hibiscus/config.json. Authentication errors stay inside Hibiscus; fix the reported dependency or provider problem and retry.\n/logout removes a selected provider's stored credentials. CLI temporarily opens native full-screen login/logout dialogs, then returns inline.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_HOME to override the Hibiscus data directory.");
             Ok(())
         }
         Start::Prompt(prompt) => {
@@ -103,6 +116,14 @@ fn run() -> Result<()> {
         } else {
             SessionStart::New
         }),
+        Start::Cli { resume } => chat::start_chat_with_mode(
+            if resume {
+                SessionStart::Latest
+            } else {
+                SessionStart::New
+            },
+            tui::mode::Mode::Cli,
+        ),
         Start::Sessions => {
             let stdin = io::stdin();
             let cwd = env::current_dir()?;
@@ -126,6 +147,19 @@ mod tests {
 
     #[test]
     fn cli_modes() {
+        assert!(matches!(
+            parse_args(["--cli".into()].into_iter()).unwrap(),
+            Start::Cli { resume: false }
+        ));
+        assert!(matches!(
+            parse_args(["--cli".into(), "--continue".into()].into_iter()).unwrap(),
+            Start::Cli { resume: true }
+        ));
+        assert!(matches!(
+            parse_args(["--tui".into()].into_iter()).unwrap(),
+            Start::Chat { resume: false }
+        ));
+        assert!(parse_args(["--cli".into(), "hello".into()].into_iter()).is_err());
         assert!(matches!(
             parse_args([].into_iter()).unwrap(),
             Start::Chat { resume: false }

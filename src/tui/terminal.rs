@@ -162,6 +162,17 @@ pub(crate) struct RawMode {
 }
 
 impl RawMode {
+    pub(crate) fn size(&self) -> (usize, usize) {
+        let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+        if unsafe { libc::ioctl(self.fd, libc::TIOCGWINSZ, &mut size) } == 0
+            && size.ws_col > 0
+            && size.ws_row > 0
+        {
+            (usize::from(size.ws_col), usize::from(size.ws_row))
+        } else {
+            (80, 24)
+        }
+    }
     pub(crate) fn write(&mut self, text: &str) -> io::Result<()> {
         self.tty.write_all(text.as_bytes())?;
         self.tty.flush()

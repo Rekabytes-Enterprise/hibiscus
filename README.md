@@ -8,7 +8,7 @@ A standalone Rust coding agent with a terminal UI, direct provider connections a
 
 ## Native migration
 
-The current source runs without the Pi SDK, Pi runtime or Node.js. Earlier published releases may still use Pi. Build this source to test the native runtime; a branch change does not publish a new binary or npm package.
+Version 0.3.5 runs without the Pi SDK, Pi runtime or Node.js. Earlier releases use the previous runtime. Build the source with Rust/Cargo, or use the versioned native installer in the installation section below.
 
 ```sh
 cargo install --path . --locked
@@ -24,7 +24,7 @@ The default catalog contains OpenAI `gpt-4.1`, Anthropic `claude-sonnet-4-5` and
 
 - Streams responses directly through OpenAI Responses, OpenAI-compatible Chat Completions or Anthropic Messages.
 - Executes native `read`, `write`, `edit`, `bash` and `goal` tools.
-- Shows approval dialogs before shell execution when approvals are enabled. Deny is the default.
+- Runs validated native tools directly, including shell commands.
 - Saves conversations locally, supports resume, and preserves interrupted tool calls without replaying them.
 - Keeps a searchable model picker, images, terminal selection/copy, Markdown tables, queued steering/followups and recoverable errors.
 - Compacts context on request, or near a configured context limit when the provider supplies usage. Original history is archived locally.
@@ -33,10 +33,11 @@ The default catalog contains OpenAI `gpt-4.1`, Anthropic `claude-sonnet-4-5` and
 
 | Command | Action |
 | --- | --- |
+| `/cli` | Switch to inline chat in terminal scrollback |
+| `/tui` | Return to the default fullscreen view |
 | `/models` | Search the configured provider/model catalog |
 | `/login` | Browser Login → Codex, or API Key → configured provider |
 | `/logout` | Confirm removal of a locally stored API key or Codex credential |
-| `/approval [on\|off]` | Inspect or change the persistent shell approval setting |
 | `/thinking [level]` | Select a supported Responses reasoning level |
 | `/new` | Start another conversation |
 | `/sessions` | Select a native session for this workspace |
@@ -44,11 +45,14 @@ The default catalog contains OpenAI `gpt-4.1`, Anthropic `claude-sonnet-4-5` and
 | `/compact [instructions]` | Summarize active context and archive the original history |
 | `/restore` | Review a failed prompt without resending it |
 | `/reconnect` | Restart the local runtime without replaying work |
+| `/output [list\|number]` | Inspect saved tool results locally without rerunning them |
 | `/quit` | Exit |
 
-Start with `hibiscus --continue` to resume, `hibiscus --sessions` to choose a session, or `hibiscus 'your prompt'` for one-shot output. Piped prompts produce plain output. Login/logout require fullscreen input.
+`hibiscus` starts in TUI by default. Use `/cli` for inline terminal chat and `/tui` to return, keeping the same session. CLI shows a small text heading and command hints; the HIBI logo and bordered welcome panel belong to TUI. Start directly in CLI with `hibiscus --cli`, or resume with `hibiscus --cli --continue`. The welcome tips offer the other view and hide `/login` when any configured provider has credentials. You can still type `/login` to connect another provider.
 
-Enter sends, Ctrl+Enter or Ctrl+J inserts a newline, and Esc cancels an active run. During a run, Enter submits steering for the next tool boundary; Ctrl+Q queues a followup. Image paste uses Alt+V on WSL and Ctrl+V elsewhere. Clipboard support depends on your desktop and terminal. [Terminal guide](docs/terminal.md).
+Start with `hibiscus --continue` to resume, `hibiscus --sessions` to choose a session, or `hibiscus 'your prompt'` for one-shot output. Piped prompts produce plain output. Login/logout from CLI temporarily open the native fullscreen dialogs and return to CLI afterward.
+
+Enter sends and Esc cancels an active run in either view. In CLI, Alt+Enter or Ctrl+J inserts a newline, arrows edit the draft, and multiline paste waits for Enter. In TUI, Ctrl+Enter or Ctrl+J inserts a newline. TUI supports steering at tool boundaries and Ctrl+Q followups during a run. Image paste uses Alt+V on WSL and Ctrl+V elsewhere. Clipboard support depends on your desktop and terminal. [Terminal guide](docs/terminal.md).
 
 ## Data and credentials
 
@@ -57,19 +61,21 @@ Hibiscus uses `~/.hibiscus`, or the absolute directory in `HIBISCUS_HOME`:
 - `config.json` contains providers, models and run limits.
 - `auth.json` contains API keys entered through `/login`, stored with mode 0600.
 - `codex-auth.json` contains native Codex access/refresh tokens, expiry and account ID, also mode 0600.
-- `approval.json` stores the approval preference.
 - `sessions/` holds versioned native conversations.
 - `archives/` preserves history before compaction.
 - `cache/` holds disposable update metadata.
 
-An explicitly configured environment variable takes precedence over a stored key. Logout removes the selected stored credential; it does not unset environment variables or revoke provider access. Tools execute on your machine and are not sandboxed. Approval is a permission mechanism, not proof that a shell command is harmless.
+An explicitly configured environment variable takes precedence over a stored key. Logout removes the selected stored credential; it does not unset environment variables or revoke provider access. Tools execute on your machine and are not sandboxed. Shell commands execute directly in interactive and piped modes.
 
 ## Installation and updates
 
 The bundled installer downloads a checksum-verified Hibiscus binary and creates its data directory. It no longer installs Pi or Node. The npm wrapper still requires Node/npm to run the installer; the installed agent does not.
 
 ```sh
-# Requires matching published native release assets and npm publication:
+# Native v0.3.5 installer, pinned to the matching GitHub release:
+curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.5/install.sh | HIBISCUS_VERSION=v0.3.5 sh
+
+# npm installer versions are published separately:
 npx @rekabytes/hibiscus@latest
 ```
 

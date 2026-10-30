@@ -837,7 +837,7 @@ mod tests {
             r#"{"id":"req-1","type":"response","success":true,"data":{"partialResult":[1,2]}}"#,
             r#"{"partialResult":[1,2],"type":"future_event","id":"req-2"}"#,
             r#"{"type":"tool_execution_end","toolCallId":"call-1","toolName":"goal","result":{"details":{"hibiscusGoal":{"completed":1}}}}"#,
-            r#"{"type":"extension_ui_request","id":"approval","method":"select","title":"Confirm","options":["Deny","Allow"]}"#,
+            r#"{"type":"extension_ui_request","id":"choice","method":"select","title":"Choose","options":["One","Two"]}"#,
             r#"{"type":"message_start","message":{"role":"assistant","content":[{"type":"image","data":"test"}]}}"#,
             r#"{"type":"message_end","message":{"role":"user","content":[{"type":"image","data":"test"}]}}"#,
             r#"{"type":"future_event","message":{"role":"user","content":[{"type":"image","data":"test"}]}}"#,

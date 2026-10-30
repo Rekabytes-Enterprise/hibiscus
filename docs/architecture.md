@@ -9,7 +9,7 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 | `src/runtime/provider.rs` | HTTPS/SSE adapters for Responses, Chat Completions and Anthropic |
 | `src/runtime/session.rs` | Typed messages, versioned sessions, resume and interrupted-call recovery |
 | `src/runtime/tools.rs` | Native file, shell and checklist tools |
-| `src/runtime/engine.rs` | Model/tool loop, queueing, cancellation, approvals and compaction |
+| `src/runtime/engine.rs` | Model/tool loop, queueing, cancellation and compaction |
 | `src/runtime/policy.rs` | Project/personal instructions, project skill catalog and writing guidance |
 | `src/runtime/event.rs` | Typed lifecycle events encoded for presentation |
 | `src/runtime/bridge.rs` | In-process worker lifecycle and the existing terminal adapter |
@@ -25,6 +25,6 @@ The worker and TUI live in the same process. A private Unix socket carries bound
 
 Sessions have one runtime writer. Atomic replacement protects committed snapshots. On resume, any call without a recorded result is marked as interrupted with an unknown outcome; no tool is automatically retried. Compaction archives original history before replacing active context. Credentials are never written into sessions or provider error records.
 
-Approval is checked before bash execution and is not a sandbox. Exact-command grants last only for the run. The persistent enabled/disabled preference lives in `approval.json`. Project instructions and plain-writing guidance enter the native system prompt independently of the approval setting.
+Native tools execute directly after argument validation and authoritative provider completion. Shell commands do not wait for a confirmation in either interactive or piped mode. Tools are not sandboxed. Project instructions and plain-writing guidance enter the native system prompt.
 
 Historical performance/profiling documents describe earlier Pi-backed versions and are not measurements of this runtime. Current tests and their limits are in [Development](development.md).

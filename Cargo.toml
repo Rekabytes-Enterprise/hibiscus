@@ -1,6 +1,6 @@
 [package]
 name = "hibiscus"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "A standalone Rust coding agent"
 license = "MIT"
@@ -14,6 +14,7 @@ tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "pr
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
+unicode-width = { version = "0.2.2", default-features = false }
 
 [dev-dependencies]
 # Integration tests use only the standard library.
