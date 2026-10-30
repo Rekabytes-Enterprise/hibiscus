@@ -67,8 +67,6 @@ else
 fi
 [ "$actual" = "$expected" ] || fail "checksum verification failed"
 
-# Pi's installer may have installed a standalone Node.js in an earlier run.
-# Its child process cannot change this shell's PATH, so make it available here.
 mkdir -p "$INSTALL_DIR"
 
 # Keep app-owned settings/cache together without overwriting existing settings.
@@ -90,4 +88,4 @@ case ":$PATH:" in
     *) printf 'Add %s to PATH to run hibiscus.\n' "$INSTALL_DIR" ;;
 esac
 printf 'Hibiscus settings and cache: %s\n' "$DATA_DIR"
-printf 'Pi is ready. Sign in to a provider with /login in Hibiscus or Pi.\n'
+printf 'Hibiscus is ready. Sign in to a provider with /login.\n'

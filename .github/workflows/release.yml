@@ -11,6 +11,11 @@ on:
         required: false
         type: string
         default: ""
+      direct_upload:
+        description: Upload directly to an existing draft release if Actions artifact storage is unavailable
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -47,6 +52,14 @@ jobs:
           test "v$version" = "$RELEASE_TAG"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
           git show --no-patch --format='Release source: %H' HEAD
+      - name: Require an existing draft for direct uploads
+        if: inputs.direct_upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test -n "$RELEASE_TAG"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
 
   build:
     needs: verify
@@ -93,10 +106,17 @@ jobs:
           cp "target/${{ matrix.target }}/release/hibiscus" dist/package/hibiscus
           tar -C dist/package -czf "dist/hibiscus-${{ matrix.target }}.tar.gz" hibiscus
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.direct_upload }}
         with:
           name: release-${{ matrix.target }}
           path: dist/*.tar.gz
           if-no-files-found: error
+      - name: Upload directly to the draft release
+        if: inputs.direct_upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" "dist/hibiscus-${{ matrix.target }}.tar.gz" --clobber
 
   publish:
     if: github.event_name == 'push' || inputs.release_tag != ''
@@ -104,10 +124,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
+        if: ${{ !inputs.direct_upload }}
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
+      - name: Download direct uploads for checksums
+        if: inputs.direct_upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p dist
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
+            gh release download "$RELEASE_TAG" --pattern "hibiscus-$target.tar.gz" --dir dist
+          done
       - name: Generate checksums
         run: cd dist && sha256sum *.tar.gz > SHA256SUMS
       - name: Create or update GitHub release
