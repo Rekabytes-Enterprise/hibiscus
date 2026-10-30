@@ -5,9 +5,18 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to rebuild and upload; empty means build only
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || (github.event_name == 'push' && github.ref_name) || '' }}
 
 jobs:
   verify:
@@ -15,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -29,10 +40,13 @@ jobs:
         timeout-minutes: 5
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Check release tag matches Cargo version
-        if: github.event_name == 'push'
+        if: env.RELEASE_TAG != ''
         run: |
+          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           version=$(awk -F ' *= *' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' Cargo.toml)
-          test "v$version" = "$GITHUB_REF_NAME"
+          test "v$version" = "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
+          git show --no-patch --format='Release source: %H' HEAD
 
   build:
     needs: verify
@@ -47,14 +61,16 @@ jobs:
             os: ubuntu-latest
             builder: cross
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-15-intel
             builder: cargo
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             builder: cargo
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -83,7 +99,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.release_tag != ''
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -99,8 +115,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "$RELEASE_TAG"
           fi
