@@ -6,6 +6,8 @@ All notable changes to Hibiscus are documented here.
 
 ### Added
 
+- Native workspace checkpoints for write/edit, with request/session correlation, recorded diffs, conflict-checked selective restore, interrupted-operation recovery and explicit retention tools.
+
 - Extension candidate updates with retained version history, parent and changed-file records, configured regression commands/protocol checks, native history/diff/rollback tools and atomic activation.
 
 ### Changed

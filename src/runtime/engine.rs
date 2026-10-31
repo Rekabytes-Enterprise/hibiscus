@@ -472,6 +472,7 @@ async fn run_turns(
             s.messages.push(message);
             s.save()?;
         }
+        let mut checkpoint_request = crate::checkpoints::Request::new(&session.lock().unwrap().id);
         let user = session.lock().unwrap().messages.last().cloned().unwrap();
         emit(out, Event::MessageStarted(&user).wire()).await?;
         let mut completed = false;
@@ -489,6 +490,7 @@ async fn run_turns(
                 }
             };
             if let Some(steering) = steering {
+                checkpoint_request = crate::checkpoints::Request::new(&session.lock().unwrap().id);
                 let mut content = vec![Block::Text {
                     text: steering.text,
                 }];
@@ -578,7 +580,18 @@ async fn run_turns(
                         .execute(tool, &args, (&cwd, &snapshot.id), cancel)
                         .await
                 } else {
-                    tools::execute(&name, &args, &cwd, &mut steps, cancel).await
+                    tools::execute(
+                        &name,
+                        &args,
+                        &mut crate::checkpoints::Context {
+                            cwd: &cwd,
+                            request: &mut checkpoint_request,
+                            call_id: &id,
+                        },
+                        &mut steps,
+                        cancel,
+                    )
+                    .await
                 };
                 let elapsed = started.elapsed();
                 let (is_error, result) = match result {

@@ -815,7 +815,8 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     } else {
                         "✓ done"
                     };
-                    let diff = (name == "edit" && event["isError"] != true)
+                    let diff = (matches!(name, "edit" | "checkpoint_diff")
+                        && event["isError"] != true)
                         .then(|| event["result"]["details"]["diff"].as_str())
                         .flatten();
                     let output = event["result"]["content"]
@@ -843,8 +844,8 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         &result,
                     )? {
                         ui.info(display, &format!("{outcome} · {label}"))?;
-                        if name == "edit" && event["isError"] != true {
-                            show_edit_diff(&ui, display, &label, &event["result"])?;
+                        if diff.is_some() {
+                            show_tool_diff(&ui, display, &label, &event["result"])?;
                         }
                     }
                     display.flush()?;
@@ -999,9 +1000,9 @@ fn show_reasoning<W: ScrollDisplay>(
     Ok(())
 }
 
-/// Hibiscus's built-in edit tool supplies the authoritative post-edit diff here.
+/// Show native post-edit or checkpoint inspection data supplied by the runtime.
 /// Never synthesize a preview from requested edits or display one on failure.
-fn show_edit_diff<W: ScrollDisplay>(
+fn show_tool_diff<W: ScrollDisplay>(
     ui: &Ui,
     display: &mut W,
     label: &str,
@@ -1506,7 +1507,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let mut output = Vec::new();
-        show_edit_diff(
+        show_tool_diff(
             &Ui::new(false),
             &mut output,
             "edit · file.rs",
@@ -1519,7 +1520,7 @@ mod tests {
         assert!(!output.contains("+40 line"));
         assert!(output.contains("5 more diff lines"));
         let mut empty = Vec::new();
-        show_edit_diff(
+        show_tool_diff(
             &Ui::new(false),
             &mut empty,
             "edit · file.rs",
