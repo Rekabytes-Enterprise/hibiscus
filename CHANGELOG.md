@@ -10,6 +10,8 @@ All notable changes to Hibiscus are documented here.
 
 ### Changed
 
+- Keep the raspberry HIBI banner pinned above TUI conversations, with live thinking/model/workspace/session metadata and compact layouts for small terminals and multiline drafts. Unicode labels respect terminal column widths.
+- Remove thinking confirmations from TUI chat and the obsolete Pi attribution from CLI confirmations; guard installer wording against the old Pi-ready message.
 - Extension registry snapshots now retain implementation files with their metadata. Existing source folders are preserved; rejected updates and interrupted candidates keep the last active version usable.
 
 ## [0.3.6] - 2026-10-31

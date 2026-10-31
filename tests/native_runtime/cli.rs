@@ -318,3 +318,18 @@ fn cli_streamed_and_edit_diffs_use_red_green_and_respect_no_color() {
         assert!(!fs::read_to_string(session).unwrap().contains("\\u001b"));
     }
 }
+
+#[test]
+fn thinking_confirmation_uses_native_wording_without_provider_requests() {
+    let f = Fixture::new("responses", vec![]);
+    let path = f.root.join("app/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["providers"][0]["models"][0]["reasoning"] = json!(true);
+    fs::write(path, config.to_string()).unwrap();
+    let output = f.run("/thinking high\n/quit\n", &[]);
+    good(&output);
+    let shown = String::from_utf8_lossy(&output.stdout);
+    assert!(shown.contains("Thinking level: high."));
+    assert!(!shown.contains("(Pi)"));
+    assert!(f.captured().is_empty());
+}

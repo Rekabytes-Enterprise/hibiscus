@@ -32,7 +32,7 @@ impl Screen {
         if !self.full || items.is_empty() {
             return Ok(None);
         }
-        let rows = self.size().1.saturating_sub(12).clamp(1, 5);
+        let rows = self.selectable_rows.len().saturating_sub(3).clamp(1, 5);
         self.picker = Some(Picker::new(clean(title), items.to_vec(), current, rows));
         if searchable {
             self.picker.as_mut().unwrap().enable_search();
@@ -42,6 +42,11 @@ impl Screen {
         let result = (|| {
             self.render()?;
             loop {
+                let rows = self
+                    .selectable_rows
+                    .len()
+                    .saturating_sub(3 + 3 * usize::from(searchable))
+                    .clamp(1, 5);
                 let byte = match events.recv_timeout(Duration::from_millis(100)) {
                     Ok(byte) => byte,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -277,7 +282,7 @@ impl Screen {
                 .iter()
                 .map(|cmd| format!("{:<12}  {}", cmd.name, cmd.description))
                 .collect();
-            let rows = self.size().1.saturating_sub(12).clamp(1, 5);
+            let rows = self.selectable_rows.len().saturating_sub(3).clamp(1, 5);
             Some(Picker::new("Commands".into(), items, None, rows))
         };
     }
@@ -303,7 +308,7 @@ impl Screen {
                 .iter()
                 .map(file_mentions::Entry::display)
                 .collect();
-            let rows = self.size().1.saturating_sub(12).clamp(1, 5);
+            let rows = self.selectable_rows.len().saturating_sub(3).clamp(1, 5);
             Some(Picker::new("Files".into(), items, None, rows))
         };
         self.render()
@@ -570,7 +575,7 @@ impl Screen {
             }
             key => key,
         };
-        let rows = self.size().1.saturating_sub(12).clamp(1, 5);
+        let rows = self.selectable_rows.len().saturating_sub(3).clamp(1, 5);
         if let Some(picker) = self.suggestions.as_mut() {
             match key {
                 Navigation::Escape => {
@@ -594,11 +599,11 @@ impl Screen {
         if !self.full || self.suspended {
             return Ok(());
         }
-        // The transcript begins below the three header rows. A press elsewhere
+        // The transcript begins below the rendered header. A press elsewhere
         // must not select a dialog, password or unsent composer text.
         let row = event
             .row
-            .saturating_sub(3)
+            .saturating_sub(self.transcript_top)
             .min(self.selectable_rows.len().saturating_sub(1));
         let (columns, _) = self.size();
         let left = (columns.saturating_sub(content_width(columns))) / 2;
@@ -626,7 +631,8 @@ impl Screen {
             }
         } else if event.button & 3 == 0 {
             self.selection = None;
-            if event.row >= 3
+            if event.row >= self.transcript_top
+                && event.row < self.transcript_top + self.selectable_rows.len()
                 && row < self.selectable_rows.len()
                 && !self.selectable_rows[row].is_empty()
             {

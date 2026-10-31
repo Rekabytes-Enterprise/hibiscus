@@ -110,7 +110,7 @@ fn fullscreen_model_picker_stays_searchable_without_chat_confirmation() {
 }
 
 #[test]
-fn welcome_disappears_after_chat_and_is_never_saved_as_history() {
+fn idle_tips_disappear_after_chat_while_the_hibi_header_stays_out_of_history() {
     let f = Fixture::new("responses", vec![response("WELCOME_CHAT_COMPLETE")]);
     let mut tty = Pty::spawn(&mut f.command());
     tty.wait_text("Enter to send · Esc to stop");
@@ -120,15 +120,20 @@ fn welcome_disappears_after_chat_and_is_never_saved_as_history() {
     tty.send(b"/quit\r");
     let shown = tty.finish();
     let views = support::screen::snapshots(&shown);
-    assert!(!views
-        .last()
-        .unwrap()
-        .contains("Enter to send · Esc to stop"));
+    let view = views.last().unwrap();
+    assert!(!view.contains("Enter to send · Esc to stop"));
+    let header = view.lines().take(8).collect::<Vec<_>>().join(" ");
+    assert!(header.contains("Hibiscus"));
+    assert!(header.contains("Thinking"));
+    assert!(view.contains("WELCOME_CHAT_COMPLETE"));
+    assert!(!view.contains("✿ hibiscus"));
     for file in fs::read_dir(f.root.join("app/sessions")).unwrap() {
         let history = fs::read_to_string(file.unwrap().path()).unwrap();
         assert!(history.contains("WELCOME_CHAT_COMPLETE"));
         assert!(!history.contains("Enter to send · Esc to stop"));
         assert!(!history.contains("Sign in /login"));
+        assert!(!history.contains("› Hibiscus"));
+        assert!(!history.contains("Thinking   off"));
     }
 }
 
@@ -195,4 +200,101 @@ fn failed_run_returns_undelivered_queued_input_for_review() {
     tty.send(b"\x03/quit\r");
     tty.finish();
     assert_eq!(f.captured().len(), 1);
+}
+
+#[test]
+fn persistent_header_tracks_thinking_across_chat_scroll_new_resume_and_small_model_picker() {
+    for color in [false, true] {
+        let reply = (0..60)
+            .map(|row| format!("HEADER_ROW_{row:02}\n"))
+            .collect::<String>()
+            + "HEADER_CHAT_END";
+        let f = Fixture::new("responses", vec![response(&reply)]);
+        let path = f.root.join("app/config.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        config["providers"][0]["models"][0]["reasoning"] = json!(true);
+        fs::write(path, config.to_string()).unwrap();
+        let mut tty = Pty::spawn_with_size(&mut f.command(), color, 120, 32);
+        tty.wait_text("Enter send");
+        tty.send(b"/thinking high\r");
+        tty.wait_text("Thinking   high");
+        tty.wait_text("Enter send");
+        tty.send(b"hello persistent header\r");
+        tty.wait_text("HEADER_CHAT_END");
+        tty.wait_text("Enter send");
+        tty.send(b"\x1b[5~\x1b[5~\x1b[5~\x1b[5~");
+        tty.wait_text("HEADER_ROW_00");
+        tty.send(b"/new\r");
+        tty.wait_text("Thinking   off");
+        tty.wait_text("Enter to send · Esc to stop");
+        tty.send(b"/continue\r");
+        tty.wait_text("Thinking   high");
+        tty.wait_text("HEADER_CHAT_END");
+        tty.wait_text("Enter send");
+        tty.resize(42, 14);
+        tty.send(b"/models\r");
+        tty.wait_text("Models · all providers");
+        tty.wait_text("Search models");
+        tty.wait_text("HIBI · Thinking high");
+        tty.send(b"absent");
+        tty.wait_text("No matching models");
+        tty.send(b"\x1b");
+        tty.wait_text("Enter send");
+        tty.send(b"/quit\r");
+        let shown = tty.finish();
+        let views = support::screen::snapshots(&shown);
+        for marker in ["HEADER_CHAT_END", "HEADER_ROW_00"] {
+            assert!(
+                views.iter().any(|view| {
+                    let header = view.lines().take(8).collect::<Vec<_>>().join(" ");
+                    view.contains(marker)
+                        && header.contains("Hibiscus")
+                        && header
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .contains("Thinking high")
+                }),
+                "banner missing while showing {marker}"
+            );
+        }
+        assert!(!views.iter().any(|view| view.contains("✿ hibiscus")));
+        assert!(!shown.contains("(Pi)"));
+        assert!(!views.iter().any(|view| view.contains("Thinking level:")));
+        let requests = f.captured();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["reasoning"]["effort"], "high");
+        for entry in fs::read_dir(f.root.join("app/sessions")).unwrap() {
+            let history = fs::read_to_string(entry.unwrap().path()).unwrap();
+            assert!(!history.contains("› Hibiscus"));
+            assert!(!history.contains("Thinking   high"));
+        }
+    }
+}
+
+#[test]
+fn compact_header_survives_a_five_line_draft_and_restores_the_large_banner() {
+    for color in [false, true] {
+        let f = Fixture::new("responses", vec![]);
+        let mut tty = Pty::spawn_with_size(&mut f.command(), color, 42, 14);
+        tty.wait_text("Enter send");
+        tty.send(b"\x1b[200~draft one\ndraft two\ndraft three\ndraft four\ndraft five\x1b[201~");
+        tty.wait_text("draft five");
+        tty.wait_text("HIBI · Thinking off");
+        tty.resize(120, 32);
+        tty.wait_text("Thinking   off");
+        tty.wait_text("draft five");
+        // Ctrl+C clears the draft, then /quit exits without a provider call.
+        tty.send(b"\x03");
+        tty.wait_text("Enter send");
+        tty.send(b"/quit\r");
+        let shown = tty.finish();
+        let views = support::screen::snapshots(&shown);
+        assert!(views.iter().any(|view| view
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("HIBI · Thinking off"))
+            && view.contains("draft five")));
+        assert!(f.captured().is_empty());
+    }
 }

@@ -59,6 +59,8 @@ run_case() {
   [ "$(cat "$home/.hibiscus/config.json")" = '{}' ]
   [ -z "$(ls -A "$home/.hibiscus/extensions")" ]
  fi
+ grep -q 'Hibiscus is ready. Sign in to a provider with /login.' "$tmp/stdout"
+ ! grep -qi 'Pi is ready\|Hibiscus or Pi' "$tmp/stdout"
  [ ! -e "$tmp/forbidden" ]
  ! grep -q 'pi.dev\|pi-coding-agent' "$tmp/curl.log"
 }

@@ -1,10 +1,16 @@
 # Current state
 
+## Persistent HIBI header, 2026-11-01
+
+The owner requested keeping the large raspberry slanted HIBI banner throughout TUI conversations, replacing the smaller flower header, and adding thinking to its info panel. This work is reviewed on top of dev 8151423 for a separate PR into dev, as explicitly requested. Version 0.3.6 is unchanged; no global installation or release was requested.
+
+src/tui/header.rs owns the solid-cell logo and version/model/thinking/workspace/session panel. It remains above conversation scrolling, new/resumed sessions and active dialogs. Header height drives transcript selection, modal cursor offsets, paging and picker capacity. Narrow/short terminals compact the header; a five-line draft keeps a one-line HIBI/thinking row. Unicode display width, including wide characters, joined emoji and combining marks, determines label clipping and panel padding. Header chrome stays outside transcript/session history; only idle body hints disappear after chat. Fullscreen thinking changes are quiet; CLI uses native confirmation wording. Installer fixtures reject obsolete Pi-ready messaging, while docs explain the older updater's compile-time embedded installer.
+
+Verification: TERM=dumb cargo test --locked passes 181 unit and 55 integration tests. Formatting, strict all-target Clippy, diff checks, shell installer/syntax, version-bump and offline npm/npx checks pass. Actual color/NO_COLOR PTYs cover thinking, chat/scroll, new/resume, a 42x14 searchable picker, a five-line draft at 42x14 and restoration of the large header on resize. Model request counts and history exclusion are checked. A 120x32 local capture contains two synthetic-provider turns, thinking high, one native session and four canonical messages. The reconstructed preview was inspected; this is not live-provider or physical-terminal acceptance. Remote CI is reported on the PR.
+
 ## Extension versions, issue #29
 
-Implemented in an isolated branch from dev, without including the pending HIBI header work. Managed updates prepare private candidates, retain version bundles and publish code/metadata through one atomic active pointer. Native update_extension, extension_history, extension_diff and rollback_extension share the runtime in both views. Records preserve parents, changed paths, hashes and validation evidence; optimistic version checks and a nonblocking commit lock prevent stale activation. Existing author folders remain intact. Initial imports never run programs; edited source with configured checks requires an explicit checked import. Failed candidates and unreferenced bundles stay inspectable; running registries keep their original files.
-
-Verification: TERM=dumb cargo test --locked passes 179 unit and 52 integration tests on this macOS host. Real subprocess tests cover rejected updates, protocol checks, timeout/cancellation and descendant termination, interrupted candidates, stale commits, integrity failures, legacy absolute-path aliases and an invocation reading old files after activation. CLI/TUI PTYs verify old-registry tool batches, updated command completion, history, diff and rollback. Installer/syntax, version-bump and offline npm/npx tests pass. Formatting, diff checks and strict all-target Clippy pass. No live-provider or physical-terminal acceptance is claimed. PR/CI and issue closure are pending; no release/tag or version bump is requested.
+PR #35 merged into dev as 8151423be3f7c68d328b59395ca51217a2780c4c after CI run 41234583968 passed Linux/macOS tests and lint/installer checks. The merged tree matches the tested PR tree. Issue #29 is closed as COMPLETED with merge/CI evidence; its linked Mokara task and all five steps are done and synced. Version bundles, candidates, validation and native update/history/diff/rollback are documented in docs/extensions.md. The release tag was not changed.
 
 ## v0.3.6 published, 2026-10-31
 

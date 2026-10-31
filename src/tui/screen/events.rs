@@ -23,7 +23,7 @@ impl ScrollDisplay for Screen {
         self.feed_paste(byte)
     }
     fn scroll(&mut self, navigation: Navigation) -> io::Result<()> {
-        let step = self.size().1.saturating_sub(10).max(1);
+        let step = self.selectable_rows.len().max(1);
         let offset = match navigation {
             Navigation::ScrollPage(direction) => direction * step as i32,
             Navigation::ScrollLines(lines) | Navigation::MouseScroll(lines, _) => lines,

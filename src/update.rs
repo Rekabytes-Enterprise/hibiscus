@@ -111,7 +111,7 @@ pub(crate) fn install(tag: &str) -> Result<()> {
 }
 
 pub(crate) fn update() -> Result<()> {
-    // Reject unsupported Hibiscus install locations before changing either app.
+    // Reject unsupported Hibiscus install locations before running the installer.
     install_path()?;
     let hibiscus: Result<()> = (|| {
         match check()? {

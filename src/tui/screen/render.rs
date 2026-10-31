@@ -195,29 +195,10 @@ impl Screen {
         }
         let width = content_width(columns);
         let left = " ".repeat(columns.saturating_sub(width) / 2);
-        let workspace = &self.workspace;
         let flower = self
             .activity
             .as_ref()
             .map_or(FLOWERS[0], |activity| FLOWERS[activity.flower_frame]);
-        let title = if columns < NARROW_COLUMNS {
-            clip(&format!("{} hibiscus · {workspace}", FLOWERS[0]), width)
-        } else {
-            clip(&format!("{} hibiscus   /   {workspace}", FLOWERS[0]), width)
-        };
-        let metadata = format!(
-            "{}{}  ·  {}",
-            self.model,
-            self.thinking
-                .as_deref()
-                .map_or(String::new(), |level| format!("  ·  Thinking {level}")),
-            self.session
-        );
-        let header = if columns < NARROW_COLUMNS {
-            mobile_header(&self.model, self.thinking.as_deref(), &self.session, width)
-        } else {
-            clip(&metadata, width)
-        };
         let lines = self.transcript_layout(width.saturating_sub(transcript_prefix(columns)).max(1));
         let draft_width = width.saturating_sub(5).max(1);
         let draft_rows = if self.modal.is_some() {
@@ -241,14 +222,55 @@ impl Screen {
         } else {
             self.pending_queue.len().min(3) + usize::from(self.pending_queue.len() > 3)
         };
-        let available = rows.saturating_sub(8 + draft_height + pending_height);
+        // Preserve enough space for active dialogs before choosing the header.
+        // The bottom owns queue rows, a spacer, composer, status and diagnostics.
+        let bottom = 5 + draft_height + pending_height;
+        let body_minimum = if self
+            .picker
+            .as_ref()
+            .is_some_and(|picker| picker.query.is_some())
+        {
+            7
+        } else if self.modal.is_some() || self.picker.is_some() || self.suggestions.is_some() {
+            5
+        } else {
+            4
+        };
+        // Keep a one-line HIBI header even when a multiline draft needs
+        // most of a short terminal. The transcript gives up one row first.
+        let remaining = rows.saturating_sub(bottom);
+        let header_budget = remaining
+            .saturating_sub(body_minimum)
+            .max(usize::from(remaining > 0));
+        let header_gap = usize::from(header_budget > 3);
+        let info = crate::ui::welcome::Context {
+            workspace: &self.workspace,
+            model: &self.model,
+            mode: Mode::Tui,
+            has_credentials: self.has_credentials,
+        };
+        let header = header::rows(
+            width,
+            header_budget.saturating_sub(header_gap),
+            header::Header {
+                info,
+                thinking: self.thinking.as_deref(),
+                session: &self.session,
+            },
+        );
+        let transcript_top = header.len() + header_gap;
+        if self.transcript_top != transcript_top {
+            self.selection = None;
+        }
+        self.transcript_top = transcript_top;
+        let available = rows.saturating_sub(bottom + transcript_top);
         let modal = self.picker_rows(width, available, &left);
         let transcript_rows = modal.as_ref().map_or(available, |(top, _)| *top);
         let welcome = if self.transcript.is_empty() && self.activity.is_none() {
-            welcome::rows(
+            header::tips(
                 width,
                 transcript_rows,
-                crate::ui::welcome::Context {
+                &crate::ui::welcome::Context {
                     workspace: &self.workspace,
                     model: &self.model,
                     mode: Mode::Tui,
@@ -274,19 +296,21 @@ impl Screen {
             .as_ref()
             .and_then(|dialog| dialog.cursor)
             .zip(modal.as_ref())
-            .map(|((row, column), (top, _))| (top + row + 4, left.len() + column + 1));
+            .map(|((row, column), (top, _))| {
+                (top + row + transcript_top + 1, left.len() + column + 1)
+            });
         let cursor_visible = if self.modal.is_some() {
             modal_cursor.is_some()
         } else {
             self.picker.is_none() && (draft_start..draft_end).contains(&cursor_line)
         };
         let mut frame = String::new();
-        frame.push_str(&format!(
-            "{left}{}\x1b[K\r\n",
-            self.accent("1;38;2;236;74;125", &title)
-        ));
-        frame.push_str(&format!("{left}{}\x1b[K\r\n", self.accent("2", &header)));
-        frame.push_str("\x1b[K\r\n");
+        for row in &header {
+            frame.push_str(&format!("{left}{}\x1b[K\r\n", row.render(self.color)));
+        }
+        if header_gap > 0 {
+            frame.push_str("\x1b[K\r\n");
+        }
         self.selectable_rows = vec![String::new(); available];
         for row in 0..available {
             if let Some((top, panel)) = &modal {

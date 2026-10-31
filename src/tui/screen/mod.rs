@@ -20,12 +20,11 @@ use std::{
 
 use super::{
     activity::Timeline,
-    file_mentions,
+    file_mentions, header,
     markdown::{self, Role, Tone},
     modal::{self, Modal},
     paint::{Cursor, Painter, SYNC_END},
     picker::Picker,
-    welcome,
 };
 use crate::{
     commands,
@@ -96,23 +95,6 @@ fn transcript_prefix(columns: usize) -> usize {
     } else {
         3
     }
-}
-
-fn mobile_header(model: &str, thinking: Option<&str>, session: &str, width: usize) -> String {
-    let model = model.rsplit('/').next().unwrap_or(model);
-    let mut header = clip(model, width);
-    if let Some(level) = thinking {
-        let part = format!(" · {}", clean(level));
-        if header.chars().count() + part.chars().count() <= width {
-            header.push_str(&part);
-        }
-    }
-    let session = clip(session, 10);
-    let part = format!(" · {session}");
-    if header.chars().count() + part.chars().count() <= width {
-        header.push_str(&part);
-    }
-    header
 }
 
 fn paint_background(frame: &str, color: bool) -> String {
@@ -261,6 +243,7 @@ pub(crate) struct Screen {
     scroll: usize,
     selection: Option<TextSelection>,
     selectable_rows: Vec<String>,
+    transcript_top: usize,
     exit_armed: Option<Instant>,
     paste: Option<PasteInput>,
     picker: Option<Picker>,
@@ -348,6 +331,7 @@ impl Screen {
             scroll: 0,
             selection: None,
             selectable_rows: Vec::new(),
+            transcript_top: 0,
             exit_armed: None,
             paste: None,
             picker: None,

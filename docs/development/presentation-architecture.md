@@ -38,7 +38,7 @@ src/
 │   ├── file_mentions.rs    Literal path completion
 │   ├── clipboard.rs        Image clipboard jobs
 │   ├── text_clipboard.rs   Transcript copying
-│   └── welcome.rs          Raspberry HIBI welcome
+│   └── header.rs           Persistent raspberry HIBI header
 ├── ui/
 │   ├── frontend.rs         Active view, handover and presentation routing
 │   ├── display.rs          Runtime display contracts and draft/queue data
@@ -85,3 +85,11 @@ The selected design uses separate renderer state and neutral shared services wit
 Run formatting, the complete locked Rust tests and strict all-target Clippy. Presentation acceptance covers startup, CLI/TUI/CLI handover, native login returning inline, multiline/pasted prompts, colors, actual tools/diffs, saved output, queue recovery and terminal cleanup. Repeated handover must leave exactly one session, make no requests merely to switch views, and submit an atomic pasted draft once.
 
 Provider protocols and OS-specific physical-terminal behavior retain their existing acceptance limits. This structural change adds no dependency or performance claim.
+
+## Persistent TUI header
+
+The TUI renders `header::rows(width, max_height, Header { info, thinking, session })` above every conversation frame. The header owns the raspberry slanted HIBI logo and version/model/thinking/workspace/session panel. It is never transcript data. Idle command/keyboard hints remain in the empty body and disappear after chat. CLI keeps its plain welcome.
+
+Prepending a banner to conversation rows would let scrolling hide it and make selection/history ownership ambiguous. The chosen layout reserves the actual returned header height as chrome, then derives body capacity from terminal height, composer, queue and active dialog requirements. Short/narrow terminals use compact HIBI text; a small searchable picker or five-line draft keeps HIBI and thinking in one line. Header labels clip and pad by Unicode display width, including wide characters, joined emoji and combining marks. Screen stores the rendered transcript origin for mouse selection and modal cursor positioning. Paging and picker navigation use the available body rows.
+
+Actual PTY regression coverage checks thinking updates, conversation/scroll, new/resumed sessions, short searchable pickers, multiline drafts with resize, Unicode label bounds, color/NO_COLOR and absence of header content in saved history. Thinking confirmations stay out of fullscreen chat; CLI uses native wording. Installer fixtures reject obsolete Pi-ready messaging.
