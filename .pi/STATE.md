@@ -1,5 +1,11 @@
 # Current state
 
+## Extension versions, issue #29
+
+Implemented in an isolated branch from dev, without including the pending HIBI header work. Managed updates prepare private candidates, retain version bundles and publish code/metadata through one atomic active pointer. Native update_extension, extension_history, extension_diff and rollback_extension share the runtime in both views. Records preserve parents, changed paths, hashes and validation evidence; optimistic version checks and a nonblocking commit lock prevent stale activation. Existing author folders remain intact. Initial imports never run programs; edited source with configured checks requires an explicit checked import. Failed candidates and unreferenced bundles stay inspectable; running registries keep their original files.
+
+Verification: TERM=dumb cargo test --locked passes 179 unit and 52 integration tests on this macOS host. Real subprocess tests cover rejected updates, protocol checks, timeout/cancellation and descendant termination, interrupted candidates, stale commits, integrity failures, legacy absolute-path aliases and an invocation reading old files after activation. CLI/TUI PTYs verify old-registry tool batches, updated command completion, history, diff and rollback. Installer/syntax, version-bump and offline npm/npx tests pass. Formatting, diff checks and strict all-target Clippy pass. No live-provider or physical-terminal acceptance is claimed. PR/CI and issue closure are pending; no release/tag or version bump is requested.
+
 ## v0.3.6 published, 2026-10-31
 
 The owner requested committing all current work and releasing a new tag to Rekabytes-Enterprise/hibiscus. Release commit 20b4a520fd0e243bb4737faeb5959f8116f88989 contains all 80 changed files, including the existing architecture skill. Annotated v0.3.6 points to that exact source and was pushed with dev. GitHub Release v0.3.6 is published, non-prerelease and latest: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.6. Publication time is 2026-10-31T15:22:47Z. npm registry publication is separate and was not performed; main and prior release tags remain unchanged.

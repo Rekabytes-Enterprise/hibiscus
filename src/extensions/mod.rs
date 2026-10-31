@@ -5,6 +5,8 @@ pub(crate) use agent::{definitions as agent_definitions, AgentTool, Catalog};
 mod process;
 #[cfg(test)]
 mod tests;
+mod validation;
+mod versions;
 
 use crate::Result;
 pub(crate) use process::Exit;
@@ -23,6 +25,7 @@ struct Extension {
     directory: PathBuf,
     command: Vec<String>,
     timeout: u64,
+    version: Option<String>,
 }
 struct Tool {
     extension: Arc<Extension>,
@@ -63,9 +66,12 @@ impl Registry {
             .recursive(true)
             .mode(0o700)
             .create(&root)?;
-        Self::load(&root)
+        Self::load_mode(&root, false)
     }
     fn load(root: &Path) -> Result<Self> {
+        Self::load_mode(root, true)
+    }
+    fn load_mode(root: &Path, import_edits: bool) -> Result<Self> {
         let mut registry = Self {
             root: Some(root.to_path_buf()),
             ..Self::default()
@@ -84,7 +90,7 @@ impl Registry {
                 break;
             }
             let entry = entry.map_err(|_| "Cannot read an extension directory entry")?;
-            if entry.path().is_dir() {
+            if entry.file_name() != versions::STORAGE && entry.path().is_dir() {
                 directories.push(entry.path());
             }
         }
@@ -96,7 +102,7 @@ impl Registry {
             directories.truncate(32);
         }
         for directory in directories {
-            if let Err(e) = registry.add(&directory) {
+            if let Err(e) = registry.add(&directory, import_edits) {
                 let name = directory
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -110,12 +116,98 @@ impl Registry {
         }
         Ok(registry)
     }
-    fn add(&mut self, directory: &Path) -> Result<()> {
+    fn add(&mut self, source: &Path, import_edits: bool) -> Result<()> {
+        let id = source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Invalid extension directory")?;
+        let store =
+            versions::Store::new(self.root.as_deref().ok_or("Missing extensions root")?, id)?;
+        let active = store.active()?;
+        let import = match &active {
+            None => true,
+            Some((state, _)) if import_edits => match store.source_changed(state) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    self.issues.push(format!(
+                        "{id}: source update rejected; active version retained: {}",
+                        crate::runtime::error::safe_message(&error.to_string())
+                    ));
+                    false
+                }
+            },
+            Some(_) => false,
+        };
+        if import {
+            let imported = (|| -> Result<()> {
+                let mut candidate =
+                    store.prepare(source, active.as_ref().map(|a| &a.0), None, true)?;
+                let result = (|| -> Result<()> {
+                    let (manifest, _) = manifest::read(&candidate.files())?;
+                    if manifest.id != id {
+                        return Err("Directory name must match the extension ID".into());
+                    }
+                    self.check_registration(&manifest)?;
+                    validation::executable(&manifest, &candidate.files())?;
+                    if !manifest.checks.is_empty() && active.is_some() {
+                        return Err("Source has regression checks; use update_extension with fromSource:true to validate it before activation".into());
+                    }
+                    candidate.activate(versions::Validation::Imported {
+                        deferred_checks: manifest.checks.len(),
+                    })?;
+                    Ok(())
+                })();
+                if let Err(error) = &result {
+                    candidate.fail(&error.to_string(), vec![])?;
+                }
+                result
+            })();
+            if let Err(error) = imported {
+                if active.is_none() {
+                    return Err(error);
+                }
+                self.issues.push(format!(
+                    "{id}: source update rejected; active version retained: {}",
+                    crate::runtime::error::safe_message(&error.to_string())
+                ));
+            }
+        }
+        let (state, directory) = store.active()?.ok_or("Extension has no active version")?;
+        self.add_directory(id, &directory, Some(state.active))
+    }
+    fn check_candidate(root: &Path, id: &str, candidate: &Path) -> Result<()> {
+        let mut registry = Self::default();
+        let mut entries = std::fs::read_dir(root)?
+            .take(129)
+            .collect::<std::io::Result<Vec<_>>>()?;
+        if entries.len() > 128 {
+            return Err("Extension scan reached its 128-entry limit".into());
+        }
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let name = entry.file_name();
+            let Some(name) = name.to_str().filter(|n| manifest::identifier(n)) else {
+                continue;
+            };
+            if name == id || !entry.path().is_dir() {
+                continue;
+            }
+            let store = versions::Store::new(root, name)?;
+            let Some((_, directory)) = store.active()? else {
+                continue;
+            };
+            // Invalid unrelated legacy extensions are disabled just as in discovery.
+            let _ = registry.add_directory(name, &directory, None);
+        }
+        registry.add_directory(id, candidate, None)
+    }
+    fn add_directory(&mut self, id: &str, directory: &Path, version: Option<String>) -> Result<()> {
         let (manifest, validators) = manifest::read(directory)?;
-        if directory.file_name().and_then(|n| n.to_str()) != Some(&manifest.id) {
+        if manifest.id != id {
             return Err("Directory name must match the extension ID".into());
         }
         self.check_registration(&manifest)?;
+        validation::executable(&manifest, directory)?;
         let tool_names = manifest
             .tools
             .iter()
@@ -143,6 +235,7 @@ impl Registry {
             directory,
             command,
             timeout: manifest.timeout_seconds,
+            version,
         });
         // Publish registrations only after the entire manifest and namespace pass.
         for ((tool, name), validator) in manifest.tools.into_iter().zip(tool_names).zip(validators)
@@ -223,7 +316,7 @@ impl Registry {
             .collect()
     }
     pub(crate) fn report(&self) -> Value {
-        let extensions=self.extensions.values().map(|e|json!({"id":e.id,"description":e.description,"tools":self.tools.iter().filter(|(_,t)|t.extension.id==e.id).map(|(name,_)|name).collect::<Vec<_>>(),"commands":self.commands.iter().filter(|(_,c)|c.extension.id==e.id).map(|(name,_)|format!("/{name}")).collect::<Vec<_>>()})).collect::<Vec<_>>();
+        let extensions=self.extensions.values().map(|e|json!({"id":e.id,"description":e.description,"version":e.version,"directory":e.directory,"sourceDirectory":self.root.as_ref().map(|r|r.join(&e.id)),"tools":self.tools.iter().filter(|(_,t)|t.extension.id==e.id).map(|(name,_)|name).collect::<Vec<_>>(),"commands":self.commands.iter().filter(|(_,c)|c.extension.id==e.id).map(|(name,_)|format!("/{name}")).collect::<Vec<_>>()})).collect::<Vec<_>>();
         json!({"directory":self.root,"extensions":extensions,"errors":self.issues})
     }
     pub(crate) async fn execute_tool(

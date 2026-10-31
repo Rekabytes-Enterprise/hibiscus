@@ -21,3 +21,5 @@ mod policy;
 pub(crate) fn native_tool_count() -> usize {
     tools::definitions().len()
 }
+
+pub(crate) use tools::edit_diff;

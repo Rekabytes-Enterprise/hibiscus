@@ -4,6 +4,14 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Extension candidate updates with retained version history, parent and changed-file records, configured regression commands/protocol checks, native history/diff/rollback tools and atomic activation.
+
+### Changed
+
+- Extension registry snapshots now retain implementation files with their metadata. Existing source folders are preserved; rejected updates and interrupted candidates keep the last active version usable.
+
 ## [0.3.6] - 2026-10-31
 
 ### Added
