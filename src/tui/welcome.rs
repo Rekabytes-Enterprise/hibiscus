@@ -1,44 +1,8 @@
 //! Empty-chat presentation, never saved as conversation history.
-use super::mode::Mode;
+#[cfg(test)]
+use crate::ui::mode::Mode;
+use crate::ui::welcome::{commands, Context};
 use std::fmt::Write;
-
-pub(super) struct Context<'a> {
-    pub workspace: &'a str,
-    pub model: &'a str,
-    pub mode: Mode,
-    pub has_credentials: bool,
-}
-fn commands(context: &Context<'_>) -> String {
-    let login = if context.has_credentials {
-        ""
-    } else {
-        "/login  ·  "
-    };
-    format!(
-        "{login}{}  ·  /models  ·  /help",
-        context.mode.switch_command()
-    )
-}
-
-pub(super) fn inline(context: Context<'_>, color: bool) -> String {
-    let (brand, muted, reset) = if color {
-        (
-            "\x1b[1;38;2;225;80;130m",
-            "\x1b[38;2;155;155;155m",
-            "\x1b[0m",
-        )
-    } else {
-        ("", "", "")
-    };
-    let clean = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
-    format!(
-        "{brand}hibiscus{reset}{muted} {} · {} · CLI\n{}    {}{reset}\n",
-        env!("CARGO_PKG_VERSION"),
-        clean(context.workspace),
-        clean(context.model),
-        commands(&context),
-    )
-}
 
 const LETTERS: [[&str; 7]; 4] = [
     [
@@ -287,28 +251,24 @@ mod tests {
     use super::*;
     #[test]
     fn tips_offer_other_view_and_hide_login_with_credentials() {
-        for mode in [Mode::Tui, Mode::Cli] {
-            for has_credentials in [false, true] {
-                let context = Context {
-                    workspace: "workspace",
-                    model: "provider/model",
-                    mode,
-                    has_credentials,
-                };
-                let text = match mode {
-                    Mode::Cli => inline(context, false),
-                    Mode::Tui => rows(120, 20, context)
-                        .into_iter()
-                        .map(|r| r.render(false))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                };
-                assert!(text.contains(mode.switch_command()));
-                assert_eq!(text.contains("/login"), !has_credentials);
-                assert!(text.contains(mode.label()));
-            }
+        for has_credentials in [false, true] {
+            let context = Context {
+                workspace: "workspace",
+                model: "provider/model",
+                mode: Mode::Tui,
+                has_credentials,
+            };
+            let text = rows(120, 20, context)
+                .into_iter()
+                .map(|r| r.render(false))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("/cli"));
+            assert_eq!(text.contains("/login"), !has_credentials);
+            assert!(text.contains("TUI"));
         }
     }
+
     #[test]
     fn banner_is_slanted_and_uses_solid_cells_in_color_terminals() {
         let rows = logo();

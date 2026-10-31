@@ -1,8 +1,8 @@
 use crate::{
     runtime::{bridge::Client, dialog::Dialogs},
-    tui::{
-        screen::Screen,
+    ui::{
         terminal::{self, RawMode},
+        Frontend,
     },
     Result,
 };
@@ -13,7 +13,7 @@ use std::sync::mpsc::Receiver;
 pub(crate) fn choose_model<R: BufRead>(
     rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     events: Option<&Receiver<u8>>,
     raw: &mut Option<RawMode>,
@@ -122,7 +122,7 @@ pub(crate) fn choose_model<R: BufRead>(
 pub(crate) fn choose_thinking<R: BufRead>(
     rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     requested: Option<&str>,
     interactive: bool,
     events: Option<&Receiver<u8>>,

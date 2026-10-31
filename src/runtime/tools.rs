@@ -3,19 +3,20 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
-    process::Stdio,
     time::Duration,
 };
-use tokio::{io::AsyncReadExt, process::Command, sync::watch};
+use tokio::{process::Command, sync::watch};
 
 pub fn definitions() -> Vec<Value> {
-    vec![
+    let mut definitions = vec![
         json!({"name":"read","description":"Read a UTF-8 text file. Offset and limit are one-based line bounds. Output is bounded.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
         json!({"name":"bash","description":"Run a POSIX /bin/sh command in the workspace. Output and duration are bounded.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
-    ]
+    ];
+    definitions.extend(crate::extensions::agent_definitions());
+    definitions
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,52 +190,29 @@ pub async fn execute(
         "bash" => {
             let a: Bash = serde_json::from_value(args.clone())?;
             let mut cmd = Command::new("/bin/sh");
-            cmd.args(["-c", &a.command])
-                .current_dir(cwd)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .process_group(0);
-            let mut child = cmd.spawn()?;
-            let group = Group(child.id().ok_or("Shell PID unavailable")?);
-            let stdout = child.stdout.take().ok_or("Shell stdout unavailable")?;
-            let stderr = child.stderr.take().ok_or("Shell stderr unavailable")?;
-            let running = async {
-                let mut out = vec![];
-                let mut err = vec![];
-                let mut stdout = stdout.take(65537);
-                let mut stderr = stderr.take(65537);
-                let (a, b) =
-                    tokio::join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err));
-                a?;
-                b?;
-                if out.len() > 65536 || err.len() > 65536 {
-                    return Err(
-                        "Shell output exceeded 64 KiB per stream; command terminated".into(),
-                    );
+            cmd.args(["-c", &a.command]).current_dir(cwd);
+            let output = crate::process::run(
+                cmd,
+                None,
+                Duration::from_secs(a.timeout.unwrap_or(120)),
+                cancel,
+            )
+            .await?;
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if !output.status.success() {
+                return Err(ShellExit {
+                    status: output.status,
+                    output: bounded(&text, 65536).0,
                 }
-                let status = child.wait().await?;
-                let text = format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&out),
-                    String::from_utf8_lossy(&err)
-                );
-                if !status.success() {
-                    return Err(ShellExit {
-                        status,
-                        output: bounded(&text, 65536).0,
-                    }
-                    .into());
-                }
-                Ok(result(text, json!({"exitCode":status.code()})))
-            };
-            let outcome = tokio::select! {r=tokio::time::timeout(Duration::from_secs(a.timeout.unwrap_or(120)),running)=>match r{Ok(r)=>r,Err(_)=>Err("Shell timed out; command group terminated".into())},_=cancel.changed()=>Err("Shell cancelled; command group terminated".into())};
-            drop(group);
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            outcome
+                .into());
+            }
+            Ok(result(text, json!({"exitCode":output.status.code()})))
         }
+
         "goal" => {
             let a: Goal = serde_json::from_value(args.clone())?;
             match a.action.as_str() {
@@ -335,14 +313,6 @@ fn edit_diff(before: &str, after: &str) -> (String, usize, usize) {
         text.push_str("\n[Diff truncated]\n");
     }
     (text, added, removed)
-}
-struct Group(u32);
-impl Drop for Group {
-    fn drop(&mut self) {
-        unsafe {
-            libc::kill(-(self.0 as i32), libc::SIGKILL);
-        }
-    }
 }
 fn bounded(text: &str, max: usize) -> (String, bool) {
     let mut end = text.len().min(max);

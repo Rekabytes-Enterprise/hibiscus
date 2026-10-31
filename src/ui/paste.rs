@@ -1,5 +1,5 @@
 //! Bounded bracketed-paste decoding shared by both terminal input views.
-pub(super) struct Input {
+pub(crate) struct Input {
     bytes: Vec<u8>,
     overflow: bool,
     limit: usize,
@@ -11,7 +11,7 @@ impl Default for Input {
     }
 }
 impl Input {
-    pub(super) fn with_limit(limit: usize) -> Self {
+    pub(crate) fn with_limit(limit: usize) -> Self {
         Self {
             bytes: Vec::new(),
             overflow: false,
@@ -19,7 +19,7 @@ impl Input {
         }
     }
     const END: &'static [u8] = b"\x1b[201~";
-    pub(super) fn push(&mut self, byte: u8) -> Option<Option<String>> {
+    pub(crate) fn push(&mut self, byte: u8) -> Option<Option<String>> {
         self.bytes.push(byte);
         if self.bytes.ends_with(Self::END) {
             self.bytes.truncate(self.bytes.len() - Self::END.len());

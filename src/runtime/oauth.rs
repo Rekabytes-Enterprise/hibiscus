@@ -4,7 +4,7 @@
 mod protocol;
 mod store;
 
-use crate::{tui::screen::Screen, Result};
+use crate::{ui::Frontend, Result};
 use std::{sync::mpsc::Receiver, time::Duration};
 pub(super) const RESOURCE: &str = "https://chatgpt.com/backend-api/codex";
 pub(super) use store::Token;
@@ -44,7 +44,7 @@ pub(super) fn remove() -> Result<()> {
 }
 
 pub(super) fn sign_in(
-    output: &mut Screen,
+    output: &mut Frontend,
     events: &Receiver<u8>,
 ) -> Result<super::auth::AuthOutcome> {
     let store = store::Store::app()?;

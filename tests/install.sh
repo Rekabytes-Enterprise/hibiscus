@@ -33,7 +33,12 @@ run_case() {
  tar -czf "$tmp/fixtures/hibiscus-$target.tar.gz" -C "$tmp/fixtures" hibiscus
  (cd "$tmp/fixtures"; shasum -a 256 "hibiscus-$target.tar.gz") > "$tmp/fixtures/SHA256SUMS"
  if [ "$mode" = checksum ]; then printf 'invalid checksum\n' > "$tmp/fixtures/SHA256SUMS"; fi
- if [ "$mode" = existing ]; then printf '{"model":"keep/model"}\n' > "$home/.hibiscus/config.json"; fi
+ if [ "$mode" = existing ]; then
+  printf '{"model":"keep/model"}\n' > "$home/.hibiscus/config.json"
+  mkdir -p "$home/.hibiscus/extensions/keep"
+  printf 'user extension source\n' > "$home/.hibiscus/extensions/keep/main.py"
+  printf 'user manifest\n' > "$home/.hibiscus/extensions/keep/extension.json"
+ fi
  status=0
  TEST_OS=$os TEST_ARCH=$arch TEST_FIXTURES="$tmp/fixtures" TEST_CURL_LOG="$tmp/curl.log" TEST_FORBIDDEN="$tmp/forbidden" \
  TEST_DOWNLOAD_FAIL=$([ "$mode" = download ] && echo 1 || echo 0) \
@@ -45,15 +50,22 @@ run_case() {
  [ "$status" -eq 0 ] || { cat "$tmp/stderr"; exit 1; }
  "$home/bin/hibiscus" | grep -q 'test hibiscus'
  test -d "$home/.hibiscus/cache"
- if [ "$mode" = existing ]; then [ "$(cat "$home/.hibiscus/config.json")" = '{"model":"keep/model"}' ];
- else [ "$(cat "$home/.hibiscus/config.json")" = '{}' ]; fi
+ test -d "$home/.hibiscus/extensions"
+ if [ "$mode" = existing ]; then
+  [ "$(cat "$home/.hibiscus/config.json")" = '{"model":"keep/model"}' ]
+  [ "$(cat "$home/.hibiscus/extensions/keep/main.py")" = 'user extension source' ]
+  [ "$(cat "$home/.hibiscus/extensions/keep/extension.json")" = 'user manifest' ]
+ else
+  [ "$(cat "$home/.hibiscus/config.json")" = '{}' ]
+  [ -z "$(ls -A "$home/.hibiscus/extensions")" ]
+ fi
  [ ! -e "$tmp/forbidden" ]
  ! grep -q 'pi.dev\|pi-coding-agent' "$tmp/curl.log"
 }
 run_case Linux x86_64 x86_64-unknown-linux-musl latest existing
 run_case Linux aarch64 aarch64-unknown-linux-musl latest native
 run_case Darwin x86_64 x86_64-apple-darwin latest native
-run_case Darwin arm64 aarch64-apple-darwin 0.3.5 missing
+run_case Darwin arm64 aarch64-apple-darwin 0.3.6 missing
 run_case Darwin arm64 aarch64-apple-darwin latest checksum
 run_case Linux x86_64 x86_64-unknown-linux-musl latest download
 printf 'native installer tests passed\n'

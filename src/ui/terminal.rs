@@ -227,6 +227,25 @@ pub(crate) fn read_line(events: &Receiver<u8>, raw: &mut RawMode) -> Result<Opti
     Ok(None)
 }
 
+/// Current output dimensions, shared by fullscreen layout and inline wrapping.
+pub(crate) fn size() -> (usize, usize) {
+    let mut size = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: stdout is open and ioctl writes the supplied winsize.
+    if unsafe { libc::ioctl(io::stdout().as_raw_fd(), libc::TIOCGWINSZ, &mut size) } == 0
+        && size.ws_col > 0
+        && size.ws_row > 0
+    {
+        (usize::from(size.ws_col), usize::from(size.ws_row))
+    } else {
+        (80, 24)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

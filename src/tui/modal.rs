@@ -1,6 +1,7 @@
 //! Shared docked dialog chrome and state. Models/sessions and Runtime extension
 //! dialogs use the same borders, margins, selection rows and keyboard hints.
-use super::{picker::Picker, screen::Navigation};
+use super::picker::Picker;
+use crate::ui::input::Navigation;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 

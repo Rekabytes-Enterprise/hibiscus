@@ -1,4 +1,4 @@
-use crate::{tui::ui::Ui, Result};
+use crate::{ui::messages::Ui, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};

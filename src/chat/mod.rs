@@ -1,4 +1,4 @@
-pub(crate) mod commands;
+mod extension_commands;
 mod models;
 pub(crate) mod sessions;
 mod tool_outputs;
@@ -12,11 +12,13 @@ use crate::{
         error::{local, ChatError, RecoveryAction},
         logout::{sign_out, LogoutOutcome},
     },
-    tui::{
+    ui::{
+        display::PromptAction,
+        format::compact_tokens,
+        messages::Ui,
         mode::Mode,
-        screen::{compact_tokens, PromptAction, Screen},
         terminal::{self, RawMode, Terminal, TerminalEvents},
-        ui::Ui,
+        Frontend,
     },
     update, Result,
 };
@@ -45,8 +47,8 @@ pub(crate) fn start_chat_with_mode(session: SessionStart, mode: Mode) -> Result<
     let mut events = tty.as_ref().map(Terminal::events).transpose()?;
     let interactive_terminal = stdin.is_terminal() && tty.is_some();
     let mut screen = match mode {
-        Mode::Tui => Screen::new(interactive_terminal),
-        Mode::Cli => Screen::with_mode(interactive_terminal, mode),
+        Mode::Tui => Frontend::new(interactive_terminal),
+        Mode::Cli => Frontend::with_mode(interactive_terminal, mode),
     }?;
     // Decide routing before the child starts: startup warnings must not race
     // alternate-screen setup and write directly over the composer.
@@ -123,7 +125,7 @@ pub(crate) fn start_chat_with_mode(session: SessionStart, mode: Mode) -> Result<
 fn show_session_status<R: BufRead>(
     rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,
     events: Option<&Receiver<u8>>,
@@ -153,7 +155,7 @@ fn show_session_status<R: BufRead>(
 #[allow(clippy::too_many_arguments)]
 fn show_history_for<R: BufRead>(
     rpc: &mut Client,
-    output: &mut Screen,
+    output: &mut Frontend,
     fallback: &mut R,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,
@@ -177,7 +179,7 @@ fn show_history_for<R: BufRead>(
     sessions::show_recent_with(messages, output, ui)
 }
 
-fn offer_update(output: &mut Screen, keys: &Receiver<u8>, tag: &str) -> Result<()> {
+fn offer_update(output: &mut Frontend, keys: &Receiver<u8>, tag: &str) -> Result<()> {
     if output.select(
         &format!("Hibiscus {tag} is available"),
         &["Later".into(), "Update now".into()],
@@ -200,7 +202,7 @@ fn offer_update(output: &mut Screen, keys: &Receiver<u8>, tag: &str) -> Result<(
 fn chat<R: BufRead>(
     rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     dialogs: &mut Dialogs,
     events: &mut Option<TerminalEvents>,
@@ -225,10 +227,7 @@ fn chat<R: BufRead>(
                     }
                 }
             } else {
-                match output.inline_input_style() {
-                    Some(color) => crate::tui::line_editor::read(&events.receiver, raw, color)?,
-                    None => terminal::read_line(&events.receiver, raw)?,
-                }
+                output.read_inline(&events.receiver, raw)?
             };
             let Some(text) = text else {
                 return Ok(());
@@ -554,6 +553,35 @@ fn chat<R: BufRead>(
                     }
                     result?;
                 }
+                _ if extension_commands::namespaced(message)
+                    || message
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|name| output.has_extension_command(name)) =>
+                {
+                    if !images.is_empty() {
+                        output.restore_draft(String::new(), images.clone());
+                    }
+                    extension_commands::dispatch(
+                        message,
+                        rpc,
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|e| &e.receiver),
+                        interactive,
+                    )?;
+                    show_session_status(
+                        rpc,
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|e| &e.receiver),
+                        ui,
+                    )?;
+                }
                 "/sessions" => {
                     let cwd = env::current_dir().map_err(local)?;
                     let list =
@@ -606,6 +634,15 @@ fn chat<R: BufRead>(
                             ui,
                         )?;
                     }
+                }
+                _ if message
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(crate::commands::looks_like_command) =>
+                {
+                    return Err(
+                        local("Unknown command. Use /help to see available commands.").into(),
+                    );
                 }
                 _ => {
                     submitted = true;
@@ -667,7 +704,7 @@ fn chat<R: BufRead>(
 /// preserve typing that arrives while a slow first-time scan is running.
 fn list_sessions_for_chat(
     cwd: PathBuf,
-    output: &mut Screen,
+    output: &mut Frontend,
     keys: Option<&Receiver<u8>>,
 ) -> Result<Option<Vec<sessions::SessionInfo>>> {
     let Some(keys) = keys.filter(|_| output.is_full()) else {
@@ -682,9 +719,9 @@ fn list_sessions_for_chat(
                 // Keys take precedence even if a scan finished at the same instant.
                 for _ in 0..128 {
                     match keys.try_recv() {
-                        Ok(27) => match crate::tui::screen::escape_key(keys) {
-                            crate::tui::screen::Navigation::Escape => return Ok(None),
-                            crate::tui::screen::Navigation::EscapeWith(byte) => {
+                        Ok(27) => match crate::ui::input::escape_key(keys) {
+                            crate::ui::input::Navigation::Escape => return Ok(None),
+                            crate::ui::input::Navigation::EscapeWith(byte) => {
                                 buffered.push(byte);
                                 return Ok(None);
                             }
@@ -720,7 +757,7 @@ fn list_sessions_for_chat(
 fn handle_chat_error(
     error: Box<dyn std::error::Error + Send + Sync>,
     rpc: &mut Client,
-    output: &mut Screen,
+    output: &mut Frontend,
     ui: &Ui,
 ) -> Result<()> {
     // Local terminal/stdin I/O failure cannot safely be turned into chat text.
@@ -756,7 +793,7 @@ fn handle_chat_error(
 fn inline_login<R: BufRead>(
     rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     dialogs: &mut Dialogs,
     events: &mut Option<TerminalEvents>,
@@ -862,7 +899,7 @@ fn inline_login<R: BufRead>(
 fn inline_logout<R: BufRead>(
     rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     dialogs: &mut Dialogs,
     events: &Option<TerminalEvents>,
@@ -920,7 +957,7 @@ fn inline_logout<R: BufRead>(
 fn open_session<R: BufRead>(
     rpc: &mut Client,
     path: &std::path::Path,
-    output: &mut Screen,
+    output: &mut Frontend,
     input: &mut R,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,

@@ -126,7 +126,7 @@ pub async fn request(
     messages: &[Message],
     system: &str,
     thinking: &str,
-    tools: bool,
+    tools: Option<&[Value]>,
     out: &Sender<Value>,
 ) -> Result<Reply> {
     let codex = if provider.authentication == super::config::Authentication::Codex {
@@ -144,11 +144,7 @@ pub async fn request(
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(600))
         .build()?;
-    let definitions = if tools {
-        super::tools::definitions()
-    } else {
-        vec![]
-    };
+    let definitions = tools.unwrap_or_default();
     let mut wire = wire_messages(messages, provider, model);
     let (route, mut body) = match provider.api {
         Api::Responses => (
@@ -170,7 +166,7 @@ pub async fn request(
     if thinking != "off" && model.reasoning && provider.api == Api::Responses {
         body["reasoning"] = json!({"effort":thinking});
     }
-    if !tools {
+    if tools.is_none() {
         body.as_object_mut().unwrap().remove("tools");
     }
     let url = format!("{}/{}", provider.base_url.trim_end_matches('/'), route);
@@ -201,7 +197,7 @@ pub async fn request(
             let event: Value =
                 serde_json::from_str(&frame).map_err(|_| "Malformed provider streaming event")?;
             let delta = state.observe(&provider.api, &event)?;
-            if let Some(delta) = delta.filter(|_| tools) {
+            if let Some(delta) = delta.filter(|_| tools.is_some()) {
                 emit(out, Event::Text(&delta).wire()).await?;
             }
             if state.done {

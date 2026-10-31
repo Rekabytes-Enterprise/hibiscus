@@ -36,6 +36,11 @@ enum Command {
         streaming_behavior: Option<String>,
     },
     GetState,
+    #[serde(rename = "extension_command")]
+    RunExtension {
+        name: String,
+        input: String,
+    },
     GetMessages,
     GetToolOutputs,
     GetToolOutput {
@@ -130,6 +135,16 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
     let session = Arc::new(Mutex::new(session));
     let queue = Arc::new(Mutex::new(Queue::default()));
     let config = Arc::new(config);
+    let extensions = Arc::new(crate::extensions::Catalog::new(
+        crate::extensions::Registry::discover()
+            .unwrap_or_else(|e| crate::extensions::Registry::unavailable(&e.to_string())),
+    ));
+    {
+        let initial = extensions.snapshot();
+        for warning in initial.warnings() {
+            emit(&out, json!({"type":"extension_error","error":warning})).await?;
+        }
+    }
     let (cancel, _) = watch::channel(false);
     let mut active: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(bytes) = input.recv().await {
@@ -243,6 +258,7 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                     queue.clone(),
                     cancel.subscribe(),
                 );
+                let registry = extensions.clone();
                 active = Some(tokio::spawn(async move {
                     let result = run_turns(
                         Prompt {
@@ -252,6 +268,7 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                         },
                         s,
                         c,
+                        registry,
                         &o,
                         &q,
                         &mut stop,
@@ -283,6 +300,44 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                     let _ = emit(&o, Event::Settled.wire()).await;
                 }));
             }
+            Command::RunExtension { name, input } if !busy => {
+                if let Some(handle) = active.take() {
+                    let _ = handle.await;
+                }
+                cancel.send_replace(false);
+                queue.lock().unwrap().running = true;
+                let registry = extensions.snapshot();
+                let snapshot = session.lock().unwrap().clone();
+                let (o, q, mut stop) = (out.clone(), queue.clone(), cancel.subscribe());
+                active = Some(tokio::spawn(async move {
+                    let result = registry
+                        .execute_command(
+                            &id,
+                            &name,
+                            &input,
+                            (&snapshot.cwd, &snapshot.id),
+                            &mut stop,
+                        )
+                        .await;
+                    q.lock().unwrap().running = false;
+                    let result = match result {
+                        Ok(data) => {
+                            let _ = emit(
+                                &o,
+                                json!({"type":"extension_command_output","text":data["text"]}),
+                            )
+                            .await;
+                            if data["isError"] == true {
+                                failure(&id, "Extension command reported failure")
+                            } else {
+                                response(&id, json!({}))
+                            }
+                        }
+                        Err(e) => failure(&id, &e.to_string()),
+                    };
+                    let _ = emit(&o, result).await;
+                }));
+            }
             Command::Compact {
                 custom_instructions,
             } if !busy => {
@@ -312,7 +367,12 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                 let result = (|| -> Result<Value> {
                     let mut s = session.lock().unwrap();
                     match command {
-                        Command::GetState => Ok(s.state(&config)),
+                        Command::GetState => {
+                            let mut state = s.state(&config);
+                            state["extensionCommands"] =
+                                serde_json::to_value(extensions.snapshot().commands())?;
+                            Ok(state)
+                        }
                         Command::GetMessages => Ok(json!({"messages":s.messages})),
                         Command::GetToolOutputs => {
                             Ok(json!({"outputs":super::tool_output::list(&s.messages)}))
@@ -393,6 +453,7 @@ async fn run_turns(
     mut prompt: Prompt,
     session: Arc<Mutex<Session>>,
     config: Arc<Config>,
+    extensions: Arc<crate::extensions::Catalog>,
     out: &mpsc::Sender<Value>,
     queue: &Arc<Mutex<Queue>>,
     cancel: &mut watch::Receiver<bool>,
@@ -448,13 +509,16 @@ async fn run_turns(
             let snapshot = session.lock().unwrap().clone();
             let (p, m) = snapshot.selected(&config)?;
             let instructions = super::policy::compose(&snapshot.cwd);
+            let registry = extensions.snapshot();
+            let mut definitions = tools::definitions();
+            definitions.extend(registry.definitions().cloned());
             let call = provider::request(
                 p,
                 m,
                 &snapshot.messages,
                 &instructions,
                 &snapshot.thinking,
-                true,
+                Some(&definitions),
                 out,
             );
             let reply = tokio::select! {r=call=>r?,_=cancel.changed()=>break};
@@ -503,14 +567,27 @@ async fn run_turns(
                 let mut steps = session.lock().unwrap().steps.clone();
                 let cwd = snapshot.cwd.clone();
                 let started = std::time::Instant::now();
-                let result = tools::execute(&name, &args, &cwd, &mut steps, cancel).await;
+                let result = if *cancel.borrow() {
+                    Err("Tool cancelled before execution".into())
+                } else if registry.has_tool(&name) {
+                    registry
+                        .execute_tool(&id, &name, &args, (&cwd, &snapshot.id), cancel)
+                        .await
+                } else if let Some(tool) = crate::extensions::AgentTool::parse(&name) {
+                    extensions.execute(tool, &args)
+                } else {
+                    tools::execute(&name, &args, &cwd, &mut steps, cancel).await
+                };
                 let elapsed = started.elapsed();
                 let (is_error, result) = match result {
-                    Ok(v) => (false, v),
+                    Ok(v) => (v["isError"] == true, v),
                     Err(e) => {
                         let details = match e.downcast_ref::<tools::ShellExit>() {
                             Some(shell) => json!({"exitCode":shell.code()}),
-                            None => json!({}),
+                            None => match e.downcast_ref::<crate::extensions::Exit>() {
+                                Some(exit) => json!({"exitCode":exit.code}),
+                                None => json!({}),
+                            },
                         };
                         (
                             true,
@@ -587,7 +664,7 @@ async fn compact(
     }
     let (p, m) = snapshot.selected(&config)?;
     let prompt=format!("Summarize this conversation for continuation. Preserve user requirements, decisions, changed files, verified results, unresolved work and tool outcomes. Do not execute tools. {}",instructions.unwrap_or(""));
-    let reply = tokio::select! {r=provider::request(p,m,&snapshot.messages,&prompt,"off",false,out)=>r?,_=cancel.changed()=>return Err("Cancelled compact".into())};
+    let reply = tokio::select! {r=provider::request(p,m,&snapshot.messages,&prompt,"off",None,out)=>r?,_=cancel.changed()=>return Err("Cancelled compact".into())};
     let summary = reply.message.text();
     if summary.trim().is_empty() {
         return Err("Empty compaction summary; history unchanged".into());

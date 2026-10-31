@@ -6,7 +6,6 @@ pub(crate) mod dialog;
 mod engine;
 pub(crate) mod error;
 pub(crate) mod logout;
-pub(crate) mod mermaid;
 mod provider;
 mod run;
 mod session;
@@ -17,3 +16,8 @@ pub(crate) mod transport;
 mod event;
 mod oauth;
 mod policy;
+
+/// Quota derives from the actual native catalog, including extension authoring tools.
+pub(crate) fn native_tool_count() -> usize {
+    tools::definitions().len()
+}

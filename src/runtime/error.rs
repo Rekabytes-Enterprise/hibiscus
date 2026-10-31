@@ -68,6 +68,9 @@ impl ChatError {
         if self.source == ErrorSource::Local {
             return "Check the local configuration or command input. You can keep chatting.";
         }
+        if self.source == ErrorSource::Extension && self.category != ErrorCategory::Cancelled {
+            return "Ask Hibi to inspect the extension code. You can keep chatting.";
+        }
         match self.category {
             ErrorCategory::Authentication => "Use /login or check your Runtime credentials.",
             ErrorCategory::Access => "Check model access or choose another model with /models.",
@@ -246,6 +249,13 @@ pub(crate) fn safe_message(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extension_failures_keep_chat_usable_without_provider_login_guidance() {
+        let error = super::ChatError::new(super::ErrorSource::Extension, "Extension returned 401");
+        assert!(error.hint().contains("extension code"));
+        assert!(!error.hint().contains("/login") && !error.hint().contains("/models"));
+        assert_eq!(error.recovery(), super::RecoveryAction::KeepChatting);
+    }
     use super::*;
     #[test]
     fn classification_is_advisory_and_billing_wins_over_throttling() {

@@ -1,7 +1,12 @@
 mod chat;
+mod cli;
+mod commands;
+mod extensions;
 mod paths;
+mod process;
 mod runtime;
 mod tui;
+mod ui;
 mod update;
 
 use std::env;
@@ -91,7 +96,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Start::Help => {
-            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --cli [--continue]\n       hibiscus --tui [--continue]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nThe update command updates Hibiscus.\nWithout a prompt, start a chat (or read prompts from piped stdin).\nTUI is the default interactive view. Use /cli for inline chat or /tui to return to full screen.\nIn chat: /cli, /tui, /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login offers native Codex browser login or a provider API key. Providers and models are configured in ~/.hibiscus/config.json. Authentication errors stay inside Hibiscus; fix the reported dependency or provider problem and retry.\n/logout removes a selected provider's stored credentials. CLI temporarily opens native full-screen login/logout dialogs, then returns inline.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_HOME to override the Hibiscus data directory.");
+            println!("Usage: hibiscus [PROMPT...]\n       hibiscus --cli [--continue]\n       hibiscus --tui [--continue]\n       hibiscus --continue\n       hibiscus --sessions\n       hibiscus --version\n       hibiscus update\n       hibiscus --help\n\nThe update command updates Hibiscus.\nWithout a prompt, start a chat (or read prompts from piped stdin).\nTUI is the default interactive view. Use /cli for inline chat or /tui to return to full screen.\nIn chat: /<id>:<command> [input], /cli, /tui, /new, /continue, /sessions, /models, /thinking [level], /compact [instructions], /login, /logout, /restore, /reconnect, /quit.\n/login offers native Codex browser login or a provider API key. Providers and models are configured in ~/.hibiscus/config.json. Authentication errors stay inside Hibiscus; fix the reported dependency or provider problem and retry.\n/logout removes a selected provider's stored credentials. CLI temporarily opens native full-screen login/logout dialogs, then returns inline.\n--continue resumes the latest session in this directory.\n--sessions lets you select a saved session in this directory.\nSet HIBISCUS_HOME to override the Hibiscus data directory.");
             Ok(())
         }
         Start::Prompt(prompt) => {
@@ -122,7 +127,7 @@ fn run() -> Result<()> {
             } else {
                 SessionStart::New
             },
-            tui::mode::Mode::Cli,
+            ui::mode::Mode::Cli,
         ),
         Start::Sessions => {
             let stdin = io::stdin();

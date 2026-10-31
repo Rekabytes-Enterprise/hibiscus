@@ -1,8 +1,8 @@
 //! CLI draft editing. Repaint only the bounded input region, never chat history.
-use super::{
-    inline,
+use super::style as inline;
+use crate::ui::{
+    input::{escape_key, Navigation},
     paste::Input as Paste,
-    screen::{escape_key, Navigation},
     terminal::RawMode,
 };
 use crate::Result;

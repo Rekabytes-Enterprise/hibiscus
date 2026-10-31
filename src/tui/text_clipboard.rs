@@ -75,7 +75,7 @@ pub(super) fn copy(out: &mut impl Write, text: &str) -> io::Result<()> {
         write!(
             out,
             "\x1b]52;c;{}\x07",
-            super::screen::base64(text.as_bytes())
+            crate::ui::text::base64(text.as_bytes())
         )?;
         out.flush()?;
     }

@@ -1,5 +1,5 @@
-use crate::tui::{
-    screen::ScrollDisplay,
+use crate::ui::{
+    display::ScrollDisplay,
     terminal::{self, RawMode},
 };
 use crate::Result;

@@ -32,7 +32,7 @@ pub(super) fn paste_key() -> &'static str {
 }
 
 pub(super) struct Job {
-    pub(super) receiver: Receiver<Result<super::screen::SharedImage, String>>,
+    pub(super) receiver: Receiver<Result<crate::ui::display::SharedImage, String>>,
     cancelled: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -62,7 +62,7 @@ impl Drop for Job {
     }
 }
 
-fn read_image(cancelled: &AtomicBool) -> Result<super::screen::SharedImage, String> {
+fn read_image(cancelled: &AtomicBool) -> Result<crate::ui::display::SharedImage, String> {
     let capture =
         |command: &mut Command, timeout, limit| capture(command, timeout, limit, cancelled);
     let bytes = if cfg!(target_os = "macos") {
@@ -146,7 +146,7 @@ fn preferred_type(types: &[u8]) -> Option<&'static str> {
         .find(|mime| types.lines().any(|line| line.trim() == *mime))
 }
 
-fn image_content(bytes: &[u8]) -> Result<super::screen::SharedImage, String> {
+fn image_content(bytes: &[u8]) -> Result<crate::ui::display::SharedImage, String> {
     if bytes.is_empty() {
         return Err("No image in clipboard".into());
     }
@@ -167,7 +167,7 @@ fn image_content(bytes: &[u8]) -> Result<super::screen::SharedImage, String> {
     let mut image = json!({"type":"image", "mimeType":mime});
     // Move the encoded buffer into the value; json!(base64(bytes)) serializes
     // the temporary String by reference and allocates another full copy.
-    image["data"] = Value::String(super::screen::base64(bytes));
+    image["data"] = Value::String(crate::ui::text::base64(bytes));
     Ok(Arc::new(image))
 }
 

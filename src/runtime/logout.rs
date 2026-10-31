@@ -1,4 +1,4 @@
-use crate::{tui::screen::Screen, Result};
+use crate::{ui::Frontend, Result};
 use std::sync::mpsc::Receiver;
 pub(crate) enum LogoutOutcome {
     Removed { provider: String },
@@ -6,7 +6,7 @@ pub(crate) enum LogoutOutcome {
     Empty,
 }
 pub(crate) fn sign_out(
-    output: &mut Screen,
+    output: &mut Frontend,
     events: &Receiver<u8>,
     before_remove: impl FnOnce() -> Result<()>,
 ) -> Result<LogoutOutcome> {

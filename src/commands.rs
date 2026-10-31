@@ -2,12 +2,12 @@
 /// runtime-only or unimplemented commands: anything selected here is submitted to
 /// the same chat command dispatcher as a manually typed name.
 #[derive(Clone, Copy)]
-pub(crate) struct Command {
-    pub(crate) name: &'static str,
-    pub(crate) description: &'static str,
+pub(crate) struct Command<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) description: &'a str,
 }
 
-const COMMANDS: &[Command] = &[
+const COMMANDS: &[Command<'static>] = &[
     Command {
         name: "/cli",
         description: "Switch to inline terminal chat",
@@ -74,13 +74,33 @@ const COMMANDS: &[Command] = &[
     },
 ];
 
-pub(crate) fn matches(prefix: &str) -> Vec<&'static Command> {
+pub(crate) fn looks_like_command(name: &str) -> bool {
+    name.strip_prefix('/').is_some_and(|name| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b':'))
+    })
+}
+pub(crate) fn reserved(name: &str) -> bool {
+    COMMANDS.iter().any(|command| command.name == name)
+}
+
+pub(crate) fn matches<'a>(
+    prefix: &str,
+    extensions: &'a [crate::extensions::CommandInfo],
+) -> Vec<Command<'a>> {
     if !prefix.starts_with('/') || prefix.chars().any(char::is_whitespace) {
         return Vec::new();
     }
     COMMANDS
         .iter()
-        .filter(|cmd| cmd.name.starts_with(prefix))
+        .copied()
+        .chain(extensions.iter().map(|c| Command {
+            name: &c.name,
+            description: &c.description,
+        }))
+        .filter(|c| c.name.starts_with(prefix))
         .collect()
 }
 
@@ -90,34 +110,41 @@ mod tests {
     #[test]
     fn suggestions_filter_prefix_and_never_include_pi_only_commands() {
         assert_eq!(
-            matches("/m").iter().map(|cmd| cmd.name).collect::<Vec<_>>(),
+            matches("/m", &[])
+                .iter()
+                .map(|cmd| cmd.name)
+                .collect::<Vec<_>>(),
             ["/models"]
         );
         assert_eq!(
-            matches("/lo")
+            matches("/lo", &[])
                 .iter()
                 .map(|cmd| cmd.name)
                 .collect::<Vec<_>>(),
             ["/login", "/logout"]
         );
         assert_eq!(
-            matches("/thi")
+            matches("/thi", &[])
                 .iter()
                 .map(|cmd| cmd.name)
                 .collect::<Vec<_>>(),
             ["/thinking"]
         );
         assert_eq!(
-            matches("/comp")
+            matches("/comp", &[])
                 .iter()
                 .map(|cmd| cmd.name)
                 .collect::<Vec<_>>(),
             ["/compact"]
         );
-        assert!(matches("/model ").is_empty());
-        assert!(matches("hello").is_empty());
-        assert!(!matches("/").iter().any(|cmd| cmd.name == "/fork"));
-        assert!(matches("/loop").is_empty());
-        assert!(matches("/approval").is_empty());
+        assert!(matches("/model ", &[]).is_empty());
+        assert!(matches("hello", &[]).is_empty());
+        assert!(!matches("/", &[]).iter().any(|cmd| cmd.name == "/fork"));
+        assert!(matches("/loop", &[]).is_empty());
+        assert!(matches("/approval", &[]).is_empty());
+        assert!(matches("/extension", &[]).is_empty());
+        assert!(!reserved("/extensions"));
+        assert!(looks_like_command("/extensions"));
+        assert!(!looks_like_command("/tmp/file:42"));
     }
 }

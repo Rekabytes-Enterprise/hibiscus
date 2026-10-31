@@ -2,14 +2,14 @@
 // Source modules include #[cfg(test)] imports under Clippy's bench build,
 // which has no test harness. They remain checked normally in the binary tests.
 #![allow(dead_code, unused_imports)]
+#[path = "../src/ui/messages.rs"]
+pub(crate) mod messages;
 #[path = "../src/paths.rs"]
 mod paths;
 #[path = "../src/chat/sessions.rs"]
 mod sessions;
-#[path = "../src/tui/ui.rs"]
-pub(crate) mod ui;
-mod tui {
-    pub(crate) use crate::ui;
+mod ui {
+    pub(crate) use crate::messages;
 }
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 use std::{

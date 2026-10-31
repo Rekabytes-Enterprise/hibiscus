@@ -1,5 +1,6 @@
 //! A single rewritable activity row in ordinary terminal scrollback.
-use super::{inline, tool};
+use super::style as inline;
+use crate::ui::tool;
 use std::fmt::Write;
 
 const SUCCESS: &str = "\x1b[48;2;24;57;37m\x1b[38;2;164;232;181m";
@@ -7,14 +8,14 @@ const FAILURE: &str = "\x1b[48;2;72;28;34m\x1b[38;2;255;171;177m";
 const MUTED: &str = "\x1b[38;2;155;155;155m";
 
 #[derive(Default)]
-pub(super) struct Tools {
+pub(crate) struct Tools {
     open: bool,
     reads: Vec<String>,
     read_count: usize,
     active: Option<String>,
 }
 impl Tools {
-    pub(super) fn start(
+    pub(crate) fn start(
         &mut self,
         id: &str,
         call: &tool::Call,
@@ -40,7 +41,7 @@ impl Tools {
         out
     }
 
-    pub(super) fn end(
+    pub(crate) fn end(
         &mut self,
         id: &str,
         call: &tool::Call,
@@ -88,7 +89,7 @@ impl Tools {
         out
     }
 
-    pub(super) fn flush(&mut self, color: bool, width: usize) -> String {
+    pub(crate) fn flush(&mut self, color: bool, width: usize) -> String {
         let mut out = String::new();
         if self.read_count > 0 {
             self.clear(&mut out);
@@ -139,7 +140,7 @@ fn long_command(call: &tool::Call, width: usize) -> bool {
     call.name == "bash"
         && (call.target.contains('\n') || cells(&label(call)) > width.min(100).saturating_sub(24))
 }
-pub(super) fn waiting(width: usize) -> String {
+pub(crate) fn waiting(width: usize) -> String {
     clip(
         "  … Waiting for response · Esc to stop",
         width.saturating_sub(1),
@@ -197,7 +198,7 @@ fn command_block(command: &str, color: bool, width: usize, limit: Option<usize>)
     out
 }
 
-pub(super) fn saved_list(
+pub(crate) fn saved_list(
     entries: &[crate::runtime::tool_output::Summary],
     color: bool,
     width: usize,
@@ -233,7 +234,7 @@ pub(super) fn saved_list(
     out.push('\n');
     out
 }
-pub(super) fn saved_output(
+pub(crate) fn saved_output(
     entry: Option<&crate::runtime::tool_output::Output>,
     color: bool,
     width: usize,

@@ -70,7 +70,7 @@ fi
 mkdir -p "$INSTALL_DIR"
 
 # Keep app-owned settings/cache together without overwriting existing settings.
-(umask 077; mkdir -p "$DATA_DIR/cache") || fail "could not create $DATA_DIR"
+(umask 077; mkdir -p "$DATA_DIR/cache" "$DATA_DIR/extensions") || fail "could not create $DATA_DIR"
 if [ ! -e "$DATA_DIR/config.json" ]; then
     (umask 077; set -C; printf '%s\n' '{}' > "$DATA_DIR/config.json") || fail "could not create $DATA_DIR/config.json"
 fi

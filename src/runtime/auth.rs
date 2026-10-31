@@ -1,4 +1,4 @@
-use crate::{tui::screen::Screen, Result};
+use crate::{ui::Frontend, Result};
 use std::{collections::HashMap, fs, os::unix::fs::PermissionsExt, sync::mpsc::Receiver};
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AuthOutcome {
@@ -25,7 +25,7 @@ pub(super) fn save(keys: &HashMap<String, String>) -> Result<()> {
     )
 }
 pub(crate) fn sign_in(
-    output: &mut Screen,
+    output: &mut Frontend,
     events: &Receiver<u8>,
     provider: &str,
     auth_type: &str,

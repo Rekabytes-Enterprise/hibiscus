@@ -8,7 +8,7 @@ A standalone Rust coding agent with a terminal UI, direct provider connections a
 
 ## Native migration
 
-Version 0.3.5 runs without the Pi SDK, Pi runtime or Node.js. Earlier releases use the previous runtime. Build the source with Rust/Cargo, or use the versioned native installer in the installation section below.
+Versions 0.3.5 and later run without the Pi SDK, Pi runtime or Node.js. Releases before 0.3.5 use the previous runtime. Build the source with Rust/Cargo, or use the versioned native installer in the installation section below.
 
 ```sh
 cargo install --path . --locked
@@ -29,6 +29,10 @@ The default catalog contains OpenAI `gpt-4.1`, Anthropic `claude-sonnet-4-5` and
 - Keeps a searchable model picker, images, terminal selection/copy, Markdown tables, queued steering/followups and recoverable errors.
 - Compacts context on request, or near a configured context limit when the provider supplies usage. Original history is archived locally.
 
+## Local extensions
+
+Version 0.3.6 creates an empty `~/.hibiscus/extensions/` directory. Ask Hibi to create an extension with the tools or slash commands you want, such as “Create a project review extension with `/review`.” The agent writes and registers its manifest and source through native extension tools; you can use the new command in the same session. Extensions can use any installed executable through the versioned JSON protocol. [Extension authoring](docs/extensions.md).
+
 ## Commands
 
 | Command | Action |
@@ -37,6 +41,7 @@ The default catalog contains OpenAI `gpt-4.1`, Anthropic `claude-sonnet-4-5` and
 | `/tui` | Return to the default fullscreen view |
 | `/models` | Search the configured provider/model catalog |
 | `/login` | Browser Login → Codex, or API Key → configured provider |
+| Custom commands, e.g. `/review [input]` | Run an installed extension command locally |
 | `/logout` | Confirm removal of a locally stored API key or Codex credential |
 | `/thinking [level]` | Select a supported Responses reasoning level |
 | `/new` | Start another conversation |
@@ -72,8 +77,8 @@ An explicitly configured environment variable takes precedence over a stored key
 The bundled installer downloads a checksum-verified Hibiscus binary and creates its data directory. It no longer installs Pi or Node. The npm wrapper still requires Node/npm to run the installer; the installed agent does not.
 
 ```sh
-# Native v0.3.5 installer, pinned to the matching GitHub release:
-curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.5/install.sh | HIBISCUS_VERSION=v0.3.5 sh
+# Native v0.3.6 installer, pinned to the matching GitHub release:
+curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.6/install.sh | HIBISCUS_VERSION=v0.3.6 sh
 
 # npm installer versions are published separately:
 npx @rekabytes/hibiscus@latest

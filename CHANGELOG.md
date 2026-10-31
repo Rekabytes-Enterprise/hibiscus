@@ -4,6 +4,18 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-31
+
+### Added
+
+- Local executable extensions with versioned JSON, validated model tools and custom slash commands in both views.
+- An empty user extensions directory and native `create_extension`, `list_extensions` and `reload_extensions` agent tools. Creation registers new tools and commands in the same session; TUI completion includes custom commands.
+
+### Changed
+
+- Separate CLI and fullscreen TUI renderers, shared terminal/display services and view-specific integration tests.
+- Installation/startup creates the user extensions folder while preserving existing manifests and source files.
+
 ## [0.3.5] - 2026-10-31
 
 ### Added
@@ -265,7 +277,11 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.5
+[0.3.4]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.4
+[0.3.3]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.0

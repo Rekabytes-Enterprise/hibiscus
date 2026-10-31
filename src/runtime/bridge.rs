@@ -6,14 +6,12 @@ use super::{
 };
 use crate::{
     runtime::dialog::Dialogs,
-    tui::{
-        screen::{
-            escape_key, ActiveAction, DraftSubmission, Navigation, QueueMode, ScrollDisplay,
-            SharedImage,
-        },
+    ui::{
+        display::{ActiveAction, DraftSubmission, QueueMode, ScrollDisplay, SharedImage},
+        input::{escape_key, Navigation},
+        messages::Ui,
         terminal::RawMode,
         tool,
-        ui::Ui,
     },
     Result,
 };
@@ -109,8 +107,20 @@ impl Client {
             display.start_work()?;
             display.set_work("Sending prompt…")?;
         }
+        if kind == "extension_command" {
+            display.start_command(&format!(
+                "Running {}",
+                safe_detail(command["name"].as_str().unwrap_or("extension"))
+            ))?;
+        }
         let sending = write_command(
-            &mut input.checked(|| service_sending(display, events, kind == "prompt")),
+            &mut input.checked(|| {
+                service_sending(
+                    display,
+                    events,
+                    matches!(kind.as_str(), "prompt" | "extension_command"),
+                )
+            }),
             &command,
             images,
         );
@@ -136,11 +146,9 @@ impl Client {
                 error.command_id = Some(id);
             }
         }
-        if kind == "prompt" {
+        if matches!(kind.as_str(), "prompt" | "extension_command") {
             display.stop_work()?;
-            // Only a successfully settled run replaces completed Mermaid
-            // source with display-only diagrams. Never mutate Hibiscus's messages.
-            if result.as_ref().is_ok_and(|stopped| !stopped) {
+            if kind == "prompt" && result.as_ref().is_ok_and(|stopped| !stopped) {
                 display.complete_diagrams()?;
             }
         }
@@ -513,13 +521,14 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
     let mut rejection = None;
     let mut cancellation_started = None;
     let mut pending_queued = HashMap::<String, DraftSubmission>::new();
+    let mut local_done = false;
     let mut next_queue_id = 0;
     let mut queued_count = 0;
     loop {
         // Capture before polling both sources so a notification arriving
         // between the polls and sleep cannot be lost.
         let generation = transport::activity_generation();
-        if kind == "prompt" {
+        if matches!(kind, "prompt" | "extension_command") {
             display.tick_work()?;
         }
         // Poll terminal input before consuming queued Runtime events too; a busy
@@ -633,6 +642,11 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             }
         }
         match event["type"].as_str() {
+            Some("extension_command_output") if kind == "extension_command" => {
+                display.end_turn()?;
+                writeln!(display, "{}", event["text"].as_str().unwrap_or(""))?;
+                display.flush()?;
+            }
             Some("agent_start") if kind == "prompt" => settled = false,
             Some("response") if event["id"] == id => {
                 if event["success"] != true {
@@ -646,11 +660,15 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     continue;
                 }
                 accepted = true;
+                if kind == "extension_command" && interrupted && !(clear_done && abort_done) {
+                    local_done = true;
+                    continue;
+                }
                 if kind != "prompt" {
                     if event["data"]["cancelled"] == true {
                         return Err(ChatError::cancelled(kind).into());
                     }
-                    return Ok(false);
+                    return Ok(interrupted);
                 }
                 if settled
                     && pending_queued.is_empty()
@@ -906,6 +924,9 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             }
             _ => {}
         }
+        if kind == "extension_command" && local_done && clear_done && abort_done {
+            return Ok(true);
+        }
         if abort_done && clear_done {
             if let Some(error) = rejection.take() {
                 return Err(error.into());
@@ -1077,7 +1098,29 @@ fn maybe_interrupt(
     next_queue_id: &mut u64,
     queued_count: usize,
 ) -> Result<()> {
-    let stop = if kind == "prompt" && !settled && !*interrupted {
+    let stop = if kind == "extension_command" && !*interrupted {
+        match events {
+            Some(rx) if display.live_input() => {
+                let mut stop = false;
+                for _ in 0..8 {
+                    let Some(byte) = display.pending_key().or_else(|| rx.try_recv().ok()) else {
+                        break;
+                    };
+                    match display.active_key(byte, rx)? {
+                        ActiveAction::Stop => {
+                            stop = true;
+                            break;
+                        }
+                        ActiveAction::Submit(draft) => display.hold_queue(draft)?,
+                        ActiveAction::None => {}
+                    }
+                }
+                stop
+            }
+            Some(rx) => active_keys(rx, display)?,
+            None => false,
+        }
+    } else if kind == "prompt" && !settled && !*interrupted {
         match events {
             Some(rx) if display.live_input() => poll_live_input(
                 input,
@@ -1324,7 +1367,11 @@ fn finish_turn<W: ScrollDisplay>(
 
 fn rejected(event: &Value, kind: &str, id: &str) -> ChatError {
     let mut error = ChatError::new(
-        ErrorSource::Command,
+        if kind == "extension_command" {
+            ErrorSource::Extension
+        } else {
+            ErrorSource::Command
+        },
         &format!(
             "Runtime rejected {kind}: {}",
             event["error"].as_str().unwrap_or("Unknown error")
@@ -1385,7 +1432,7 @@ mod tests {
 
     #[test]
     fn newest_unacknowledged_queue_is_preserved_for_explicit_review() {
-        let mut screen = crate::tui::screen::Screen::new(false).unwrap();
+        let mut screen = crate::ui::Frontend::new(false).unwrap();
         let mut pending = HashMap::new();
         for n in [2, 10] {
             pending.insert(

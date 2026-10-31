@@ -20,6 +20,10 @@ The runtime adapter decodes tool events into display data. The inline renderer o
 
 Before the first response, CLI prints one static `Waiting for response · Esc to stop` row. Color mode clears it when text, a tool or an error arrives; `NO_COLOR` prints it as an ordinary line. Esc cancels and clears the waiting state. Long shell commands keep a short status row with right-aligned metadata and wrap beneath it. The preview shows at most eight command lines; saved-output inspection shows the complete stored command.
 
+## Extensions
+
+Ask Hibi to create extensions through its native `create_extension` tool; it writes the chosen implementation under `~/.hibiscus/extensions/` and registers its tools and slash commands immediately. `list_extensions` and `reload_extensions` let the agent inspect and update installed extensions. Custom commands such as `/review [input]`, or the default `/<id>:<command>`, run locally in either view; TUI includes them in slash suggestions. Esc cancels execution without submitting a model prompt. Model-callable extension tools use the normal tool rows and saved-output/session flow. See [extension authoring](extensions.md) for the executable API.
+
 ## Saved tool output
 
 `/output` shows the latest completed tool result in the current active session history. `/output list` lists the latest fifty results with their numbers and exit status. `/output <number>` shows that result's complete saved text, command and recorded edit diff when available. These are local read-only queries: they do not call the provider, rerun a tool, change model context or save the slash command as a user message. Existing runtime output bounds still apply. Inspection preserves text omitted or compacted by the normal preview, wraps long lines and strips terminal controls. Staged composer images remain staged.
