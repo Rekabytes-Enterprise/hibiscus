@@ -67,10 +67,19 @@ impl Fixture {
                         reader.read_exact(&mut bytes).unwrap();
                         let mut body: Value = serde_json::from_slice(&bytes).unwrap();
                         body["fixture_route"] = json!(route);
+                        let checkpoint = checkpoints::id_from_request(&body);
                         captured.lock().unwrap().push(body);
-                        let (status, body) = replies
+                        let (status, mut body) = replies
                             .pop_front()
                             .unwrap_or((500, "unexpected request".into()));
+                        if body.contains(checkpoints::PLACEHOLDER) {
+                            body = body.replace(
+                                checkpoints::PLACEHOLDER,
+                                checkpoint.as_deref().expect(
+                                    "fixture model must receive a real checkpoint_history result",
+                                ),
+                            );
+                        }
                         let actual = if status == 298 || status == 299 {
                             200
                         } else {
@@ -210,6 +219,8 @@ fn good(output: &std::process::Output) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+#[path = "native_runtime/checkpoints.rs"]
+mod checkpoints;
 #[path = "native_runtime/cli.rs"]
 mod cli;
 #[path = "native_runtime/extensions.rs"]

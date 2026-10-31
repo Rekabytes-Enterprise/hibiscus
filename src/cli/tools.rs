@@ -491,6 +491,15 @@ fn edit_preview(diff: &str, color: bool, width: usize) -> String {
             }
             continue;
         }
+        if line.starts_with("--- ") || line.starts_with("+++ ") {
+            let text = clip(line, width.saturating_sub(7));
+            if color {
+                let _ = writeln!(out, "      {MUTED}{text}{}", inline::BASE);
+            } else {
+                let _ = writeln!(out, "      {text}");
+            }
+            continue;
+        }
         if line.starts_with(['\\', '[']) {
             let _ = writeln!(out, "      {}", clip(line, width.saturating_sub(7)));
             continue;

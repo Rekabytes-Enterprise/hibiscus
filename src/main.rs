@@ -1,4 +1,5 @@
 mod chat;
+mod checkpoints;
 mod cli;
 mod commands;
 mod extensions;

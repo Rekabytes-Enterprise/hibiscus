@@ -23,7 +23,7 @@ The default catalog contains OpenAI `gpt-4.1`, Anthropic `claude-sonnet-4-5` and
 ## What it does
 
 - Streams responses directly through OpenAI Responses, OpenAI-compatible Chat Completions or Anthropic Messages.
-- Executes native `read`, `write`, `edit`, `bash` and `goal` tools.
+- Executes native `read`, `write`, `edit`, `bash` and `goal` tools. Covered file edits have per-request checkpoints, recorded diffs and selective restore. [Undo file changes](docs/checkpoints.md).
 - Runs validated native tools directly, including shell commands.
 - Saves conversations locally, supports resume, and preserves interrupted tool calls without replaying them.
 - Keeps a searchable model picker, images, terminal selection/copy, Markdown tables, queued steering/followups and recoverable errors.
