@@ -280,8 +280,8 @@ fn custom_slash_names_cannot_replace_native_or_existing_commands() {
     assert!(agent::create_at(&home.0, &args, &Registry::default()).is_err());
     assert!(!home.0.join("second").exists());
 }
-#[test]
-fn custom_slash_syntax_and_agent_tool_arguments_are_validated() {
+#[tokio::test]
+async fn custom_slash_syntax_and_agent_tool_arguments_are_validated() {
     let home = Home::new();
     for name in [
         "review",
@@ -298,7 +298,11 @@ fn custom_slash_syntax_and_agent_tool_arguments_are_validated() {
     let catalog = Catalog::new(Registry::default());
     for tool in [AgentTool::List, AgentTool::Reload] {
         for args in [json!(null), json!([]), json!({"unexpected":true})] {
-            assert!(catalog.execute(tool, &args).is_err());
+            let (_cancel, mut stop) = watch::channel(false);
+            assert!(catalog
+                .execute(tool, &args, (&home.0, "test"), &mut stop)
+                .await
+                .is_err());
         }
     }
 }
@@ -313,3 +317,6 @@ fn authoring_cannot_displace_loaded_extensions_at_the_directory_limit() {
     assert!(!home.0.join("first").exists());
     assert_eq!(fs::read_dir(&home.0).unwrap().count(), 32);
 }
+
+#[path = "version_tests.rs"]
+mod versioning;

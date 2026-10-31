@@ -102,7 +102,15 @@ fn extension_tools_are_advertised_executed_and_persisted_for_every_provider() {
             }
         });
         assert!(tool.is_some());
-        for name in ["create_extension", "list_extensions", "reload_extensions"] {
+        for name in [
+            "create_extension",
+            "list_extensions",
+            "reload_extensions",
+            "update_extension",
+            "extension_history",
+            "extension_diff",
+            "rollback_extension",
+        ] {
             assert!(
                 requests[0]["tools"].as_array().unwrap().iter().any(|tool| {
                     if api == "chat_completions" {
@@ -479,4 +487,126 @@ fn agent_creation_checks_disk_collisions_after_manifest_edits_before_writing() {
     let current: Value =
         serde_json::from_slice(&fs::read(directory.join("extension.json")).unwrap()).unwrap();
     assert_eq!(current["commands"][0]["slashCommand"], "/hello");
+}
+
+fn wait_version_state(tty: &mut Pty, f: &Fixture, previous: Option<&str>) -> String {
+    let path = f.root.join("app/extensions/.versions/demo/active.json");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        tty.pump();
+        thread::sleep(Duration::from_millis(10));
+        if let Ok(bytes) = fs::read(&path) {
+            let state: Value = serde_json::from_slice(&bytes).unwrap();
+            if let Some(version) = state["active"].as_str().filter(|s| Some(*s) != previous) {
+                return version.into();
+            }
+        }
+        assert!(Instant::now() < deadline, "extension activation timed out");
+    }
+}
+#[test]
+fn versioned_updates_and_rollback_refresh_tools_and_commands_in_both_views() {
+    for cli in [false, true] {
+        let f = Fixture::new("responses", vec![]);
+        let source = extension(&f, PROGRAM);
+        // Native startup imports the legacy extension without asking a provider.
+        let mut init = f.command();
+        let mut tty = Pty::spawn_with_size(&mut init, false, 110, 32);
+        tty.wait_text("Enter send");
+        let original = wait_version_state(&mut tty, &f, None);
+        tty.send(b"/quit\r");
+        tty.finish();
+        assert!(f.captured().is_empty());
+        // Configure deterministic model replies after obtaining the actual version.
+        let updated = PROGRAM.replace("EXTENSION_OUTPUT", "UPDATED_OUTPUT");
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(source.join("extension.json")).unwrap()).unwrap();
+        manifest["commands"][0]["slashCommand"] = json!("/review");
+        let f2 = Fixture::new(
+            "responses",
+            vec![
+                calls(vec![
+                    (
+                        "update_extension",
+                        json!({"id":"demo","expectedVersion":original,"manifest":manifest,"files":[{"path":"main.sh","content":updated}]}),
+                    ),
+                    // The rest of this provider response must keep the old registry.
+                    ("demo__greet", json!({"name":"before"})),
+                ]),
+                calls(vec![
+                    ("demo__greet", json!({"name":"after"})),
+                    ("extension_history", json!({"id":"demo"})),
+                ]),
+                response("VERSION_UPDATE_DONE"),
+            ],
+        );
+        // Use f2's provider with f's independently retained extension state.
+        fs::copy(
+            f2.root.join("app/config.json"),
+            f.root.join("app/config.json"),
+        )
+        .unwrap();
+        let mut command = f.command();
+        if cli {
+            command.arg("--cli");
+        }
+        let mut tty = Pty::spawn_with_size(&mut command, false, 110, 32);
+        tty.wait_text(if cli { "\x1b[?2004h" } else { "Enter send" });
+        tty.send(b"update and verify the extension\r");
+        tty.wait_text("VERSION_UPDATE_DONE");
+        tty.wait_text(if cli { "\x1b[?2004h" } else { "Enter send" });
+        let next = wait_version_state(&mut tty, &f, Some(&original));
+        tty.send(if cli { b"/review\r" } else { b"/rev\t\r" });
+        tty.wait_text("UPDATED_OUTPUT");
+        tty.wait_text(if cli { "\x1b[?2004h" } else { "Enter send" });
+        tty.send(b"/quit\r");
+        tty.finish();
+        let requests = f2.captured();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].to_string().contains("EXTENSION_OUTPUT"));
+        assert!(requests[2].to_string().contains("UPDATED_OUTPUT"));
+        assert!(requests[2].to_string().contains("activeVersion"));
+        assert_eq!(fs::read_to_string(source.join("main.sh")).unwrap(), PROGRAM);
+        let f3 = Fixture::new(
+            "responses",
+            vec![
+                calls(vec![
+                    (
+                        "extension_diff",
+                        json!({"id":"demo","from":original,"to":next}),
+                    ),
+                    (
+                        "rollback_extension",
+                        json!({"id":"demo","expectedVersion":next,"version":original}),
+                    ),
+                ]),
+                response("ROLLBACK_DONE"),
+            ],
+        );
+        fs::copy(
+            f3.root.join("app/config.json"),
+            f.root.join("app/config.json"),
+        )
+        .unwrap();
+        let mut command = f.command();
+        if cli {
+            command.arg("--cli");
+        }
+        let mut tty = Pty::spawn_with_size(&mut command, false, 110, 32);
+        tty.wait_text(if cli { "\x1b[?2004h" } else { "Enter send" });
+        tty.send(b"inspect the diff and restore the original\r");
+        tty.wait_text("ROLLBACK_DONE");
+        tty.wait_text(if cli { "\x1b[?2004h" } else { "Enter send" });
+        tty.send(b"/demo:greet\r");
+        tty.wait_text("EXTENSION_OUTPUT");
+        tty.wait_text(if cli { "\x1b[?2004h" } else { "Enter send" });
+        tty.send(b"/quit\r");
+        tty.finish();
+        let requests = f3.captured();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].to_string().contains("changedFiles"));
+        assert!(requests[1].to_string().contains("restoredFrom"));
+        let record_root = f.root.join("app/extensions/.versions/demo/versions");
+        assert_eq!(fs::read_dir(record_root).unwrap().count(), 3);
+    }
 }

@@ -574,7 +574,9 @@ async fn run_turns(
                         .execute_tool(&id, &name, &args, (&cwd, &snapshot.id), cancel)
                         .await
                 } else if let Some(tool) = crate::extensions::AgentTool::parse(&name) {
-                    extensions.execute(tool, &args)
+                    extensions
+                        .execute(tool, &args, (&cwd, &snapshot.id), cancel)
+                        .await
                 } else {
                     tools::execute(&name, &args, &cwd, &mut steps, cancel).await
                 };

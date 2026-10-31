@@ -259,7 +259,7 @@ pub async fn execute(
 
 /// One exact replacement has a contiguous changed region. Trim equal lines at
 /// both ends and retain one context line, without a quadratic diff algorithm.
-fn edit_diff(before: &str, after: &str) -> (String, usize, usize) {
+pub(crate) fn edit_diff(before: &str, after: &str) -> (String, usize, usize) {
     let old = before.split_inclusive('\n').collect::<Vec<_>>();
     let new = after.split_inclusive('\n').collect::<Vec<_>>();
     let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();

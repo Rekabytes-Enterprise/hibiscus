@@ -31,7 +31,7 @@ The default catalog contains OpenAI `gpt-4.1`, Anthropic `claude-sonnet-4-5` and
 
 ## Local extensions
 
-Version 0.3.6 creates an empty `~/.hibiscus/extensions/` directory. Ask Hibi to create an extension with the tools or slash commands you want, such as “Create a project review extension with `/review`.” The agent writes and registers its manifest and source through native extension tools; you can use the new command in the same session. Extensions can use any installed executable through the versioned JSON protocol. [Extension authoring](docs/extensions.md).
+Version 0.3.6 creates an empty `~/.hibiscus/extensions/` directory. Ask Hibi to create an extension with the tools or slash commands you want, such as “Create a project review extension with `/review`.” The agent writes and registers its manifest and source through native extension tools; you can use the new command in the same session. Extensions can use any installed executable through the versioned JSON protocol. Native update, history, diff and rollback tools keep validated versions while preserving the original source. [Extension authoring](docs/extensions.md).
 
 ## Commands
 

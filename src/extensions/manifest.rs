@@ -16,6 +16,8 @@ pub(super) struct Manifest {
     pub tools: Vec<Tool>,
     #[serde(default)]
     pub commands: Vec<Command>,
+    #[serde(default)]
+    pub checks: Vec<super::validation::Check>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +127,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<(Manifest, Vec<Arc<jsonschema::Valid
             return Err("slashCommand must start with / and a lowercase letter, with at most 64 letters, digits, underscores or hyphens".into());
         }
     }
+    super::validation::declarations(&manifest.checks)?;
     Ok((manifest, validators))
 }
 
