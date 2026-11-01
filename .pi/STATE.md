@@ -1,5 +1,11 @@
 # Current state
 
+## v0.3.14 release prepared
+
+The owner explicitly requested publishing the actual README screenshot work, bumping the patch and releasing through the existing dev/main flow. Branch codex/readme-real-screenshots contains the three real v0.3.13 application captures and method notes, preserving README branding, badges, navigation and original SVG artwork. Version references are synchronized to 0.3.14 and the changelog includes the README update plus repository-only secret protection since v0.3.13. Capture notes retain their actual source version; runtime/UI code remains unchanged.
+
+Local verification and protected PR checks must pass before merges. Tag the exact merged main commit without moving old tags. Verify the four archive hashes, signed provenance, asset metadata and isolated macOS ARM64 execution/installation before publishing the draft. No npm or image-registry publication is requested. This section records preparation, not a completed release.
+
 ## Issue #47 complete; native secret leak prevention on main
 
 The owner requested #47 and explicitly authorized publishing through dev/main plus a temporary dummy-only rejection PR. GitHub repository secret scanning and push protection are enabled and independently read back; the authenticated alerts endpoint reports no alerts. Optional generic-pattern enablement remained disabled after HTTP200 and scan-history returned404/Advanced Security disabled. No paid, organization-wide or provider-validity feature was enabled. Do not infer historical scan completion or universal coverage from an empty alert list.

@@ -28,8 +28,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/terminal-preview.svg" width="960" alt="Illustrated Hibiscus chat with raspberry accents, tool activity, an edit diff, and a multiline composer">
-  <br><sub>Illustrated preview with sample content. Colors and key hints depend on your terminal.</sub>
+  <img src="docs/assets/screenshots/tui-tools.jpg" width="960" alt="Actual Hibiscus TUI with its persistent HIBI header, native file edits, a red and green diff, and passing tests">
+  <br><sub>Actual TUI capture with local demo content. File edits and test results are real. <a href="docs/assets/screenshots/README.md">Capture notes</a>.</sub>
 </p>
 
 Chat, switch models, pick up an earlier session, and share screenshots—without leaving your terminal. Hibiscus brings a calm, raspberry-pink interface; **Hibiscus owns the runtime**: provider connections, authentication, tools, agent runs, and local sessions.
@@ -41,7 +41,7 @@ Chat, switch models, pick up an earlier session, and share screenshots—without
 **Linux, WSL, and macOS · x86-64 and ARM64**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.10/install.sh | HIBISCUS_VERSION=v0.3.10 sh
+curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.14/install.sh | HIBISCUS_VERSION=v0.3.14 sh
 ```
 
 Alternatively, install through **npx** (requires Node.js 22.19+ and npm):
@@ -78,11 +78,20 @@ Prefer to inspect the installer first, choose a version, or use a custom directo
 | **Know what's happening** | A persistent HIBI header with model, thinking, workspace and session metadata; provider-reported context/input/output and cache usage beside the live footer phase and optional checklist Goal bar. Unknown context or cost stays unavailable. Tool activity, failures and actual edit diffs stay visible in chat. |
 | **Stay in control** | Type while Hibiscus works: Enter steers and Ctrl+Q queues a follow-up. Waiting messages stay beside the composer until the runtime delivers them. Native tools execute directly after validated, completed provider responses. Esc clears the queue and stops a run. |
 
+### Inline CLI
+
+<p align="center">
+  <img src="docs/assets/screenshots/cli-tools.jpg" width="960" alt="Actual Hibiscus CLI reproducing a failing test, editing a function with a colored diff, and passing both tests on rerun">
+  <br><sub>Actual CLI capture: reproduce a failing test, apply a focused edit, and verify the fix.</sub>
+</p>
+
+Use `/cli` for inline chat in terminal scrollback, with green successful tool rows, red failures, and colored edit diffs. Use `/tui` to return to the full-screen view.
+
 ### Markdown at a glance
 
 <p align="center">
-  <img src="docs/assets/markdown-preview.svg" width="960" alt="Illustrated Hibiscus chat showing an aligned JavaScript versus TypeScript table and a three-step Unicode flowchart">
-  <br><sub>Illustrated examples, not a captured session. Diagram layout depends on the supported graph and terminal width.</sub>
+  <img src="docs/assets/screenshots/tui-mermaid.jpg" width="960" alt="Actual Hibiscus TUI rendering a Markdown table and a Mermaid Read files, Edit code, Run tests flowchart">
+  <br><sub>Actual TUI capture of a Markdown table and a settled Mermaid flowchart. Layout depends on the supported graph and terminal width.</sub>
 </p>
 
 Tables are laid out within the transcript width, including model output that omits the usual Markdown separator row. For a fenced <code>mermaid</code> block, Hibiscus shows the source during streaming, then displays a diagram **after a successful settled reply**. Unsupported, too-wide or unavailable diagrams stay as source. This is a full-screen display transform only: Hibiscus keeps the original Markdown in the native saved session; CLI history and piped output remain plain text.
