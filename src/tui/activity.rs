@@ -149,7 +149,7 @@ impl Timeline {
                 {
                     *running = false;
                     *error = failed;
-                    if name == "edit" && !failed {
+                    if !failed {
                         if let Some(diff) = diff {
                             for (index, line) in diff.lines().enumerate() {
                                 if index < 40 {

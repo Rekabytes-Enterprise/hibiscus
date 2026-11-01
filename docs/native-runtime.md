@@ -69,6 +69,8 @@ The native registry owns `read`, `write`, `edit`, `bash` and `goal`. Tool argume
 
 Read accepts UTF-8 regular files up to 16 MiB and returns bounded line ranges. Write replaces file contents atomically. Edit requires exactly one occurrence of `oldText`, preserves file mode and returns a diff only after writing. Bash uses a process group, a maximum 600-second timeout and bounded stdout/stderr. Cancellation kills the group before reporting settlement. Goal tracks an explicit numbered checklist.
 
+Native `write`/`edit` also capture covered workspace files before mutation. `checkpoint_history`, `checkpoint_diff`, `checkpoint_restore` and `checkpoint_prune` manage per-request recovery while preserving existing user work and Git state. Shell/extension changes and excluded paths are outside that guarantee. [Checkpoint coverage and recovery](checkpoints.md).
+
 Native tools execute directly, including shell commands in interactive and piped modes. There is no approval prompt or enable/disable setting. Old `approval.json` files are ignored and left untouched. Argument validation, timeouts, cancellation and the complete-provider-response requirement still apply. Tools are not sandboxed. Provider/configuration errors remain recoverable in interactive chat; one-shot/piped failures exit nonzero.
 
 ## Implementation and verification

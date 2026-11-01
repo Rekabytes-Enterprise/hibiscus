@@ -16,6 +16,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
     definitions.extend(crate::extensions::agent_definitions());
+    definitions.extend(crate::checkpoints::definitions());
     definitions
 }
 #[derive(Deserialize)]
@@ -126,10 +127,14 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
 pub async fn execute(
     name: &str,
     args: &Value,
-    cwd: &Path,
+    context: &mut crate::checkpoints::Context<'_>,
     steps: &mut Vec<Value>,
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<Value> {
+    if let Some(tool) = crate::checkpoints::Tool::parse(name) {
+        return tool.execute(args, context, cancel).await;
+    }
+    let cwd = context.cwd;
     validate(name, args)?;
     if *cancel.borrow() {
         return Err("Tool cancelled before execution".into());
@@ -161,10 +166,16 @@ pub async fn execute(
         "write" => {
             let a: Write = serde_json::from_value(args.clone())?;
             let target = path(cwd, &a.path)?;
-            write_file(&target, a.content.as_bytes())?;
+            let checkpoint =
+                crate::checkpoints::write(context, &target, a.content.as_bytes(), None)?;
             Ok(result(
-                format!("Wrote {} bytes to {}", a.content.len(), a.path),
-                json!({}),
+                format!(
+                    "Wrote {} bytes to {}{}",
+                    a.content.len(),
+                    a.path,
+                    checkpoint_notice(&checkpoint)
+                ),
+                json!({"checkpoint":checkpoint}),
             ))
         }
         "edit" => {
@@ -180,11 +191,12 @@ pub async fn execute(
             if next.len() > 16 * 1024 * 1024 {
                 return Err("Edited file would exceed 16 MiB; file unchanged".into());
             }
-            write_file(&target, next.as_bytes())?;
+            let checkpoint =
+                crate::checkpoints::write(context, &target, next.as_bytes(), Some(old.as_bytes()))?;
             let (diff, added, removed) = edit_diff(&old, &next);
             Ok(result(
-                format!("Edited {}", a.path),
-                json!({"diff":diff,"addedLines":added,"removedLines":removed}),
+                format!("Edited {}{}", a.path, checkpoint_notice(&checkpoint)),
+                json!({"diff":diff,"addedLines":added,"removedLines":removed,"checkpoint":checkpoint}),
             ))
         }
         "bash" => {
@@ -257,6 +269,20 @@ pub async fn execute(
     }
 }
 
+fn checkpoint_notice(receipt: &Value) -> String {
+    if receipt["protected"] == true {
+        format!(
+            "\nCheckpoint {}",
+            receipt["checkpoint"].as_str().unwrap_or("")
+        )
+    } else {
+        format!(
+            "\nNot checkpointed: {}",
+            receipt["reason"].as_str().unwrap_or("outside coverage")
+        )
+    }
+}
+
 /// One exact replacement has a contiguous changed region. Trim equal lines at
 /// both ends and retain one context line, without a quadratic diff algorithm.
 pub(crate) fn edit_diff(before: &str, after: &str) -> (String, usize, usize) {
@@ -320,20 +346,6 @@ fn bounded(text: &str, max: usize) -> (String, bool) {
         end -= 1;
     }
     (text[..end].into(), end < text.len())
-}
-
-fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    let permissions = match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_file() => Some(meta.permissions()),
-        Ok(_) => return Err("Refusing to replace a non-regular file or symbolic link".into()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.into()),
-    };
-    super::config::atomic(path, bytes)?;
-    if let Some(permissions) = permissions {
-        std::fs::set_permissions(path, permissions)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
