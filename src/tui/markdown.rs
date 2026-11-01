@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 /// Lightweight terminal Markdown for chat transcripts. This is a display
-/// transform only: Pi and saved messages keep the original Markdown text.
+/// transform only: Runtime and saved messages keep the original Markdown text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tone {
     Plain,
@@ -490,7 +490,7 @@ pub(crate) fn mermaid_sources(text: &str) -> Vec<String> {
     sources
 }
 
-// Pi's terminal table renderer measures the entire block, then wraps each
+// Hibiscus's terminal table renderer measures the entire block, then wraps each
 // cell independently. Keep that property here so long values never shift the
 // following column or spill into the next row.
 fn render_table(table: &[Vec<&str>], width: usize) -> Vec<Row> {

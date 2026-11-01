@@ -1,5 +1,7 @@
 # Quiet-run input wake measurements
 
+Historical measurements of the earlier Pi-backed implementation. The old profiler launchers were retired during the native migration; these commands and source paths refer to that earlier revision, not the current runtime. Native performance has not been measured by this report.
+
 This is an optional local probe, not a real-provider latency guarantee. Hibiscus continues to use Pi as its only agent/backend.
 
 ## Method

@@ -4,9 +4,57 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-11-01
+
+### Added
+
+- Development-only coding evaluations with versioned learning/selection/held-out tasks, paired baseline/candidate runs, native extension preflight, independent grading and private JSON reports. Offline fixtures are the default; live providers require explicit configuration.
+- Native workspace checkpoints for write/edit, with request/session correlation, recorded diffs, conflict-checked selective restore, interrupted-operation recovery and explicit retention tools.
+- Extension candidate updates with retained version history, parent and changed-file records, configured regression commands/protocol checks, native history/diff/rollback tools and atomic activation.
+
 ### Changed
 
-- Remove Pi TUI authentication handoff. Login dependency/provider failures now use recoverable errors inside Hibiscus; line/piped authentication reports that full-screen input is required.
+- Restore the full README presentation with native runtime documentation and prepare a default-branch OpenSSF Scorecard workflow. The score badge remains hidden until a published scan is verified.
+- Keep the raspberry HIBI banner pinned above TUI conversations, with live thinking/model/workspace/session metadata and compact layouts for small terminals and multiline drafts. Unicode labels respect terminal column widths.
+- Remove thinking confirmations from TUI chat and the obsolete Pi attribution from CLI confirmations; guard installer wording against the old Pi-ready message.
+- Extension registry snapshots now retain implementation files with their metadata. Existing source folders are preserved; rejected updates and interrupted candidates keep the last active version usable.
+
+## [0.3.6] - 2026-10-31
+
+### Added
+
+- Local executable extensions with versioned JSON, validated model tools and custom slash commands in both views.
+- An empty user extensions directory and native `create_extension`, `list_extensions` and `reload_extensions` agent tools. Creation registers new tools and commands in the same session; TUI completion includes custom commands.
+
+### Changed
+
+- Separate CLI and fullscreen TUI renderers, shared terminal/display services and view-specific integration tests.
+- Installation/startup creates the user extensions folder while preserving existing manifests and source files.
+
+## [0.3.5] - 2026-10-31
+
+### Added
+
+- Native Rust provider adapters, tools, authentication, sessions, queues and compaction, replacing the Pi SDK and subprocess runtime.
+- Native Codex browser OAuth with PKCE/state validation, masked redirect input, private token storage and serialized refresh.
+- `/cli` and `/tui` switch views without reconnecting or resending prompts. TUI remains the default; CLI supports multiline editing and bracketed paste.
+- `/output`, `/output list` and numbered saved-result inspection, with no provider call or tool rerun.
+- Compact CLI tool rows with green/red status backgrounds, measured timing, exit codes, wrapped commands, numbered edit previews and colored Git diffs.
+
+### Changed
+
+- Restore the raspberry HIBI welcome design and hide login hints when a provider has credentials. Signing out clears an unavailable model from the header.
+- Installer and updater manage Hibiscus only. The agent requires neither Pi nor Node; the optional npm installer still requires Node/npm and separate publication.
+- Authentication failures remain inside Hibiscus. Browser login supports native Codex; API-key login uses configured providers.
+
+### Removed
+
+- Remove `/approval`, approval settings, grants and tool confirmation dialogs. Validated native tools execute directly, including shell commands in piped mode. Tools are not sandboxed.
+
+### Migration
+
+- Configure native providers/models in `~/.hibiscus/config.json`. Pi credentials and legacy sessions are not imported automatically. Back up existing data and read [native configuration and migration](docs/native-runtime.md).
+- Provider protocols include OpenAI Responses, compatible Chat Completions and Anthropic Messages. Model IDs and capabilities are explicit configuration.
 
 ## [0.3.4] - 2026-10-19
 
@@ -244,7 +292,11 @@ All notable changes to Hibiscus are documented here.
 - Persistent Pi sessions, session resume, `/new`, `/sessions`, `/models`, and authentication flows.
 - Line-mode fallback for non-interactive terminals.
 
-[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/Rekabytes-Enterprise/hibiscus/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.5
+[0.3.4]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.4
+[0.3.3]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v0.3.0

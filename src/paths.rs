@@ -1,6 +1,6 @@
 use std::{env, io, path::PathBuf};
 
-/// Hibiscus-owned data only; Pi continues to own its own agent directory.
+/// All runtime data belongs to Hibiscus; no external agent directory is read.
 pub(crate) fn home() -> io::Result<PathBuf> {
     if let Some(custom) = env::var_os("HIBISCUS_HOME").filter(|value| !value.is_empty()) {
         let path = PathBuf::from(custom);

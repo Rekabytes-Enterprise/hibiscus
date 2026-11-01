@@ -5,9 +5,23 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to rebuild and upload; empty means build only
+        required: false
+        type: string
+        default: ""
+      direct_upload:
+        description: Upload directly to an existing draft release if Actions artifact storage is unavailable
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || (github.event_name == 'push' && github.ref_name) || '' }}
 
 jobs:
   verify:
@@ -15,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -29,10 +45,21 @@ jobs:
         timeout-minutes: 5
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Check release tag matches Cargo version
-        if: github.event_name == 'push'
+        if: env.RELEASE_TAG != ''
         run: |
+          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           version=$(awk -F ' *= *' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' Cargo.toml)
-          test "v$version" = "$GITHUB_REF_NAME"
+          test "v$version" = "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
+          git show --no-patch --format='Release source: %H' HEAD
+      - name: Require an existing draft for direct uploads
+        if: inputs.direct_upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test -n "$RELEASE_TAG"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
 
   build:
     needs: verify
@@ -47,14 +74,16 @@ jobs:
             os: ubuntu-latest
             builder: cross
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-15-intel
             builder: cargo
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             builder: cargo
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -77,21 +106,39 @@ jobs:
           cp "target/${{ matrix.target }}/release/hibiscus" dist/package/hibiscus
           tar -C dist/package -czf "dist/hibiscus-${{ matrix.target }}.tar.gz" hibiscus
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.direct_upload }}
         with:
           name: release-${{ matrix.target }}
           path: dist/*.tar.gz
           if-no-files-found: error
+      - name: Upload directly to the draft release
+        if: inputs.direct_upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" "dist/hibiscus-${{ matrix.target }}.tar.gz" --clobber
 
   publish:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.release_tag != ''
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
+        if: ${{ !inputs.direct_upload }}
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
+      - name: Download direct uploads for checksums
+        if: inputs.direct_upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p dist
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
+            gh release download "$RELEASE_TAG" --pattern "hibiscus-$target.tar.gz" --dir dist
+          done
       - name: Generate checksums
         run: cd dist && sha256sum *.tar.gz > SHA256SUMS
       - name: Create or update GitHub release
@@ -99,8 +146,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "$RELEASE_TAG"
           fi

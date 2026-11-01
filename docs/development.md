@@ -1,49 +1,27 @@
 # Development
 
-## Set up
-
-Install Rust/Cargo, Pi, and a C linker. Inline sign-in and logout need Node.js 22.19+ and the installed Pi SDK. Missing dependencies produce recoverable errors inside Hibiscus; authentication never launches Pi's interactive TUI. On Ubuntu/WSL, install the linker with `sudo apt update && sudo apt install -y build-essential`. Pi must be available as `pi` on `PATH`, or `HIBISCUS_PI` must point to its executable. The prebuilt `install.sh` installs Pi with npm when compatible Node.js/npm exist, or through Pi's official installer when they do not; source/Cargo installation does not install Pi. For a nonstandard Pi install, `HIBISCUS_AUTH_SDK` can point to that trusted Pi package's `dist/index.js` (and `HIBISCUS_NODE` can override the Node executable). The SDK path is executable code; never point it at an untrusted file.
-
-From the repository root:
+Install Rust/Cargo and a C linker. Pi and Node are not agent dependencies. The npm installer test requires Node/npm, shell tests require standard Unix tools, and coding-evaluation development tests require Python 3.9 or newer. Python is not required by the shipped Hibiscus executable. Provider tests use local HTTP servers and synthetic keys. Extension tests use local `/bin/sh` fixtures; the optional Python example requires Python 3 only when invoked.
 
 ```sh
 cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo install --path .
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+sh -n install.sh
+sh tests/install.sh
+sh tests/bump-version.sh
+node tests/npm-install.mjs
 ```
 
-Reinstall after modifying the source before testing the `hibiscus` command on your PATH. `cargo run --` uses the working tree without installing it. See [Installation and releases](installation.md) for the checksum-verifying prebuilt installer and four-target release workflow.
+Use `cargo run --locked --` to exercise the working tree. Reinstall with `cargo install --path . --locked` only when you want to replace your installed executable. Config and session formats are described in [Native migration](native-runtime.md).
 
-## Continuous integration
+`tests/native_runtime.rs` exercises the actual binary through local HTTP endpoints and controlling PTYs. Coverage includes native provider streaming/tool calls, real temporary file mutations, direct shell execution and process-group cancellation, stream interruption, session resume, compaction archives, queued messages, API-key masking and logout. It explicitly supplies nonexistent Pi/Node paths; one test removes all external programs from PATH. No real provider credential or billable request is used.
 
-`.github/workflows/ci.yml` runs on pushes and pull requests to `dev` only, with manual dispatch available. Direct pushes and pull requests targeting `main` do not trigger this CI workflow. The lint job checks `cargo fmt`, runs Clippy with warnings denied, validates both installer scripts, and executes the mocked installer test. Rust tests run independently on Ubuntu and macOS with parent `TERM=dumb`; full-screen PTY fixtures explicitly set child `TERM=xterm-256color` and an 80×24 window instead of inheriting the runner's terminal capabilities. Jobs use read-only repository permissions and redundant runs on the same ref are cancelled. Rust builds are cached; auth tests use an explicit Node 24 installation. Jobs have a 15-minute limit and the Rust test step has a 5-minute backstop.
+Unit tests retain the CLI, TUI, Markdown, transport pressure, queue ordering and recovery contracts. View-specific integration tests live under `tests/native_runtime/` and share the parent fixture. See the [presentation module map](development/presentation-architecture.md) before changing a frontend. Old Pi-only mock-process fixtures were retired because they no longer test the executable's runtime. Their source remains in Git history. The shared PTY harness drains concurrently, reconstructs row-diff output and bounds waits/cleanup; use it instead of fixed sleeps and unbounded child waits.
 
-Tagged releases use the separate `.github/workflows/release.yml` gate, which repeats the quality checks before building and publishing all supported target archives. A green CI run does not replace real Pi/provider or terminal smoke testing.
+CI targets pushes and PRs to `dev`. Formatting, Clippy, shell/npm installer checks and Rust tests must pass. Release workflows publish only explicitly tagged revisions; local implementation does not authorize a push, release or deployment.
 
-## Test boundaries
+`cargo test --locked` also runs the [coding-evaluation runner tests](evaluations.md) against the freshly built binary through `tests/evaluation.rs`. The runner is standard-library Python under `tools/evaluation`, separate from runtime/provider code. See its [design and ownership](development/evaluations.md) before adding experiment options.
 
-- Module unit tests cover framing, prompt settlement, picker bounds, command filtering, Markdown, diffs, and terminal render state.
-- `tests/chat.rs` and `tests/in_chat_sessions.rs` run against mock Pi executables with piped input/output.
-- `tests/tty.rs`, `tests/models_tty.rs`, `tests/dialog_tty.rs`, `tests/auth_errors.rs`, and `tests/codex_auth.rs` use a controlling PTY to exercise raw input, UI output, interrupts, pickers, inline authentication and recoverable auth errors. Codex tests use a fake SDK module with no provider network requests or real credentials (one test uses loopback sockets). `completed_login_reconnects_without_waiting_for_browser_connection_to_close` keeps a local callback-like socket open after SDK completion and verifies that login still returns promptly. PTY output must be drained while the child runs; otherwise redraws can fill its buffer and block progress. The auth suites use `tests/support/mod.rs`: nonblocking PTY I/O, 15-second stage/exit deadlines, a bounded output buffer for diagnostics, and process-group cleanup on drop, including panic paths. Wait for newly emitted prompts or replies rather than fixed delays; the slow-SDK regression injects a 1.5-second startup delay. `tests/pty_harness.rs` tests input/output and early-exit diagnostics. Some dialog/streaming fixtures still use older reader-thread helpers and are candidates for migration.
-- The mock tests do not verify provider authentication, network APIs, or the appearance in every terminal. Do not claim real-Pi behavior based only on mocks.
+For manual acceptance, use an intentionally configured provider and review possible API charges first. Check streaming, a file edit, shell deny/allow, Esc during a request/tool, model selection, login/logout, `/continue`, `/sessions`, queued steering/followups and `/compact`. Verify the physical terminal's clipboard and rendering separately. Never publish credentials, authorization details, clipboard contents or private conversations in evidence.
 
-When changing JSONL handling, preserve LF-only framing, keep stderr separate, correlate responses by command ID, and wait for `agent_settled` rather than treating prompt acceptance or `agent_end` as completion. Keep regression coverage for aborts and subsequent prompts. When changing terminal input, test Esc against mouse/modified-key sequences and restore raw mode, mouse reporting, and alternate screen on all exit paths.
-
-## Manual smoke checks
-
-With a configured Pi model and an interactive terminal, test:
-
-1. Send a short prompt, then another. Use Esc during a slow response; chat should remain usable.
-2. Restart with `hibiscus --continue`, and switch sessions with `/sessions`. Check only the selected session's recent five user turns and assistant text.
-3. Open `/models`, navigate a list longer than five items, cancel with Esc, and switch to a model under a different provider without logging in again. The list should be sorted by provider and ID, and the header should reflect Pi's active provider/model.
-4. Type `/m`, use Tab and Enter in the live command suggestions, and check that only Hibiscus commands appear.
-5. Check the flower heartbeat during a silent wait and inspect a successful `edit` preview against `git diff`. Confirm that errors show failure, not an invented diff.
-6. With no saved chat and no Codex model selected, open `/login`, choose Browser Login → Codex, and try browser/device-code login with informed consent. Also check Browser Login → Claude and API Key → provider where account access permits. Leave the browser's success tab open after callback and verify Hibiscus returns to chat, then verify Pi can answer after the RPC child reconnects. Esc should cancel without changing the conversation. Do not record URLs, codes or tokens. Use isolated mock dependencies to verify missing Node/SDK, unsupported methods and failed login show recoverable errors without opening Pi's TUI; the same chat should remain usable and `/login` should work after correcting the problem. Check `/logout` with informed consent in full-screen mode. In line/piped mode, `/login` and `/logout` should report that full-screen input is required without changing credentials. Real-provider credential refresh still needs verification.
-7. Check `NO_COLOR=1`, a narrow terminal, and `printf 'hello\n' | hibiscus` for safe fallback/plain output.
-
-Never paste credentials or private session transcripts into test fixtures or documentation. For session and resource locations, see [Architecture](architecture.md).
-
-## Project records
-
-Read `AGENTS.md`, `.pi/STATE.md`, and `.pi/MEMORY.md` before planning changes. Update `STATE.md` with current work and verification blockers; update `MEMORY.md` only for confirmed, reusable decisions or pitfalls. Revise an existing entry when a new finding has the same root cause instead of adding a duplicate. See [CONTRIBUTING.md](../CONTRIBUTING.md) for the contribution checklist.
+Extension tests cover metadata-only loading, malformed manifests/schemas/replies, tool argument validation before execution, all provider adapters, local command completion/reload, agent-authored source creation, immediate registration, private file permissions, output/time limits and descendant cancellation. See [extension authoring](extensions.md).

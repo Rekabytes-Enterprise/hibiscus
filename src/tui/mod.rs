@@ -1,11 +1,13 @@
+//! Fullscreen terminal presentation. Inline CLI lives in crate::cli.
 mod activity;
 mod clipboard;
 mod file_mentions;
-pub(crate) mod markdown;
+mod header;
+mod markdown;
+mod mermaid;
 mod modal;
 mod paint;
-pub(crate) mod picker;
-pub(crate) mod screen;
-pub(crate) mod terminal;
+mod picker;
+mod screen;
 mod text_clipboard;
-pub(crate) mod ui;
+pub(crate) use screen::Screen;

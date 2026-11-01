@@ -1,6 +1,7 @@
-//! Shared docked dialog chrome and state. Models/sessions and Pi extension
+//! Shared docked dialog chrome and state. Models/sessions and Runtime extension
 //! dialogs use the same borders, margins, selection rows and keyboard hints.
-use super::{picker::Picker, screen::Navigation};
+use super::picker::Picker;
+use crate::ui::input::Navigation;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
@@ -153,14 +154,11 @@ pub(crate) struct Modal {
     placeholder: String,
     secret: bool,
     confirm: bool,
-    approval: bool,
     deadline: Option<Instant>,
     details_scroll: usize,
     detail_rows: usize,
     detail_total: usize,
     choice_rows: usize,
-    reviewed: bool,
-    review_notice: bool,
     utf8: Vec<u8>,
     pub(crate) cursor: Option<(usize, usize)>,
 }
@@ -175,33 +173,29 @@ impl Modal {
             placeholder,
             secret,
             confirm: false,
-            approval: false,
             deadline: None,
             details_scroll: 0,
             detail_rows: 0,
             detail_total: 0,
             choice_rows: 1,
-            reviewed: false,
-            review_notice: false,
             utf8: Vec::new(),
             cursor: None,
         }
     }
     pub(crate) fn from_rpc(event: &Value) -> Option<Self> {
-        let raw_title = event["title"].as_str().unwrap_or("Pi request");
+        let raw_title = event["title"].as_str().unwrap_or("Runtime request");
         if raw_title.len() > 16_384 {
             return None;
         }
         let (title, details) = raw_title.split_once('\n').unwrap_or((raw_title, ""));
         let mut modal = Self::input(title, String::new(), String::new(), false);
-        // A long one-line title must not silently hide approval details in
+        // A long one-line title must not silently hide dialog details in
         // the clipped border. Keep its full text in the scrollable body too.
         modal.details = if details.is_empty() && title.chars().count() > 60 {
             title.to_owned()
         } else {
             details.to_owned()
         };
-        modal.approval = raw_title.starts_with("Approval needed:");
         modal.deadline = event["timeout"]
             .as_u64()
             .map(|ms| Instant::now() + Duration::from_millis(ms.min(86_400_000)));
@@ -299,13 +293,6 @@ impl Modal {
             b'\r' | b'\n' => {
                 if let Some(picker) = &self.picker {
                     let item = &picker.items[picker.selected];
-                    if self.approval
-                        && matches!(item.as_str(), "Allow" | "Always Allow")
-                        && !self.reviewed
-                    {
-                        self.review_notice = true;
-                        return None;
-                    }
                     return Some(if self.confirm {
                         json!({"confirmed":picker.selected == 1})
                     } else {
@@ -353,7 +340,6 @@ impl Modal {
         self.details_scroll = self
             .details_scroll
             .min(details.len().saturating_sub(self.detail_rows));
-        self.reviewed |= self.details_scroll + self.detail_rows >= details.len();
         let mut body = details
             .iter()
             .skip(self.details_scroll)
@@ -386,9 +372,7 @@ impl Modal {
             self.cursor = Some((1 + body.len(), 4 + visible.chars().count()));
             body.push(inner(&format!("❯ {shown}"), width, style, '│'));
         }
-        let hint = if self.review_notice && !self.reviewed {
-            "PgDn: review remaining details before Allow".into()
-        } else if self.detail_total > self.detail_rows {
+        let hint = if self.detail_total > self.detail_rows {
             format!(
                 "PgUp/PgDn details {}/{} · ↑↓ · Enter · Esc",
                 self.details_scroll + self.detail_rows,
@@ -425,26 +409,6 @@ fn wrap_details(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn approval_defaults_to_deny_and_long_commands_require_review() {
-        let event = json!({"method":"select","title":format!("Approval needed: command\n{}", "rm -rf example ".repeat(30)),"options":["Deny","Allow","Always Allow"]});
-        let mut modal = Modal::from_rpc(&event).unwrap();
-        assert!(
-            modal.deadline.is_none(),
-            "untimed approvals wait for an explicit decision"
-        );
-        let rows = modal.rows(40, 10);
-        assert!(rows.len() <= 10);
-        assert!(rows.iter().all(|row| row.text.chars().count() <= 40));
-        assert_eq!(modal.key(b'\r').unwrap()["value"], "Deny");
-        modal.navigate(Navigation::Down);
-        assert!(modal.key(b'\r').is_none());
-        for _ in 0..50 {
-            modal.navigate(Navigation::ScrollPage(-1));
-            modal.rows(40, 10);
-        }
-        assert_eq!(modal.key(b'\r').unwrap()["value"], "Allow");
-    }
     #[test]
     fn confirm_timeout_and_masked_input_use_the_same_chrome() {
         let mut modal =

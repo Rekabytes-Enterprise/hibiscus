@@ -1,0 +1,40 @@
+{
+  "id": "totals",
+  "split": "held_out",
+  "prompt": "Fix totals(rows) so repeated categories accumulate amounts instead of overwriting them. Preserve first-seen category order, handle empty input and negative amounts, and run the visible tests. Leave notes.txt unchanged.",
+  "changed": [
+    "app.py"
+  ],
+  "preserved": [
+    "notes.txt",
+    "test_app.py"
+  ],
+  "offline": [
+    [
+      {
+        "name": "read",
+        "arguments": {
+          "path": "app.py"
+        }
+      }
+    ],
+    [
+      {
+        "name": "edit",
+        "arguments": {
+          "path": "app.py",
+          "oldText": "def totals(rows):\n    return dict(rows)\n",
+          "newText": "def totals(rows):\n    result = {}\n    for category, amount in rows:\n        result[category] = result.get(category, 0) + amount\n    return result\n"
+        }
+      }
+    ],
+    [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "python3 -B -m unittest -v"
+        }
+      }
+    ]
+  ]
+}

@@ -1,20 +1,24 @@
-pub(crate) mod commands;
+mod extension_commands;
 mod models;
 pub(crate) mod sessions;
+mod tool_outputs;
 
 use self::models::{choose_model, choose_thinking};
 use crate::{
-    pi::{
+    runtime::{
         auth::{sign_in, AuthOutcome},
+        bridge::{Client, SessionStart},
         dialog::Dialogs,
         error::{local, ChatError, RecoveryAction},
         logout::{sign_out, LogoutOutcome},
-        rpc::{Rpc, SessionStart},
     },
-    tui::{
-        screen::{compact_tokens, PromptAction, Screen},
+    ui::{
+        display::PromptAction,
+        format::compact_tokens,
+        messages::Ui,
+        mode::Mode,
         terminal::{self, RawMode, Terminal, TerminalEvents},
-        ui::Ui,
+        Frontend,
     },
     update, Result,
 };
@@ -25,6 +29,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 
 pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
+    start_chat_with_mode(session, Mode::Tui)
+}
+
+pub(crate) fn start_chat_with_mode(session: SessionStart, mode: Mode) -> Result<()> {
     let show_history = !matches!(session, SessionStart::New);
     let stdin = io::stdin();
     let ui = Ui::new(stdin.is_terminal());
@@ -37,10 +45,14 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
     // Enter even when a response is already in progress.
     let mut raw = tty.as_ref().map(Terminal::raw).transpose()?;
     let mut events = tty.as_ref().map(Terminal::events).transpose()?;
-    let mut screen = Screen::new(stdin.is_terminal() && tty.is_some())?;
+    let interactive_terminal = stdin.is_terminal() && tty.is_some();
+    let mut screen = match mode {
+        Mode::Tui => Frontend::new(interactive_terminal),
+        Mode::Cli => Frontend::with_mode(interactive_terminal, mode),
+    }?;
     // Decide routing before the child starts: startup warnings must not race
     // alternate-screen setup and write directly over the composer.
-    let mut rpc = Rpc::start_with_diagnostics(session, screen.diagnostic_feed())?;
+    let mut rpc = Client::start_with_diagnostics(session, screen.diagnostic_feed())?;
     let update_notice = if screen.is_full()
         && env::var_os("HIBISCUS_NO_UPDATE_CHECK").is_none()
         && update::installed_prebuilt()
@@ -55,7 +67,7 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
     };
     let outcome = (|| {
         let mut dialogs = Dialogs;
-        if !screen.is_full() {
+        if !screen.is_full() && !screen.is_terminal_chat() {
             ui.header(&mut screen)?;
         }
         let setup: Result<()> = (|| {
@@ -70,6 +82,7 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
                     &ui,
                 )?;
             }
+            screen.inline_welcome()?;
             if show_history {
                 show_history_for(
                     &mut rpc,
@@ -110,9 +123,9 @@ pub(crate) fn start_chat(session: SessionStart) -> Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 fn show_session_status<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,
     events: Option<&Receiver<u8>>,
@@ -128,11 +141,11 @@ fn show_session_status<R: BufRead>(
             events,
             true,
         )?;
+        output.status(&state)?;
         if output.is_full() {
-            output.status(&state)?;
             let stats = rpc.session_stats(input, output, dialogs, raw, events, true)?;
             output.session_usage(stats.as_ref().unwrap_or(&serde_json::Value::Null))?;
-        } else {
+        } else if !output.is_terminal_chat() {
             ui.session(output, &state)?;
         }
     }
@@ -141,8 +154,8 @@ fn show_session_status<R: BufRead>(
 
 #[allow(clippy::too_many_arguments)]
 fn show_history_for<R: BufRead>(
-    rpc: &mut Rpc,
-    output: &mut Screen,
+    rpc: &mut Client,
+    output: &mut Frontend,
     fallback: &mut R,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,
@@ -166,7 +179,7 @@ fn show_history_for<R: BufRead>(
     sessions::show_recent_with(messages, output, ui)
 }
 
-fn offer_update(output: &mut Screen, keys: &Receiver<u8>, tag: &str) -> Result<()> {
+fn offer_update(output: &mut Frontend, keys: &Receiver<u8>, tag: &str) -> Result<()> {
     if output.select(
         &format!("Hibiscus {tag} is available"),
         &["Later".into(), "Update now".into()],
@@ -187,9 +200,9 @@ fn offer_update(output: &mut Screen, keys: &Receiver<u8>, tag: &str) -> Result<(
 
 #[allow(clippy::too_many_arguments)]
 fn chat<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     dialogs: &mut Dialogs,
     events: &mut Option<TerminalEvents>,
@@ -214,7 +227,7 @@ fn chat<R: BufRead>(
                     }
                 }
             } else {
-                terminal::read_line(&events.receiver, raw)?
+                output.read_inline(&events.receiver, raw)?
             };
             let Some(text) = text else {
                 return Ok(());
@@ -223,7 +236,12 @@ fn chat<R: BufRead>(
         } else if input.read_line(&mut line)? == 0 {
             return Ok(());
         }
-        let message = line.trim();
+        let message =
+            if output.inline_input_style().is_some() && !line.trim_start().starts_with('/') {
+                line.as_str()
+            } else {
+                line.trim()
+            };
         let images = output.take_images();
         if output.is_full()
             && !message.starts_with('/')
@@ -236,7 +254,7 @@ fn chat<R: BufRead>(
             };
             output.user(shown.trim_start_matches('\n'))?;
         }
-        if message.is_empty() && images.is_empty() {
+        if message.trim().is_empty() && images.is_empty() {
             continue;
         }
         if matches!(message, "/quit" | "/exit") {
@@ -246,41 +264,52 @@ fn chat<R: BufRead>(
         let result: Result<()> = (|| {
             match message {
                 "/help" => ui.help(output)?,
-                _ if message == "/approval" || message.starts_with("/approval ") => {
-                    let mut setting = match message.strip_prefix("/approval").unwrap().trim() {
-                        "" => None,
-                        "on" | "enable" => Some(true),
-                        "off" | "disable" => Some(false),
-                        _ => {
-                            ui.info(output, "Usage: /approval [on|off|enable|disable]")?;
-                            return Ok(());
-                        }
-                    };
-                    if setting.is_none() && output.is_full() {
-                        if let Some(events) = events.as_ref() {
-                            let enabled = crate::pi::approval_enabled(None)?;
-                            let items = vec![
-                                "Enable — ask before risky shell commands".to_owned(),
-                                "Disable — run shell commands without approval prompts".to_owned(),
-                            ];
-                            let choice = output.select(
-                                "Shell approvals · saved preference",
-                                &items,
-                                Some(usize::from(!enabled)),
-                                &events.receiver,
-                            )?;
-                            let Some(choice) = choice else {
-                                return Ok(());
-                            };
-                            setting = Some(choice == 0);
-                        }
+                "/cli" | "/tui" => {
+                    if !interactive || events.is_none() {
+                        return Err(
+                            local("Switching views requires an interactive terminal.").into()
+                        );
                     }
-                    let enabled = crate::pi::approval_enabled(setting)?;
-                    ui.info(output, if enabled {
-                        "Approvals enabled: risky shell commands require approval."
+                    if !images.is_empty() {
+                        output.restore_draft(String::new(), images.clone());
+                        return Err(local("Send or remove the staged images before switching views. They remain in the TUI composer.").into());
+                    }
+                    let mode = if message == "/cli" {
+                        Mode::Cli
                     } else {
-                        "Approvals disabled: shell commands run without approval prompts. This setting persists across restarts. Use /approval on to enable."
-                    })?;
+                        Mode::Tui
+                    };
+                    if output.is_full() == (mode == Mode::Tui) {
+                        return Ok(());
+                    }
+                    if mode == Mode::Tui {
+                        output.clear_session()?;
+                    }
+                    output.set_mode(mode)?;
+                    if rpc.is_connected() {
+                        show_session_status(
+                            rpc,
+                            input,
+                            output,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            ui,
+                        )?;
+                    }
+                    output.inline_welcome()?;
+                    if rpc.is_connected() {
+                        show_history_for(
+                            rpc,
+                            output,
+                            input,
+                            dialogs,
+                            raw,
+                            events.as_ref().map(|e| &e.receiver),
+                            interactive,
+                            ui,
+                        )?;
+                    }
                 }
                 "/restore" => {
                     if !output.is_full() {
@@ -297,10 +326,10 @@ fn chat<R: BufRead>(
                 }
                 "/reconnect" => {
                     if rpc.is_connected() {
-                        ui.info(output, "Pi is already connected.")?;
+                        ui.info(output, "Runtime is already connected.")?;
                     } else {
                         if !rpc.has_saved_session() {
-                            ui.info(output, "No saved session path was confirmed; reconnecting opens a new Pi session. Existing sessions remain available via /sessions.")?;
+                            ui.info(output, "No saved session path was confirmed; reconnecting opens a new Runtime session. Existing sessions remain available via /sessions.")?;
                         }
                         rpc.recover_connection()?;
                         if let Err(error) = show_session_status(
@@ -316,14 +345,47 @@ fn chat<R: BufRead>(
                             return Err(error);
                         }
                         output.set_disconnected(false)?;
-                        ui.info(output, "Reconnected to Pi. No prompt was resent.")?;
+                        ui.info(output, "Reconnected to runtime. No prompt was resent.")?;
                     }
                 }
                 _ if !rpc.is_connected() => {
                     if !message.starts_with('/') {
                         last_failed = Some((message.to_owned(), images.clone()));
                     }
-                    ui.info(output, "Pi is disconnected. Use /reconnect, /restore, /help, or /quit. Nothing was sent.")?;
+                    ui.info(output, "Runtime is disconnected. Use /reconnect, /restore, /help, or /quit. Nothing was sent.")?;
+                }
+                _ if message.split_whitespace().next() == Some("/output") => {
+                    if !images.is_empty() {
+                        output.restore_draft(String::new(), images.clone());
+                    }
+                    use tool_outputs::Query;
+                    let query = tool_outputs::parse(message)?;
+                    let list = matches!(query, Query::List);
+                    let command = match query {
+                        Query::List => json!({"type":"get_tool_outputs"}),
+                        Query::Latest => json!({"type":"get_tool_output"}),
+                        Query::Index(index) => {
+                            json!({"type":"get_tool_output","index":index.get()})
+                        }
+                    };
+                    let data = rpc.request(
+                        command,
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|e| &e.receiver),
+                        interactive,
+                    )?;
+                    if list {
+                        let entries: Vec<crate::runtime::tool_output::Summary> =
+                            serde_json::from_value(data["outputs"].clone())?;
+                        output.saved_tool_outputs(&entries)?;
+                    } else {
+                        let entry: Option<crate::runtime::tool_output::Output> =
+                            serde_json::from_value(data["output"].clone())?;
+                        output.saved_tool_output(entry.as_ref())?;
+                    }
                 }
                 "/new" => {
                     rpc.command(
@@ -336,7 +398,7 @@ fn chat<R: BufRead>(
                         raw,
                         interactive,
                     )?;
-                    // Clear only after Pi confirms creation. A rejected or
+                    // Clear only after Runtime confirms creation. A rejected or
                     // cancelled command must leave the current view intact.
                     last_failed = None;
                     if output.is_full() {
@@ -444,13 +506,16 @@ fn chat<R: BufRead>(
                         ui.info(
                             output,
                             &format!(
-                                "Pi compacted context: {} → ~{} tokens. Original history is saved.",
+                                "Runtime compacted context: {} → ~{} tokens. Original history is saved.",
                                 compact_tokens(before),
                                 compact_tokens(after)
                             ),
                         )?;
                     } else {
-                        ui.info(output, "Pi compacted context. Original history is saved.")?;
+                        ui.info(
+                            output,
+                            "Runtime compacted context. Original history is saved.",
+                        )?;
                     }
                     show_session_status(
                         rpc,
@@ -463,10 +528,59 @@ fn chat<R: BufRead>(
                     )?;
                 }
                 "/login" => {
-                    inline_login(rpc, input, output, interactive, dialogs, events, raw, ui)?;
+                    let was_cli = !output.is_full() && output.is_terminal_chat();
+                    if was_cli {
+                        output.set_mode(Mode::Tui)?;
+                    }
+                    let result =
+                        inline_login(rpc, input, output, interactive, dialogs, events, raw, ui);
+                    if was_cli {
+                        output.set_mode(Mode::Cli)?;
+                        output.inline_welcome()?;
+                    }
+                    result?;
                 }
                 "/logout" => {
-                    inline_logout(rpc, input, output, interactive, dialogs, events, raw, ui)?;
+                    let was_cli = !output.is_full() && output.is_terminal_chat();
+                    if was_cli {
+                        output.set_mode(Mode::Tui)?;
+                    }
+                    let result =
+                        inline_logout(rpc, input, output, interactive, dialogs, events, raw, ui);
+                    if was_cli {
+                        output.set_mode(Mode::Cli)?;
+                        output.inline_welcome()?;
+                    }
+                    result?;
+                }
+                _ if extension_commands::namespaced(message)
+                    || message
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|name| output.has_extension_command(name)) =>
+                {
+                    if !images.is_empty() {
+                        output.restore_draft(String::new(), images.clone());
+                    }
+                    extension_commands::dispatch(
+                        message,
+                        rpc,
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|e| &e.receiver),
+                        interactive,
+                    )?;
+                    show_session_status(
+                        rpc,
+                        input,
+                        output,
+                        dialogs,
+                        raw,
+                        events.as_ref().map(|e| &e.receiver),
+                        ui,
+                    )?;
                 }
                 "/sessions" => {
                     let cwd = env::current_dir().map_err(local)?;
@@ -521,6 +635,15 @@ fn chat<R: BufRead>(
                         )?;
                     }
                 }
+                _ if message
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(crate::commands::looks_like_command) =>
+                {
+                    return Err(
+                        local("Unknown command. Use /help to see available commands.").into(),
+                    );
+                }
                 _ => {
                     submitted = true;
                     let command = json!({"type":"prompt", "message":message});
@@ -558,7 +681,7 @@ fn chat<R: BufRead>(
         if let Some(rejected) = output.take_rejected_queue() {
             last_failed = Some(rejected);
         }
-        // Capture the authoritative session path once Pi has settled. A
+        // Capture the authoritative session path once Runtime has settled. A
         // reconnect never guesses another session from the workspace's latest.
         if (submitted || failed) && rpc.is_connected() && interactive {
             if let Err(error) = show_session_status(
@@ -577,11 +700,11 @@ fn chat<R: BufRead>(
     }
 }
 
-/// Only full-screen scans run off-thread. Keep Pi's files authoritative and
+/// Only full-screen scans run off-thread. Keep Hibiscus's files authoritative and
 /// preserve typing that arrives while a slow first-time scan is running.
 fn list_sessions_for_chat(
     cwd: PathBuf,
-    output: &mut Screen,
+    output: &mut Frontend,
     keys: Option<&Receiver<u8>>,
 ) -> Result<Option<Vec<sessions::SessionInfo>>> {
     let Some(keys) = keys.filter(|_| output.is_full()) else {
@@ -596,9 +719,9 @@ fn list_sessions_for_chat(
                 // Keys take precedence even if a scan finished at the same instant.
                 for _ in 0..128 {
                     match keys.try_recv() {
-                        Ok(27) => match crate::tui::screen::escape_key(keys) {
-                            crate::tui::screen::Navigation::Escape => return Ok(None),
-                            crate::tui::screen::Navigation::EscapeWith(byte) => {
+                        Ok(27) => match crate::ui::input::escape_key(keys) {
+                            crate::ui::input::Navigation::Escape => return Ok(None),
+                            crate::ui::input::Navigation::EscapeWith(byte) => {
                                 buffered.push(byte);
                                 return Ok(None);
                             }
@@ -633,8 +756,8 @@ fn list_sessions_for_chat(
 
 fn handle_chat_error(
     error: Box<dyn std::error::Error + Send + Sync>,
-    rpc: &mut Rpc,
-    output: &mut Screen,
+    rpc: &mut Client,
+    output: &mut Frontend,
     ui: &Ui,
 ) -> Result<()> {
     // Local terminal/stdin I/O failure cannot safely be turned into chat text.
@@ -659,7 +782,7 @@ fn handle_chat_error(
     } else {
         ui.info(
             output,
-            "Pi disconnected. Use /reconnect; nothing is resent automatically.",
+            "Runtime disconnected. Use /reconnect; nothing is resent automatically.",
         )?;
     }
     output.flush()?;
@@ -668,9 +791,9 @@ fn handle_chat_error(
 
 #[allow(clippy::too_many_arguments)]
 fn inline_login<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     dialogs: &mut Dialogs,
     events: &mut Option<TerminalEvents>,
@@ -690,27 +813,40 @@ fn inline_login<R: BufRead>(
         interactive,
     )?;
     // Login is a provider choice, not a property of the current model. A
-    // logged-out Pi can select another model or have no model at all.
-    let choices = vec!["Browser Login".to_owned(), "API Key".to_owned()];
+    // logged-out Runtime can select another model or have no model at all.
+    let providers = crate::runtime::config::load()?.providers;
     let keys = &events
         .as_ref()
         .ok_or("terminal events unavailable")?
         .receiver;
-    let (provider, auth_type, label) = match output.select("Sign in to", &choices, None, keys)? {
-        Some(0) => {
-            let providers = vec![
-                "Codex · browser or device code".to_owned(),
-                "Claude · browser login".to_owned(),
-            ];
-            match output.select("Browser Login", &providers, None, keys)? {
-                Some(0) => ("openai-codex", "oauth", "Codex"),
-                Some(1) => ("anthropic", "oauth", "Claude"),
-                _ => return Ok(()),
-            }
-        }
-        Some(1) => ("", "api_key", "API key"),
-        _ => return Ok(()),
+    let methods = vec!["Browser Login".into(), "API Key".into()];
+    let Some(method) = output.select("Sign in to Hibiscus", &methods, None, keys)? else {
+        return Ok(());
     };
+    let choices = if method == 0 {
+        vec!["Codex · ChatGPT account".into()]
+    } else {
+        providers
+            .iter()
+            .filter(|p| p.authentication == crate::runtime::config::Authentication::ApiKey)
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let title = if method == 0 {
+        "Browser Login"
+    } else {
+        "API Key · provider"
+    };
+    let Some(index) = output.select(title, &choices, None, keys)? else {
+        return Ok(());
+    };
+    let provider = if method == 0 {
+        "openai-codex"
+    } else {
+        choices[index].as_str()
+    };
+    let auth_type = if method == 0 { "oauth" } else { "api_key" };
+    let label = provider;
     let keys = &events
         .as_ref()
         .ok_or("terminal events unavailable")?
@@ -724,9 +860,25 @@ fn inline_login<R: BufRead>(
                 .map(SessionStart::Selected)
                 .unwrap_or(SessionStart::New);
             rpc.reconnect(start)?;
+            if let Some(model) = crate::runtime::config::load()?
+                .providers
+                .iter()
+                .find(|p| p.id == provider)
+                .and_then(|p| p.models.first())
+            {
+                rpc.request(
+                    json!({"type":"set_model","provider":provider,"modelId":model.id}),
+                    input,
+                    output,
+                    dialogs,
+                    raw,
+                    events.as_ref().map(|keys| &keys.receiver),
+                    interactive,
+                )?;
+            }
             ui.info(
                 output,
-                &format!("{label} sign-in completed. Reconnected Pi to this chat."),
+                &format!("{label} sign-in completed. Reconnected Runtime to this chat."),
             )?;
             show_session_status(
                 rpc,
@@ -745,9 +897,9 @@ fn inline_login<R: BufRead>(
 
 #[allow(clippy::too_many_arguments)]
 fn inline_logout<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     dialogs: &mut Dialogs,
     events: &Option<TerminalEvents>,
@@ -773,18 +925,11 @@ fn inline_logout<R: BufRead>(
         .map(SessionStart::Selected)
         .unwrap_or(SessionStart::New);
     let result = sign_out(output, &keys.receiver, || rpc.close());
-    if let Ok(LogoutOutcome::Removed {
-        provider,
-        synchronization_warning,
-    }) = &result
-    {
+    if let Ok(LogoutOutcome::Removed { provider }) = &result {
         ui.info(
             output,
             &format!("Removed stored credentials for {provider}."),
         )?;
-        if *synchronization_warning {
-            ui.info(output, "Pi removed the credential but could not synchronize its helper state; reopening the chat backend.")?;
-        }
     }
     // Once removal was authorized, discard cached credentials even when the
     // helper fails or times out after a possible storage mutation.
@@ -794,20 +939,25 @@ fn inline_logout<R: BufRead>(
     }
     match result? {
         LogoutOutcome::Removed { .. } => {
-            ui.info(output, "Logout complete. Chat is preserved. Environment variables and models.json are unchanged; provider tokens are not revoked.")?;
+            ui.info(output, "Logout complete. Chat is preserved. Environment variables and config.json are unchanged; provider tokens are not revoked.")?;
         }
         LogoutOutcome::Cancelled => ui.info(output, "Logout cancelled.")?,
-        LogoutOutcome::Empty => ui.info(output, "No stored credentials to remove. Environment variables and models.json may still provide access.")?,
-        LogoutOutcome::Unavailable => return Err(local("Inline logout needs Node and a compatible Pi SDK. No credentials were changed. Check HIBISCUS_NODE and HIBISCUS_AUTH_SDK, or update Pi, then retry /logout.").into()),
+        LogoutOutcome::Empty => {
+            show_session_status(rpc, input, output, dialogs, raw, Some(&keys.receiver), ui)?;
+            ui.info(
+                output,
+                "No stored credentials. Environment variables may still provide API access.",
+            )?;
+        }
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn open_session<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     path: &std::path::Path,
-    output: &mut Screen,
+    output: &mut Frontend,
     input: &mut R,
     dialogs: &mut Dialogs,
     raw: &mut Option<RawMode>,

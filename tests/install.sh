@@ -1,158 +1,73 @@
 #!/bin/sh
 set -eu
-
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/hibiscus-installer-test.XXXXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-mkdir -p "$tmp/bin" "$tmp/fixtures" "$tmp/home" "$tmp/pi-agent"
-
-cat >"$tmp/bin/uname" <<'SCRIPT'
+mkdir -p "$tmp/bin" "$tmp/fixtures"
+cat > "$tmp/bin/uname" <<'SCRIPT'
 #!/bin/sh
-case "$1" in
-    -s) printf '%s\n' "$TEST_OS" ;;
-    -m) printf '%s\n' "$TEST_ARCH" ;;
-    *) exit 1 ;;
-esac
+case "$1" in -s) echo "$TEST_OS" ;; -m) echo "$TEST_ARCH" ;; *) exit 1 ;; esac
 SCRIPT
-
-cat >"$tmp/bin/curl" <<'SCRIPT'
+cat > "$tmp/bin/curl" <<'SCRIPT'
 #!/bin/sh
-url=
-destination=
 while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -o) destination=$2; shift 2 ;;
-        http*) url=$1; shift ;;
-        *) shift ;;
-    esac
+ case "$1" in -o) destination=$2; shift 2 ;; http*) url=$1; shift ;; *) shift ;; esac
 done
-[ -n "$url" ] && [ -n "$destination" ]
-printf '%s\n' "$url" >>"$TEST_CURL_LOG"
-if [ "$url" = https://pi.dev/install.sh ] && [ "${TEST_PI_DOWNLOAD_FAIL:-0}" = 1 ]; then
-    exit 22
-fi
+printf '%s\n' "$url" >> "$TEST_CURL_LOG"
+[ "${TEST_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
 cp "$TEST_FIXTURES/${url##*/}" "$destination"
 SCRIPT
-cat >"$tmp/fixtures/install.sh" <<'SCRIPT'
+# Native installation must never invoke any external agent/runtime bootstrap.
+for name in pi node npm; do
+ cat > "$tmp/bin/$name" <<'SCRIPT'
 #!/bin/sh
-[ "${TEST_PI_INSTALL_FAIL:-0}" = 0 ] || exit 23
-printf 'Pi installer invoked\n' >> "$TEST_PI_LOG"
-mkdir -p "$PI_CODING_AGENT_DIR/bin"
-printf '#!/bin/sh\necho pi-test-version\n' > "$PI_CODING_AGENT_DIR/bin/pi"
-chmod +x "$PI_CODING_AGENT_DIR/bin/pi"
+printf 'forbidden runtime bootstrap\n' >> "$TEST_FORBIDDEN"
+exit 99
 SCRIPT
-cat >"$tmp/bin/npm" <<'SCRIPT'
-#!/bin/sh
-printf '%s\n' "$*" >> "$TEST_NPM_LOG"
-[ "${TEST_NPM_INSTALL_FAIL:-0}" = 0 ] || exit 24
-mkdir -p "$HOME/.local/bin"
-printf '#!/bin/sh\necho npm-pi-version\n' > "$HOME/.local/bin/pi"
-chmod +x "$HOME/.local/bin/pi"
-SCRIPT
-chmod +x "$tmp/bin/uname" "$tmp/bin/curl" "$tmp/bin/npm"
-
+done
+chmod +x "$tmp/bin/"*
 run_case() {
-    os=$1
-    arch=$2
-    target=$3
-    version=$4
-    mode=$5
-    archive="hibiscus-$target.tar.gz"
-    rm -rf "$tmp/package" "$tmp/home/.local" "$tmp/pi-agent/bin" "$tmp/home/.hibiscus" "$tmp/custom-hibiscus"
-    mkdir -p "$tmp/package" "$tmp/home/.local/bin"
-    printf '#!/bin/sh\necho test hibiscus\n' >"$tmp/package/hibiscus"
-    chmod +x "$tmp/package/hibiscus"
-    tar -C "$tmp/package" -czf "$tmp/fixtures/$archive" hibiscus
-    checksum=$(shasum -a 256 "$tmp/fixtures/$archive" | awk '{print $1}')
-    printf '%s  %s\n' "$checksum" "$archive" >"$tmp/fixtures/SHA256SUMS"
-    : >"$tmp/curl.log"
-    : >"$tmp/pi.log"
-    : >"$tmp/npm.log"
-
-    rm -f "$tmp/bin/pi" "$tmp/bin/custom-pi" "$tmp/bin/node"
-    if [ "$mode" = npm ] || [ "$mode" = npm_failure ]; then
-        printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/node"
-    else
-        printf '#!/bin/sh\nexit 1\n' > "$tmp/bin/node"
-    fi
-    chmod +x "$tmp/bin/node"
-    override_pi=
-    case "$mode" in
-        existing)
-            printf '#!/bin/sh\necho existing-pi\n' > "$tmp/bin/pi"
-            chmod +x "$tmp/bin/pi" ;;
-        managed)
-            mkdir -p "$tmp/pi-agent/bin"
-            printf '#!/bin/sh\necho managed-pi\n' > "$tmp/pi-agent/bin/pi"
-            chmod +x "$tmp/pi-agent/bin/pi" ;;
-        override)
-            override_pi="$tmp/bin/custom-pi"
-            printf '#!/bin/sh\necho custom-pi\n' > "$override_pi"
-            chmod +x "$override_pi" ;;
-    esac
-    data_dir="$tmp/home/.hibiscus"
-    custom_home=
-    if [ "$mode" = override ]; then
-        custom_home="$tmp/custom-hibiscus"
-        data_dir=$custom_home
-    fi
-    if [ "$mode" = existing ]; then
-        mkdir -p "$data_dir"
-        printf '{"enabled":false}\n' > "$data_dir/approval.json"
-        printf '{"codexContextWindow":null}\n' > "$data_dir/config.json"
-    fi
-    status=0
-    TEST_OS=$os TEST_ARCH=$arch TEST_FIXTURES="$tmp/fixtures" TEST_CURL_LOG="$tmp/curl.log" \
-        TEST_PI_LOG="$tmp/pi.log" TEST_NPM_LOG="$tmp/npm.log" \
-        TEST_PI_DOWNLOAD_FAIL=$([ "$mode" = download_failure ] && echo 1 || echo 0) \
-        TEST_PI_INSTALL_FAIL=$([ "$mode" = install_failure ] && echo 1 || echo 0) \
-        TEST_NPM_INSTALL_FAIL=$([ "$mode" = npm_failure ] && echo 1 || echo 0) \
-        PI_CODING_AGENT_DIR="$tmp/pi-agent" HOME="$tmp/home" HIBISCUS_PI="$override_pi" \
-        HIBISCUS_HOME="$custom_home" HIBISCUS_VERSION=$version HIBISCUS_INSTALL_DIR="$tmp/home/.local/bin" \
-        PATH="$tmp/bin:$tmp/home/.local/bin:/usr/bin:/bin" sh "$root/install.sh" >/dev/null 2>"$tmp/stderr" || status=$?
-
-    if [ "$mode" = download_failure ] || [ "$mode" = install_failure ] || [ "$mode" = npm_failure ]; then
-        [ "$status" -ne 0 ]
-        [ ! -e "$tmp/home/.local/bin/hibiscus" ]
-        return
-    fi
-    [ "$status" -eq 0 ] || { printf 'Installer failed: %s\n' "$(awk 'NR == 1 {print; exit}' "$tmp/stderr")" >&2; exit 1; }
-    test -d "$data_dir/cache"
-    if [ "$mode" = existing ]; then
-        [ "$(cat "$data_dir/approval.json")" = '{"enabled":false}' ]
-        [ "$(cat "$data_dir/config.json")" = '{"codexContextWindow":null}' ]
-    else
-        [ "$(cat "$data_dir/config.json")" = '{"codexContextWindow":1000000}' ]
-    fi
-    test -x "$tmp/home/.local/bin/hibiscus"
-    "$tmp/home/.local/bin/hibiscus" | grep -q 'test hibiscus'
-    grep -q "/$archive" "$tmp/curl.log"
-    grep -q '/SHA256SUMS' "$tmp/curl.log"
-    if [ "$mode" = npm ]; then
-        grep -q -- '--ignore-scripts' "$tmp/npm.log"
-        ! grep -q 'pi.dev/install.sh' "$tmp/curl.log"
-        [ ! -s "$tmp/pi.log" ]
-        "$tmp/home/.local/bin/pi" --version | grep -q npm-pi-version
-    elif [ "$mode" = existing ] || [ "$mode" = override ] || [ "$mode" = managed ]; then
-        [ ! -s "$tmp/pi.log" ]
-        ! grep -q 'pi.dev/install.sh' "$tmp/curl.log"
-        if [ "$mode" = managed ]; then
-            [ -L "$tmp/home/.local/bin/pi" ]
-        fi
-    else
-        grep -q 'pi.dev/install.sh' "$tmp/curl.log"
-        grep -q 'Pi installer invoked' "$tmp/pi.log"
-        [ -x "$tmp/home/.local/bin/pi" ]
-        "$tmp/home/.local/bin/pi" --version | grep -q pi-test-version
-    fi
+ os=$1; arch=$2; target=$3; version=$4; mode=$5
+ home="$tmp/home-$target-$mode"; mkdir -p "$home/.hibiscus"
+ printf '#!/bin/sh\necho test hibiscus\n' > "$tmp/fixtures/hibiscus"
+ tar -czf "$tmp/fixtures/hibiscus-$target.tar.gz" -C "$tmp/fixtures" hibiscus
+ (cd "$tmp/fixtures"; shasum -a 256 "hibiscus-$target.tar.gz") > "$tmp/fixtures/SHA256SUMS"
+ if [ "$mode" = checksum ]; then printf 'invalid checksum\n' > "$tmp/fixtures/SHA256SUMS"; fi
+ if [ "$mode" = existing ]; then
+  printf '{"model":"keep/model"}\n' > "$home/.hibiscus/config.json"
+  mkdir -p "$home/.hibiscus/extensions/keep"
+  printf 'user extension source\n' > "$home/.hibiscus/extensions/keep/main.py"
+  printf 'user manifest\n' > "$home/.hibiscus/extensions/keep/extension.json"
+ fi
+ status=0
+ TEST_OS=$os TEST_ARCH=$arch TEST_FIXTURES="$tmp/fixtures" TEST_CURL_LOG="$tmp/curl.log" TEST_FORBIDDEN="$tmp/forbidden" \
+ TEST_DOWNLOAD_FAIL=$([ "$mode" = download ] && echo 1 || echo 0) \
+ HOME="$home" HIBISCUS_HOME="$home/.hibiscus" HIBISCUS_VERSION=$version HIBISCUS_INSTALL_DIR="$home/bin" \
+ PATH="$tmp/bin:/usr/bin:/bin" sh "$root/install.sh" > "$tmp/stdout" 2> "$tmp/stderr" || status=$?
+ if [ "$mode" = checksum ] || [ "$mode" = download ]; then
+  [ "$status" -ne 0 ]; [ ! -e "$home/bin/hibiscus" ]; return
+ fi
+ [ "$status" -eq 0 ] || { cat "$tmp/stderr"; exit 1; }
+ "$home/bin/hibiscus" | grep -q 'test hibiscus'
+ test -d "$home/.hibiscus/cache"
+ test -d "$home/.hibiscus/extensions"
+ if [ "$mode" = existing ]; then
+  [ "$(cat "$home/.hibiscus/config.json")" = '{"model":"keep/model"}' ]
+  [ "$(cat "$home/.hibiscus/extensions/keep/main.py")" = 'user extension source' ]
+  [ "$(cat "$home/.hibiscus/extensions/keep/extension.json")" = 'user manifest' ]
+ else
+  [ "$(cat "$home/.hibiscus/config.json")" = '{}' ]
+  [ -z "$(ls -A "$home/.hibiscus/extensions")" ]
+ fi
+ grep -q 'Hibiscus is ready. Sign in to a provider with /login.' "$tmp/stdout"
+ ! grep -qi 'Pi is ready\|Hibiscus or Pi' "$tmp/stdout"
+ [ ! -e "$tmp/forbidden" ]
+ ! grep -q 'pi.dev\|pi-coding-agent' "$tmp/curl.log"
 }
-
 run_case Linux x86_64 x86_64-unknown-linux-musl latest existing
-run_case Linux aarch64 aarch64-unknown-linux-musl latest override
-run_case Darwin x86_64 x86_64-apple-darwin latest managed
-run_case Darwin arm64 aarch64-apple-darwin 0.3.4 missing
-run_case Darwin arm64 aarch64-apple-darwin latest npm
-run_case Darwin x86_64 x86_64-apple-darwin latest npm_failure
-run_case Darwin x86_64 x86_64-apple-darwin latest download_failure
-run_case Linux aarch64 aarch64-unknown-linux-musl latest install_failure
-printf 'installer tests passed\n'
+run_case Linux aarch64 aarch64-unknown-linux-musl latest native
+run_case Darwin x86_64 x86_64-apple-darwin latest native
+run_case Darwin arm64 aarch64-apple-darwin 0.3.7 missing
+run_case Darwin arm64 aarch64-apple-darwin latest checksum
+run_case Linux x86_64 x86_64-unknown-linux-musl latest download
+printf 'native installer tests passed\n'

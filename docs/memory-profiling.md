@@ -1,5 +1,7 @@
 # Memory profiling: synthetic Linux results
 
+Historical measurements of the earlier Pi-backed implementation. The old profiler launchers were retired during the native migration; these commands and source paths refer to that earlier revision, not the current runtime. Native performance has not been measured by this report.
+
 ## Incoming image-echo follow-up (local, unreleased)
 
 The UI consumes incoming user `message_start` only as a **delivery signal**, using its text and image count; Pi owns the full saved message. The decoder now borrows the incoming `message` and each content block from the bounded raw RPC frame. For image blocks in **user `message_start` only**, it validates but does not retain `data`; it preserves text, image block type/count, MIME and other metadata. Assistant message starts, user `message_end`, tool results, responses and unknown events still decode fully. Unknown content blocks (including a `data` field) retain that field. Escaped strings and earlier duplicate fields are validated, including invalid surrogate escapes. It does not log or display image base64.

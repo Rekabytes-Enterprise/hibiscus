@@ -1,5 +1,7 @@
 # Performance review
 
+Historical measurements of the earlier Pi-backed implementation. The old profiler launchers were retired during the native migration; these commands and source paths refer to that earlier revision, not the current runtime. Native performance has not been measured by this report.
+
 Review and implementation follow-up, 2026-09-25. The original measurements below are the pre-optimization baseline; see the follow-up for implemented changes and remaining work.
 
 ## Implementation follow-up

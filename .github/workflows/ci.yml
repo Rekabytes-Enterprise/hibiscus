@@ -41,7 +41,7 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-14
+          - macos-15
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -51,8 +51,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Test bundled Pi helpers without providers
-        run: node tests/npm-install.mjs && node tests/model-context.mjs && node tests/writing-style.mjs && node tests/approval.mjs && node tests/approval_toggle.mjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test npm installer without downloads
+        run: node tests/npm-install.mjs
       - name: Run Rust tests
         timeout-minutes: 5
         # PTY fixtures must configure their own terminal, not inherit the runner's.

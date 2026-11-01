@@ -110,28 +110,8 @@ pub(crate) fn install(tag: &str) -> Result<()> {
     Ok(())
 }
 
-fn update_pi() -> Result<()> {
-    crate::pi::ensure_node_path();
-    let pi = env::var_os("HIBISCUS_PI").unwrap_or_else(|| "pi".into());
-    println!("Updating Pi using its own updater…");
-    let status = Command::new(&pi)
-        .args(["update", "--self"])
-        .status()
-        .map_err(|error| {
-            format!(
-                "could not run {} update --self: {error}",
-                pi.to_string_lossy()
-            )
-        })?;
-    if !status.success() {
-        return Err(format!("Pi updater failed: {status}; follow Pi's output above for installation-specific instructions").into());
-    }
-    println!("Pi update completed.");
-    Ok(())
-}
-
 pub(crate) fn update() -> Result<()> {
-    // Reject unsupported Hibiscus install locations before changing either app.
+    // Reject unsupported Hibiscus install locations before running the installer.
     install_path()?;
     let hibiscus: Result<()> = (|| {
         match check()? {
@@ -146,16 +126,7 @@ pub(crate) fn update() -> Result<()> {
     if let Err(error) = &hibiscus {
         eprintln!("Hibiscus update failed: {error}");
     }
-    // These are independent updates, not a transaction: still try Pi when
-    // GitHub is unavailable, and never imply a rollback of either component.
-    let pi = update_pi();
-    if let Err(error) = &pi {
-        eprintln!("Pi update failed: {error}");
-    }
-    if hibiscus.is_err() || pi.is_err() {
-        return Err("one or more updates failed; successful updates remain installed (see component results above)".into());
-    }
-    Ok(())
+    hibiscus
 }
 
 /// Don't recheck or repeat a dismissed notice on each chat startup. An explicit

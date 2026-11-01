@@ -4,7 +4,7 @@ Thanks for helping improve Hibiscus. Start with the [architecture](docs/architec
 
 ## Scope
 
-Hibiscus owns the Rust CLI, terminal presentation, and Pi RPC integration. Pi owns agent behavior, model metadata, tool execution, authentication, and session persistence. Prefer calling Pi through RPC to reimplementing any of these in Hibiscus. Do not add a second credential store or silently install Pi.
+Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, sessions and terminal presentation. Keep external provider formats inside adapters. Validate tool arguments before execution and never run tools from an incomplete stream. Use native typed session/event data and preserve cancellation and request settlement. Do not restore a Pi SDK/runtime dependency. See [native migration](docs/native-runtime.md).
 
 ## Fork, branch, and open a pull request
 
@@ -32,8 +32,8 @@ Hibiscus owns the Rust CLI, terminal presentation, and Pi RPC integration. Pi ow
 
 ## Making a change
 
-1. Keep the change focused and put it in the relevant `src/chat/`, `src/pi/`, or `src/tui/` module. Update docs when usage, layout, or behavior changes.
-2. Add a unit or integration regression test for a behavior change or bug when feasible. Mock Pi subprocesses are suitable for protocol behavior; use a controlling PTY for input/rendering/authentication behavior. Drain PTY output concurrently.
+1. Keep the change focused and put it in the relevant `src/chat/`, `src/runtime/`, or `src/tui/` module. Update docs when usage, layout, or behavior changes.
+2. Add a unit or integration regression test for a behavior change or bug when feasible. Local HTTP fixtures are suitable for provider behavior; use a controlling PTY for input/rendering/authentication behavior. Drain PTY output concurrently.
 3. Run:
 
    ```sh
@@ -42,11 +42,11 @@ Hibiscus owns the Rust CLI, terminal presentation, and Pi RPC integration. Pi ow
    cargo clippy --locked --all-targets -- -D warnings
    ```
 
-4. Pushes and pull requests to `dev` must pass `.github/workflows/ci.yml`: formatting, Clippy with warnings denied, installer checks, and Rust tests on Ubuntu and macOS. If behavior depends on Pi or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.
+4. Pushes and pull requests to `dev` must pass `.github/workflows/ci.yml`: formatting, Clippy with warnings denied, installer checks, and Rust tests on Ubuntu and macOS. If behavior depends on a provider or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.
 5. Reconcile `.pi/STATE.md` with current progress. Add to `.pi/MEMORY.md` only when a reusable decision or root cause is confirmed, updating an existing matching entry rather than duplicating it.
 
 ## Safety and privacy
 
-Never commit API keys, OAuth data, `~/.pi/agent/auth.json`, private Pi sessions, chat transcripts, or user-specific paths. Don't place real credentials in fixtures, logs, screenshots, or issue reports. Extension dialogs must never auto-approve in non-interactive mode. Preserve LF-delimited RPC framing, command-ID correlation, separate stderr diagnostics, and the `agent_settled` completion boundary.
+Never commit API keys, OAuth data, `~/.hibiscus/auth.json`, private sessions, chat transcripts, or user-specific paths. Don't place real credentials in fixtures, logs, screenshots, or issue reports. Native tools execute directly after validation, including shell commands in non-interactive mode. Preserve bounded local framing, request-ID correlation and the run-settlement boundary.
 
-For `/login`, use Pi's SDK for OAuth/storage; never implement a second token store, log authorization codes, or echo manually pasted redirects. Treat the helper's explicit completion event (after Pi finishes credential synchronization) as authoritative; do not wait for its natural exit because the OAuth callback server can leave browser sockets open. Terminate and reap the dedicated helper after protocol completion, without changing the reported success outcome. Reconnect the idle RPC child after a successful sign-in without opening the same saved session in two Pi children. Authentication must remain inside Hibiscus: missing Node/SDK, unsupported methods and provider failures use recoverable errors, preserve the chat and allow retry. Never launch Pi’s interactive TUI or recommend it as a fallback. Line and piped input report that full-screen input is required. Auth must work before the first saved chat message; do not tie `/login` to the active model. If a real-Pi check is unavailable, record that limitation instead of claiming it worked.
+For `/login`, keep key entry masked and store credentials only in Hibiscus's private auth file. Do not log provider response bodies or keys. Authentication never launches another agent. Test with local HTTP fixtures and synthetic credentials. Preserve the existing session and recoverable draft after failures, and never replay a tool with an unknown outcome automatically.

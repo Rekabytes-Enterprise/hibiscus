@@ -1,4 +1,4 @@
-//! Display-only activity for one portion of a Pi run. Routine reads and bash
+//! Display-only activity for one portion of a Runtime run. Routine reads and bash
 //! calls contribute to one compact summary; edits and failures stay reviewable.
 use std::collections::HashMap;
 
@@ -149,7 +149,7 @@ impl Timeline {
                 {
                     *running = false;
                     *error = failed;
-                    if name == "edit" && !failed {
+                    if !failed {
                         if let Some(diff) = diff {
                             for (index, line) in diff.lines().enumerate() {
                                 if index < 40 {

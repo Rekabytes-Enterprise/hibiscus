@@ -1,135 +1,39 @@
 # Architecture
 
-Hibiscus is a Rust CLI and terminal frontend for a **Pi RPC subprocess**. It does not implement its own agent, model catalog, credential manager, tool runtime, or session store.
+Hibiscus is a standalone Rust coding agent. It owns provider connections, tool execution, credentials, sessions and terminal presentation. See [native migration](native-runtime.md) for configuration and compatibility changes.
 
-## What runs where
-
-Hibiscus owns the terminal experience: CLI flags, chat commands, full-screen rendering, local image capture, update prompts, and recovery UI. Pi owns the agent: model access, authentication storage, tool execution, reasoning, retries, and saved session files. The main boundary is a long-lived `pi --mode rpc` child process using LF-delimited JSON records on stdin/stdout.
-
-That boundary is intentional. When adding behavior, prefer asking Pi through RPC or its SDK helpers over duplicating Pi's agent, credential, model, tool, or session logic in Rust.
-
-## Codebase map
-
-```text
-src/
-  main.rs            CLI entry point, flags, one-shot/piped dispatch
-  chat/
-    mod.rs           Interactive chat loop, session switching, auth routing
-    commands.rs      Supported slash-command suggestions
-    models.rs        Model selection using Pi RPC
-    sessions.rs      Pi session discovery, picker fallback, recent-history display
-  pi/
-    mod.rs           Pi integration and explicit bundled-extension staging
-    approval.mjs     Pre-execution approval, goal checklist and Hibiscus prompt guidance
-    writing-style.mjs Always-on writing guidance, separate from approval behavior
-    rpc.rs           Child lifecycle, correlated RPC events, interrupts, progress
-    transport.rs     Bounded raw inbox, nonblocking writes, deadlines and metrics
-    error.rs         Typed errors, recovery disposition, safe presentation
-    diagnostics.rs   Bounded Pi stderr summary for the bottom diagnostic row
-    run.rs           Final run outcome across Pi retries and compaction
-    auth.rs          Pi SDK discovery and OAuth/API-key UI bridge
-    login.mjs    Embedded Node helper calling Pi ModelRuntime.login()
-    logout.rs        In-chat provider picker, confirmation, helper lifecycle
-    logout.mjs       Pi SDK credential metadata and logout protocol
-    dialog.rs        Pi extension UI requests and responses
-  tui/
-    mod.rs           Terminal UI modules
-    screen.rs        Alternate-screen view, composer, menus, frame scheduling
-    paint.rs         Cached row-diff output, synchronized frames, cursor state
-    activity.rs      Mutable display-only grouped tool/think timeline
-    clipboard.rs     Bounded, cancellable local clipboard image reads
-    terminal.rs      /dev/tty raw mode and input reader
-    picker.rs        Shared bounded picker/scroll state
-    modal.rs         Shared panel chrome, dialog focus/input/details and deadlines
-    markdown.rs      Display-only Markdown and edit-diff formatting
-    ui.rs            Labels/help and line-mode presentation
-```
-
-`tests/` contains mock Pi subprocess and PTY integration tests; unit tests live alongside the modules they cover. `benches/` contains repeatable formatter, session-list, and allocation benchmarks. Top-level scripts and docs cover installation, version bumps, development, release notes, and public contributor guidance.
-
-The split keeps chat workflows separate from Pi protocol handling and terminal rendering. `modal.rs` renders the common panel used by model/session pickers and Pi dialogs. `Dialogs` asks the `ScrollDisplay` interface for a full-screen dialog response before falling back to line-mode terminal prompts; Screen owns modal focus and never mixes raw approval output with its composer.
-
-## Runtime flow
-
-A typical full-screen chat follows this path:
-
-1. `main.rs` parses CLI flags and stages the bundled approval and writing-style extensions before launching Pi.
-2. `chat::start_chat` opens a Pi RPC child, prepares terminal raw mode when available, creates a `Screen`, optionally restores session status/history, and enters the chat loop.
-3. User input is handled as a local slash command or sent to Pi as a `prompt` command with optional image parts.
-4. `pi/rpc.rs` writes JSONL commands to Pi, correlates responses by ID, and keeps reading events until the run settles.
-5. TUI modules render assistant text, tool activity, approvals, model/session pickers, queued follow-ups, images, and recovery notices.
-6. On exit, Hibiscus restores terminal state and closes its RPC child. Authentication stays inside Hibiscus; successful login and authorized logout refresh the backend deliberately.
-
-One-shot and piped modes use the same Pi RPC boundary but avoid the full-screen UI so stdout remains script-friendly.
-
-The RPC transport now uses a bounded raw-record inbox and nonblocking, deadline-controlled stdin writes in `src/pi/transport.rs`. Overload invalidates the connection explicitly rather than blocking the reader or silently dropping events. See [RPC transport limits](rpc-transport.md) for budgets, partial-send cancellation and recovery semantics.
-
-## RPC data flow
-
-```text
-terminal input → chat commands → Pi RPC stdin (JSONL)
-                               ← Pi RPC stdout (JSONL responses/events)
-                               → terminal UI or plain stdout
-Pi stderr → full-screen sanitized diagnostic row / plain-mode stderr (never RPC records)
-```
-
-`pi/rpc.rs` assigns IDs to commands and matches their `response` records. During full-screen runs it polls composer input alongside Pi stdout, sending additional prompts with explicit `streamingBehavior: "steer"` or `"followUp"`, distinct IDs, and optional images. Their responses acknowledge acceptance only. Pi's `queue_update` supplies queue counts and pending-message text, which Hibiscus docks above the composer (Waiting, then Sending if dequeued before delivery). The accepted message is not appended to chat until Pi emits `message_start` with `role: user`; skip the initial prompt's already-rendered user event. Since Pi queue events have no per-message IDs, match equal text by queue order and retain in-transit entries until delivery, cancellation, or settlement. Unsent or rejected drafts are preserved without overriding newer typing, and local slash commands are blocked during runs. A successful `prompt` response means **accepted**, not finished. It continues reading events through `agent_settled`; `agent_end` alone is not sufficient because Pi can retry or perform follow-up work. Records are framed by LF, not Unicode line separators. During a run, Esc sends `clear_queue` followed by `abort` and waits for their responses and settlement without discarding the RPC child.
-
-Pi events supply progress and tool activity. Hibiscus correlates `tool_execution_start` and `tool_execution_end` by `toolCallId`. Successful built-in `edit` results may include `result.details.diff`; the UI displays a bounded preview of that authoritative diff, not a re-created diff or an inferred write. The display never prints raw reasoning deltas or full tool results by default.
-
-## Writing guidance
-
-The separate `src/pi/writing-style.mjs` extension adds always-on prose guidance at `before_agent_start`. It preserves existing structured prompt sections, or appends to the full original prompt on older hooks, with an options-only fallback. The section is not duplicated on repeated runs. It requests concrete, plain writing while preserving quotations, code, commands, project conventions, user-requested styles and uncertainty. It neither registers tools nor intercepts approvals, and `/approval off` does not disable it. Both extensions share private staging and cleanup but remain separate modules. Pi's main runs receive the guidance. No output rewriting or literal wording guarantee is provided. Tests: `tests/writing-style.mjs` and extension launch/cleanup integration fixtures.
-
-## Tool approvals
-
-Hibiscus stages its bundled `approval.mjs` and `writing-style.mjs` in a private temporary directory and launches Pi with `--no-extensions --extension <approval-file> --extension <writing-style-file> --tools read,bash,edit,write,goal`. The approval extension also adds Hibiscus identity and operational-clarification guidance at `before_agent_start`: it uses structured sections when available, otherwise appends missing sections to Pi's existing rendered prompt (or its append option on options-only hooks). The older-Pi fallback returns the full original prompt plus guidance, rather than discarding Pi's tool/safety instructions; it does not replace Pi's agent or execution tools. This guidance cannot guarantee a literal model response or that every ambiguity is caught. Pi's installed extensions are still disabled. Pi's `tool_call` event blocks a classified dangerous `bash` command until RPC `ctx.ui.select()` returns an explicit Allow or Always Allow. Approval matches the displayed command/subcommand patterns within the current working directory and Pi session; simple commands may grant broad argument wildcards (including force flags or a different destination), while complex syntax falls back to exact command text. Decisions are serialized so matching pending requests reuse an Always Allow grant and Deny rejects queued requests. No durable approval store is written. The existing extension UI subprotocol correlates responses by ID; empty/noninteractive/Esc/error deny. Hibiscus's bundled approval request has no idle timeout; other extension dialogs may supply their own. This is a best-effort policy for common commands, not a sandbox or guarantee that apparently safe shell commands cannot have side effects.
-
-`/approval` opens the shared full-screen picker with the current setting selected (Esc leaves it unchanged), or reports status in line/piped mode; `/approval off` (or `disable`) bypasses Hibiscus's bash approval gate, and `/approval on` (or `enable`) restores it. The preference is saved atomically to `$HIBISCUS_HOME/approval.json`, defaulting to `~/.hibiscus/approval.json`. On first launch, a valid legacy XDG approval file is copied if the new file is absent. New processes seed their private extension marker from that file; no saved preference means enabled. Changes update the current process and future launches, while other running instances keep their existing setting. Invalid or unreadable settings produce a startup error. It does not alter Pi's global settings. These local slash commands are available between runs, including while disconnected.
-
-## Failure boundaries
-
-Provider failures and command rejections are typed separately from transport/protocol failures. The chat loop catches recoverable errors per interaction; one-shot and piped runs retain failing exit statuses. A failed assistant attempt can be superseded by successful Pi retry/compaction recovery. The final outcome is interpreted only at settlement, and Hibiscus never runs its own automatic retry loop.
-
-`/restore` stages a failed prompt with its images for review. `/reconnect` is explicit, stops/reaps the old Pi process group, and uses the last confirmed session path without replaying requests. Broken transports leave a disconnected composer available for local commands. See [Error handling and recovery](error-handling.md) for the full event matrix and timeout behavior.
-
-## Sessions, models, and credentials
-
-Pi persists sessions in its JSONL store. `chat/sessions.rs` discovers files for the current workspace, respecting Pi's session directory settings. Resume/switch obtains messages with `get_messages` and displays only the latest five user turns and visible assistant replies; Pi still retains full history. In-chat switches use `switch_session` on the existing RPC child.
-
-
-`chat/models.rs` obtains the active model and all configured models from Pi, sorts them by provider then ID for display, and sends `set_model` with both provider and ID for a changed selection. `/thinking` also reads Pi's current state and available thinking levels before requesting `set_thinking_level`; no local per-model reasoning catalog is maintained. Screen reads the confirmed thinking level from Pi's state and cumulative context/usage/cache-read/cost data from `get_session_stats` after settled runs and state changes (cache writes are not displayed). The footer holds only a display snapshot and never computes its own token budget or subscription quota. `/compact` sends a separate long-running RPC command to Pi, which creates/persists the summary and responds when complete. Hibiscus waits for the correlated response and cancellation acknowledgements, not prompt settlement, and does not summarize or store context itself. Hibiscus does not maintain a second model catalog. Slash-command suggestions contain only commands implemented by Hibiscus, not arbitrary Pi commands.
-
-Pi RPC has no login/logout command. After a method/provider choice in full-screen `/login`, Hibiscus launches a small Node helper using the **installed Pi SDK’s `ModelRuntime.login(provider, type, interaction)`**. Browser choices map to `openai-codex` or `anthropic` with `oauth`; API-key choices come from `getProviders()` entries exposing `auth.apiKey` and use `api_key`. It relays UI events over JSONL; Pi performs OAuth and writes its own credential store. Hibiscus never serializes returned credentials. Manual authorization responses are masked and excluded from chat history. The helper's `done` event is sent only after SDK login and credential synchronization finish; Rust treats that event—not natural Node process exit—as completion. It then terminates and reaps the dedicated helper rather than waiting for its HTTP callback sockets/browser connection to close, which can otherwise leave Node alive after the listener is closed. After successful login, Hibiscus gracefully closes the idle RPC child before opening the same saved session in a fresh child; for an unsaved/empty chat it starts a fresh session. This avoids concurrent session writers and stale in-process auth state.
-
-Full-screen `/logout` uses a separate SDK helper to list stored credential metadata, then accepts an explicit provider selection and removal confirmation. The old RPC child is closed before the helper calls `ModelRuntime.logout`; the session is reopened afterward even if credential mutation cannot be confirmed. Cancellation before authorization leaves both credentials and the running backend alone. No credential values are serialized or edited by Rust, and unavailable SDK/line mode explains the limitation instead of automatically handing off.
-
-Authentication never launches Pi's interactive TUI. Missing Node/SDK, incompatible SDKs, unsupported login methods and failed sign-in use Hibiscus's recoverable local error handler. Failure preserves the existing RPC backend and chat; dependency/provider problems can be corrected before retrying `/login`. Full-screen input is required for `/login` and `/logout`; line and piped modes report that limitation without changing credentials. See [Terminal UI](terminal.md#login).
-
-## Terminal modes
-
-Interactive chat with compatible stdin/stdout uses a full-screen renderer with a fixed composer, transcript, and inline pickers. Pi still provides agent/tool behavior; Hibiscus formats the display only. Small or `TERM=dumb` terminals fall back to line mode. Piped input stays plain and script-friendly. The alternate screen and mouse reporting are disabled on exit.
-
-## Where to make changes
-
-| If you are changing... | Start in... |
+| Module | Responsibility |
 | --- | --- |
-| CLI flags, one-shot prompts, top-level modes | `src/main.rs` |
-| Interactive chat flow or slash-command behavior | `src/chat/mod.rs`, `src/chat/commands.rs` |
-| Model selection | `src/chat/models.rs` |
-| Session discovery, resume, or recent-history display | `src/chat/sessions.rs` |
-| Pi RPC transport, event handling, steering, aborts, settlement | `src/pi/rpc.rs`, `src/pi/run.rs` |
-| Error classification and recovery hints | `src/pi/error.rs`, `docs/error-handling.md` |
-| Tool approval policy or Pi dialog bridging | `src/pi/approval.mjs`, `src/pi/dialog.rs` |
-| Provider login or logout | `src/pi/auth.rs`, `src/pi/logout.rs`, `src/pi/*.mjs` helpers |
-| Full-screen rendering, composer, queues, modals | `src/tui/screen.rs`, `src/tui/modal.rs`, `src/tui/paint.rs` |
-| Tool/activity display | `src/tui/activity.rs` |
-| Markdown/diff formatting | `src/tui/markdown.rs` |
-| Clipboard image paste | `src/tui/clipboard.rs` |
-| Raw terminal lifecycle and input reader | `src/tui/terminal.rs` |
-| Self-update behavior | `src/update.rs`, `install.sh` |
-| Installer/version bump/release process | `install.sh`, `scripts/bump-version.sh`, `.github/workflows/` |
+| `src/main.rs` | CLI modes and startup |
+| `src/runtime/config.rs` | Validate provider/model configuration, private atomic storage |
+| `src/runtime/provider.rs` | HTTPS/SSE adapters for Responses, Chat Completions and Anthropic |
+| `src/runtime/session.rs` | Typed messages, versioned sessions, resume and interrupted-call recovery |
+| `src/runtime/tools.rs` | Native file, shell and checklist tools |
+| `src/runtime/engine.rs` | Model/tool loop, queueing, cancellation and compaction |
+| `src/runtime/policy.rs` | Project/personal instructions, project skill catalog and writing guidance |
+| `src/runtime/event.rs` | Typed lifecycle events encoded for presentation |
+| `src/runtime/bridge.rs` | In-process worker lifecycle and the existing terminal adapter |
+| `src/runtime/transport.rs` | Bounded local event ingress and controlled writes |
+| `src/runtime/auth.rs`, `logout.rs`, `oauth/` | Masked API keys, native Codex browser login, locked token refresh and local logout |
+| `src/extensions/` | Agent creation/inspection/reload tools, shared catalog snapshots, manifest validation and executable protocol |
+| `src/process.rs` | Bounded stdin/stdout/stderr, deadlines and process-group cancellation shared by shell tools and extensions |
+| `src/commands.rs` | Native command catalog shared by routing, completion and extension collision checks |
+| `src/chat/` | Slash-command workflows and workspace session selection |
+| `src/cli/` | Inline rendering, multiline editor, tool rows and CLI styling |
+| `src/tui/` | Fullscreen composer, modal, activity, Markdown, clipboard and painting |
+| `src/ui/` | Shared terminal services, display contracts and frontend handover |
+| `src/update.rs` | Hibiscus update checks and checksum-verified installation |
 
-Read [Development](development.md) before modifying the RPC protocol or terminal lifecycle; both have mock subprocess and PTY regression tests. Add or update targeted tests when changing protocol, recovery, session, approval, or terminal behavior.
+The [presentation module map](development/presentation-architecture.md) explains CLI/TUI ownership, the shared frontend and regression coverage.
 
-Hibiscus stages a separate `model-context.mjs` extension and validated context config alongside approval and writing guidance. On session start it uses Pi’s public model registry API to adjust supported Codex model context budgets, then selects the updated active model. Pi remains responsible for compaction and usage; no local token accounting or standalone Pi config mutation is introduced. See [configuration](installation.md#codex-context-window) for model scope and override precedence.
+A provider response is not executable until its authoritative completion event arrives and tool arguments are complete valid objects. The runtime persists the assistant tool calls, performs each validated tool call, records its outcome, then requests continuation. Cancellation closes the HTTP request or kills the shell group, records cancelled tool results where needed, clears queued input and settles the run. An accepted prompt is not a completed run.
+
+The worker and both terminal views live in the same process. A private Unix socket carries bounded presentation/control records so the existing event-driven terminal behavior can be retained. No Pi or other agent process is started. Provider wire formats are confined to the provider adapter; session/tool data use native Rust enums.
+
+Sessions have one runtime writer. Atomic replacement protects committed snapshots. On resume, any call without a recorded result is marked as interrupted with an unknown outcome; no tool is automatically retried. Compaction archives original history before replacing active context. Credentials are never written into sessions or provider error records.
+
+Native tools execute directly after argument validation and authoritative provider completion. Shell commands do not wait for a confirmation in either interactive or piped mode. Tools are not sandboxed. Project instructions and plain-writing guidance enter the native system prompt.
+
+Historical performance/profiling documents describe earlier Pi-backed versions and are not measurements of this runtime. Current tests and their limits are in [Development](development.md).
+
+The [extension API](extensions.md) registers tools into the same authoritative-completion execution path and provider catalog. Local extension commands use correlated cancellable runtime requests without creating model messages. Malformed manifests are reported without executing code.

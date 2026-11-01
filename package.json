@@ -1,7 +1,7 @@
 {
   "name": "@rekabytes/hibiscus",
-  "version": "0.3.4",
-  "description": "Install the Hibiscus terminal assistant powered by Pi",
+  "version": "0.3.7",
+  "description": "Install the standalone Hibiscus coding agent",
   "license": "MIT",
   "repository": {
     "type": "git",

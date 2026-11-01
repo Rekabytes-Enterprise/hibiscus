@@ -1,5 +1,7 @@
 # Hibiscus documentation
 
+Start with [Native runtime migration](native-runtime.md). Performance/profiling reviews describe earlier Pi-backed builds and do not establish native-runtime measurements.
+
 - [Installation and releases](installation.md) — prebuilt installer, supported platforms, source builds, and publishing.
 - [Architecture](architecture.md) — code layout, Pi RPC boundary, sessions, and lifecycle.
 - [Terminal UI](terminal.md) — shortcuts, scrolling, pickers, progress, and fallbacks.

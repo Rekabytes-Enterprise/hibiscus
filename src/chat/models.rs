@@ -1,8 +1,8 @@
 use crate::{
-    pi::{dialog::Dialogs, rpc::Rpc},
-    tui::{
-        screen::Screen,
+    runtime::{bridge::Client, dialog::Dialogs},
+    ui::{
         terminal::{self, RawMode},
+        Frontend,
     },
     Result,
 };
@@ -11,9 +11,9 @@ use std::io::{BufRead, Write};
 use std::sync::mpsc::Receiver;
 
 pub(crate) fn choose_model<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     interactive: bool,
     events: Option<&Receiver<u8>>,
     raw: &mut Option<RawMode>,
@@ -42,7 +42,7 @@ pub(crate) fn choose_model<R: BufRead>(
     };
     let models = sorted_models(all);
     if models.is_empty() {
-        writeln!(output, "No available models from Pi.")?;
+        writeln!(output, "No available models from runtime.")?;
         return Ok(());
     }
     let active = active_index(&models, &state);
@@ -116,13 +116,13 @@ pub(crate) fn choose_model<R: BufRead>(
     Ok(())
 }
 
-/// Query the active model's supported levels from Pi; never guess reasoning
+/// Query the active model's supported levels from runtime; never guess reasoning
 /// support or maintain a second per-model configuration in Hibiscus.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn choose_thinking<R: BufRead>(
-    rpc: &mut Rpc,
+    rpc: &mut Client,
     input: &mut R,
-    output: &mut Screen,
+    output: &mut Frontend,
     requested: Option<&str>,
     interactive: bool,
     events: Option<&Receiver<u8>>,
@@ -167,11 +167,11 @@ pub(crate) fn choose_thinking<R: BufRead>(
                         && s.len() <= 32
                         && s.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
                 })
-                .ok_or("invalid thinking level from Pi")
+                .ok_or("invalid thinking level from runtime")
         })
         .collect::<std::result::Result<_, _>>()?;
     if levels.is_empty() {
-        return Err("Pi reported no thinking levels".into());
+        return Err("Runtime reported no thinking levels".into());
     }
     let active = state["thinkingLevel"]
         .as_str()
@@ -195,7 +195,7 @@ pub(crate) fn choose_thinking<R: BufRead>(
             .iter()
             .map(|level| (*level).to_owned())
             .collect::<Vec<_>>();
-        output.select("Thinking · Pi model", &labels, active, keys)?
+        output.select("Thinking · Runtime model", &labels, active, keys)?
     } else {
         writeln!(output, "Thinking levels (current marked):")?;
         for (index, level) in levels.iter().enumerate() {
@@ -233,7 +233,9 @@ pub(crate) fn choose_thinking<R: BufRead>(
     };
     let Some(index) = selected else { return Ok(()) };
     if Some(index) == active {
-        writeln!(output, "Already using {} thinking.", levels[index])?;
+        if !output.is_full() {
+            writeln!(output, "Already using {} thinking.", levels[index])?;
+        }
         return Ok(());
     }
     rpc.request(
@@ -256,11 +258,13 @@ pub(crate) fn choose_thinking<R: BufRead>(
     )?;
     let level = confirmed["thinkingLevel"]
         .as_str()
-        .ok_or("Pi did not confirm thinking level")?;
+        .ok_or("Runtime did not confirm thinking level")?;
     if !levels.contains(&level) {
-        return Err("Pi returned an unsupported thinking level".into());
+        return Err("Runtime returned an unsupported thinking level".into());
     }
-    writeln!(output, "Thinking level: {level} (Pi).")?;
+    if !output.is_full() {
+        writeln!(output, "Thinking level: {level}.")?;
+    }
     Ok(())
 }
 
@@ -272,7 +276,7 @@ fn active_index(models: &[&Value], state: &Value) -> Option<usize> {
     })
 }
 
-/// Keep Pi's model catalog authoritative; sorting only changes presentation.
+/// Keep Hibiscus's model catalog authoritative; sorting only changes presentation.
 fn sorted_models(all: &[Value]) -> Vec<&Value> {
     let mut models = all
         .iter()

@@ -1,0 +1,199 @@
+use crate::ui::{
+    display::ScrollDisplay,
+    terminal::{self, RawMode},
+};
+use crate::Result;
+use serde_json::{json, Value};
+use std::io::{BufRead, Write};
+use std::sync::mpsc::Receiver;
+
+pub(crate) struct Dialogs;
+
+impl Dialogs {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn handle<R: BufRead, W: ScrollDisplay>(
+        &mut self,
+        input: &mut impl Write,
+        event: &Value,
+        fallback: &mut R,
+        display: &mut W,
+        raw: &mut Option<RawMode>,
+        events: Option<&Receiver<u8>>,
+        interactive: bool,
+    ) -> Result<()> {
+        if event["type"] == "extension_error" {
+            let error = super::error::ChatError::new(
+                super::error::ErrorSource::Extension,
+                event["error"].as_str().unwrap_or("Extension failed"),
+            );
+            if interactive {
+                writeln!(display, "\n  · Warning: {error}")?;
+            } else {
+                eprintln!("runtime: {error}");
+            }
+            return Ok(());
+        }
+        if event["type"] != "extension_ui_request" {
+            return Ok(());
+        }
+        let method = event["method"].as_str().unwrap_or("");
+        if method == "notify" {
+            writeln!(
+                display,
+                "[runtime: {}]",
+                super::error::safe_message(event["message"].as_str().unwrap_or("notification"))
+            )?;
+            return Ok(());
+        }
+        if !matches!(method, "select" | "confirm" | "input" | "editor") {
+            return Ok(());
+        }
+        // Dialogs need interactive input; piped chat never consumes dialog answers.
+        let modal_response = if interactive {
+            match events {
+                Some(events) => display.extension_dialog(event, events)?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let response = if let Some(response) = modal_response {
+            response
+        } else if interactive {
+            if let (Some(raw), Some(events)) = (raw.as_mut(), events) {
+                response_for(event, |question| {
+                    raw.write(question)?;
+                    terminal::read_line(events, raw)
+                })?
+            } else {
+                response_for(event, |question| {
+                    write!(display, "{question}")?;
+                    display.flush()?;
+                    let mut line = String::new();
+                    if fallback.read_line(&mut line)? == 0 {
+                        Ok(None)
+                    } else {
+                        Ok(Some(line.trim_end_matches(['\r', '\n']).to_owned()))
+                    }
+                })?
+            }
+        } else {
+            writeln!(
+                display,
+                "[runtime dialog cancelled: no interactive terminal]"
+            )?;
+            json!({"cancelled":true})
+        };
+        let mut reply = json!({"type":"extension_ui_response","id":event["id"]});
+        for field in ["cancelled", "confirmed", "value"] {
+            if let Some(value) = response.get(field) {
+                reply[field] = value.clone();
+            }
+        }
+        writeln!(input, "{reply}").map_err(super::error::transport)?;
+        input.flush().map_err(super::error::transport)?;
+        Ok(())
+    }
+}
+
+fn response_for(
+    event: &Value,
+    mut ask: impl FnMut(&str) -> Result<Option<String>>,
+) -> Result<Value> {
+    let title = event["title"].as_str().unwrap_or("Runtime request");
+    match event["method"].as_str().unwrap_or("") {
+        "confirm" => {
+            let message = event["message"].as_str().unwrap_or("");
+            let answer = ask(&format!("\r\n[hibiscus] {title}: {message} [y/N] "))?;
+            Ok(
+                json!({"confirmed":answer.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes"))}),
+            )
+        }
+        "select" => {
+            let Some(options) = event["options"].as_array() else {
+                return Ok(json!({"cancelled":true}));
+            };
+            let mut question = format!("\r\n[hibiscus] {title}\r\n");
+            for (i, option) in options.iter().enumerate() {
+                question.push_str(&format!(
+                    "  {}. {}\r\n",
+                    i + 1,
+                    option.as_str().unwrap_or("?")
+                ));
+            }
+            question.push_str("Choose a number (Enter to cancel): ");
+            let answer = ask(&question)?;
+            let selected = answer
+                .as_deref()
+                .and_then(|s| s.trim().parse::<usize>().ok())
+                .and_then(|n| n.checked_sub(1))
+                .and_then(|n| options.get(n))
+                .and_then(Value::as_str);
+            Ok(match selected {
+                Some(value) => json!({"value":value}),
+                None => json!({"cancelled":true}),
+            })
+        }
+        "input" | "editor" => {
+            let hint = event["placeholder"]
+                .as_str()
+                .or_else(|| event["prefill"].as_str())
+                .unwrap_or("");
+            let answer = ask(&format!("\r\n[hibiscus] {title} {hint}: "))?;
+            Ok(match answer {
+                Some(value) if !value.is_empty() => json!({"value":value}),
+                _ => json!({"cancelled":true}),
+            })
+        }
+        _ => Ok(json!({"cancelled":true})),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirmation_defaults_to_no_and_select_requires_valid_option() {
+        let confirm = json!({"method":"confirm","title":"Run command","message":"rm something"});
+        assert_eq!(
+            response_for(&confirm, |_| Ok(Some("".into()))).unwrap()["confirmed"],
+            false
+        );
+        assert_eq!(
+            response_for(&confirm, |_| Ok(Some("yes".into()))).unwrap()["confirmed"],
+            true
+        );
+        let select = json!({"method":"select","options":["Allow","Block"]});
+        assert_eq!(
+            response_for(&select, |_| Ok(Some("2".into()))).unwrap()["value"],
+            "Block"
+        );
+        assert_eq!(
+            response_for(&select, |_| Ok(Some("3".into()))).unwrap()["cancelled"],
+            true
+        );
+    }
+
+    #[test]
+    fn dialog_responses_are_valid_rpc_and_noninteractive_is_safe() {
+        let event = json!({"type":"extension_ui_request","id":"abc","method":"confirm","title":"Approve","message":"tool"});
+        let mut sent = Vec::new();
+        let mut shown = Vec::new();
+        Dialogs
+            .handle(
+                &mut sent,
+                &event,
+                &mut std::io::Cursor::new(b"yes\n"),
+                &mut shown,
+                &mut None,
+                None,
+                false,
+            )
+            .unwrap();
+        let reply: Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(reply["id"], "abc");
+        assert_eq!(reply["cancelled"], true);
+        assert!(reply.get("confirmed").is_none());
+    }
+}

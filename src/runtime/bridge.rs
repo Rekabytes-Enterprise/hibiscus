@@ -1,0 +1,1814 @@
+use super::{
+    diagnostics::Diagnostics,
+    error::{self, ChatError, ErrorSource},
+    run::{RunOutcome, RunState},
+    transport::{self, Events, Inbox, Limits, PipeWriter, WireWrite},
+};
+use crate::{
+    runtime::dialog::Dialogs,
+    ui::{
+        display::{ActiveAction, DraftSubmission, QueueMode, ScrollDisplay, SharedImage},
+        input::{escape_key, Navigation},
+        messages::Ui,
+        terminal::RawMode,
+        tool,
+    },
+    Result,
+};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::io::{self, BufRead, Write};
+use std::os::{fd::AsRawFd, unix::net::UnixStream};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
+use std::time::Instant;
+
+#[derive(Clone)]
+pub(crate) enum SessionStart {
+    New,
+    Latest,
+    Selected(PathBuf),
+}
+
+pub(crate) struct Client {
+    worker: Option<JoinHandle<()>>,
+    control: UnixStream,
+    input: Option<PipeWriter<UnixStream>>,
+    output: Inbox,
+    next_id: u64,
+    resume: SessionStart,
+    disconnected: bool,
+    stats_supported: bool,
+}
+
+impl Client {
+    pub(crate) fn start(start: SessionStart) -> Result<Self> {
+        Self::start_with_diagnostics(start, None)
+    }
+
+    pub(crate) fn start_with_diagnostics(
+        start: SessionStart,
+        diagnostic_feed: Option<Diagnostics>,
+    ) -> Result<Self> {
+        let config = super::config::load()?;
+        let session = super::session::Session::open(&start, &config)?;
+        let (client, worker_socket) = UnixStream::pair()?;
+        let control = client.try_clone()?;
+        let output = Inbox::start(SocketReader(client.try_clone()?), Limits::from_env()?);
+        let input = output.writer(client)?;
+        let worker = thread::spawn(move || {
+            if let Err(error) = super::engine::serve(worker_socket, config, session) {
+                if let Some(feed) = diagnostic_feed {
+                    feed.record(error.to_string().as_bytes(), false);
+                }
+            }
+        });
+        Ok(Self {
+            worker: Some(worker),
+            control,
+            input: Some(input),
+            output,
+            next_id: 0,
+            resume: start,
+            disconnected: false,
+            stats_supported: true,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn command<R: BufRead, W: ScrollDisplay>(
+        &mut self,
+        command: Value,
+        images: &[SharedImage],
+        display: &mut W,
+        fallback: &mut R,
+        dialogs: &mut Dialogs,
+        events: Option<&Receiver<u8>>,
+        raw: &mut Option<RawMode>,
+        interactive: bool,
+    ) -> Result<bool> {
+        self.next_id += 1;
+        let id = format!("hibiscus-{}", self.next_id);
+        let mut command = command;
+        command["id"] = json!(id);
+        let kind = command["type"]
+            .as_str()
+            .ok_or("RPC command missing type")?
+            .to_owned();
+        let input = self
+            .input
+            .as_mut()
+            .ok_or_else(|| error::transport("stdin unavailable"))?;
+        if kind == "prompt" {
+            display.expect_initial_user(command["message"].as_str().unwrap_or(""));
+        }
+        if kind == "prompt" {
+            display.start_work()?;
+            display.set_work("Sending prompt…")?;
+        }
+        if kind == "extension_command" {
+            display.start_command(&format!(
+                "Running {}",
+                safe_detail(command["name"].as_str().unwrap_or("extension"))
+            ))?;
+        }
+        let sending = write_command(
+            &mut input.checked(|| {
+                service_sending(
+                    display,
+                    events,
+                    matches!(kind.as_str(), "prompt" | "extension_command"),
+                )
+            }),
+            &command,
+            images,
+        );
+        let mut result = sending.and_then(|()| {
+            if kind == "prompt" {
+                display.set_work("Working…")?;
+            }
+            exchange(
+                input,
+                &self.output,
+                display,
+                fallback,
+                dialogs,
+                events,
+                &id,
+                &kind,
+                raw,
+                interactive,
+            )
+        });
+        if let Err(error) = &mut result {
+            if let Some(error) = error.downcast_mut::<ChatError>() {
+                error.command_id = Some(id);
+            }
+        }
+        if matches!(kind.as_str(), "prompt" | "extension_command") {
+            display.stop_work()?;
+            if kind == "prompt" && result.as_ref().is_ok_and(|stopped| !stopped) {
+                display.complete_diagrams()?;
+            }
+        }
+        if kind == "new_session" && result.is_ok() {
+            self.resume = SessionStart::New;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prompt<R: BufRead, W: ScrollDisplay>(
+        &mut self,
+        message: &str,
+        display: &mut W,
+        fallback: &mut R,
+        dialogs: &mut Dialogs,
+        events: Option<&Receiver<u8>>,
+        raw: &mut Option<RawMode>,
+        interactive: bool,
+    ) -> Result<()> {
+        self.command(
+            json!({"type": "prompt", "message": message}),
+            &[],
+            display,
+            fallback,
+            dialogs,
+            events,
+            raw,
+            interactive,
+        )
+        .map(|_| ())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn request<R: BufRead, W: ScrollDisplay>(
+        &mut self,
+        mut command: Value,
+        fallback: &mut R,
+        display: &mut W,
+        dialogs: &mut Dialogs,
+        raw: &mut Option<RawMode>,
+        events: Option<&Receiver<u8>>,
+        interactive: bool,
+    ) -> Result<Value> {
+        self.next_id += 1;
+        let id = format!("hibiscus-{}", self.next_id);
+        command["id"] = json!(id);
+        let kind = command["type"]
+            .as_str()
+            .ok_or("RPC command missing type")?
+            .to_owned();
+        let writer = self
+            .input
+            .as_mut()
+            .ok_or_else(|| error::transport("stdin unavailable"))?;
+        writeln!(writer, "{command}").map_err(error::transport)?;
+        writer.flush().map_err(error::transport)?;
+        let mut deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let mut record = receive_record(&self.output, deadline, display)?
+                .ok_or_else(|| error::transport("stream ended before the command completed"))?;
+            check_record(&record)?;
+            if record["type"] == "response" && record["id"] == id {
+                if record["success"] != true {
+                    return Err(rejected(&record, &kind, &id).into());
+                }
+                if kind == "get_state" {
+                    if !record["data"].is_object() {
+                        return Err(error::protocol("Invalid get_state response").into());
+                    }
+                    self.resume = record["data"]["sessionFile"]
+                        .as_str()
+                        .map(|path| SessionStart::Selected(path.into()))
+                        .unwrap_or(SessionStart::New);
+                }
+                if kind == "switch_session" && record["data"]["cancelled"] != true {
+                    self.resume = command["sessionPath"]
+                        .as_str()
+                        .map(|path| SessionStart::Selected(path.into()))
+                        .unwrap_or(SessionStart::New);
+                }
+                return Ok(record.get_mut("data").map_or(Value::Null, Value::take));
+            }
+            dialogs.handle(
+                self.input.as_mut().ok_or("pi stdin unavailable")?,
+                &record,
+                fallback,
+                display,
+                raw,
+                events,
+                interactive,
+            )?;
+            if record["type"] == "extension_ui_request" {
+                // Time spent answering a human dialog is not a stalled RPC.
+                deadline = Instant::now() + std::time::Duration::from_secs(30);
+            }
+        }
+    }
+
+    /// Runtime owns summarization and persistence. Unlike metadata requests, a
+    /// manual compact waits for a model call's matching response, not a 30s
+    /// command deadline or an agent_settled notification.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compact<R: BufRead, W: ScrollDisplay>(
+        &mut self,
+        instructions: Option<&str>,
+        display: &mut W,
+        fallback: &mut R,
+        dialogs: &mut Dialogs,
+        events: Option<&Receiver<u8>>,
+        raw: &mut Option<RawMode>,
+        interactive: bool,
+    ) -> Result<Value> {
+        self.next_id += 1;
+        let id = format!("hibiscus-{}", self.next_id);
+        let mut command = json!({"id":id,"type":"compact"});
+        if let Some(instructions) = instructions {
+            command["customInstructions"] = json!(instructions);
+        }
+        let writer = self
+            .input
+            .as_mut()
+            .ok_or_else(|| error::transport("stdin unavailable"))?;
+        write_command(writer, &command, &[])?;
+        display.compaction_mode(true)?;
+        display.start_work()?;
+        display.set_work("Compacting context…")?;
+        let result = (|| {
+            let mut idle_deadline = Instant::now() + std::time::Duration::from_secs(600);
+            let mut cancelled_at = None::<Instant>;
+            let mut abort_id = None::<String>;
+            let mut abort_done = false;
+            let mut compact_reply = None::<Value>;
+            loop {
+                display.tick_work()?;
+                if display.live_input() && abort_id.is_none() {
+                    if let Some(keys) = events {
+                        // Bound input work so Hibiscus's response cannot be starved by a paste.
+                        for _ in 0..32 {
+                            let Some(byte) = display.pending_key().or_else(|| keys.try_recv().ok())
+                            else {
+                                break;
+                            };
+                            match display.active_key(byte, keys)? {
+                                ActiveAction::None => {}
+                                ActiveAction::Submit(submission) => {
+                                    display.hold_queue(submission)?
+                                }
+                                ActiveAction::Stop => {
+                                    let abort = format!("{id}-abort");
+                                    writeln!(writer, "{}", json!({"id":abort,"type":"abort"}))
+                                        .map_err(error::transport)?;
+                                    writer.flush().map_err(error::transport)?;
+                                    abort_id = Some(abort);
+                                    cancelled_at = Some(Instant::now());
+                                    display.set_work("Cancelling compaction…")?;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if cancelled_at
+                    .is_some_and(|start| start.elapsed() >= std::time::Duration::from_secs(10))
+                {
+                    return Err(error::transport("Compaction cancellation did not finish in 10 seconds; outcome is uncertain").into());
+                }
+                if Instant::now() >= idle_deadline {
+                    return Err(error::transport(
+                        "Runtime compaction produced no response for 10 minutes; outcome is uncertain",
+                    )
+                    .into());
+                }
+                let generation = transport::activity_generation();
+                let event = match self.output.recv_timeout(std::time::Duration::ZERO) {
+                    Ok(event) => event?,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        transport::wait_activity(generation, std::time::Duration::from_millis(40));
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(
+                            error::transport("Runtime ended before compaction completed").into(),
+                        )
+                    }
+                };
+                check_record(&event)?;
+                idle_deadline = Instant::now() + std::time::Duration::from_secs(600);
+                if event["type"] == "response" {
+                    if abort_id.as_deref() == event["id"].as_str() {
+                        if event["success"] != true {
+                            return Err(error::protocol(
+                                "Runtime rejected compaction cancellation; state is uncertain",
+                            )
+                            .into());
+                        }
+                        abort_done = true;
+                    } else if event["id"] == id {
+                        compact_reply = Some(event.clone());
+                    }
+                }
+                if let Some(reply) = compact_reply
+                    .as_ref()
+                    .filter(|_| abort_id.is_none() || abort_done)
+                {
+                    if reply["success"] != true {
+                        if cancelled_at.is_some() {
+                            return Err(ChatError::cancelled("compact").into());
+                        }
+                        return Err(rejected(reply, "compact", &id).into());
+                    }
+                    let data = reply
+                        .get("data")
+                        .filter(|data| data.is_object())
+                        .ok_or_else(|| {
+                            error::protocol("Runtime compact response is missing summary data")
+                        })?;
+                    return Ok(data.clone());
+                }
+                match event["type"].as_str() {
+                    Some("compaction_start") => display.set_work("Compacting context…")?,
+                    Some("compaction_end") if event["aborted"] == true => {
+                        display.set_work("Compaction cancelled…")?
+                    }
+                    Some("extension_ui_request" | "extension_error") => {
+                        dialogs.handle(
+                            writer,
+                            &event,
+                            fallback,
+                            display,
+                            raw,
+                            events,
+                            interactive,
+                        )?;
+                        if event["type"] == "extension_ui_request" {
+                            idle_deadline = Instant::now() + std::time::Duration::from_secs(600);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })();
+        display.stop_work()?;
+        display.compaction_mode(false)?;
+        result
+    }
+
+    /// Older Runtime builds can reject this optional UI metadata command. Keep
+    /// chatting without inventing numbers, but do not hide transport errors.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn session_stats<R: BufRead, W: ScrollDisplay>(
+        &mut self,
+        fallback: &mut R,
+        display: &mut W,
+        dialogs: &mut Dialogs,
+        raw: &mut Option<RawMode>,
+        events: Option<&Receiver<u8>>,
+        interactive: bool,
+    ) -> Result<Option<Value>> {
+        if !self.stats_supported {
+            return Ok(None);
+        }
+        match self.request(
+            json!({"type":"get_session_stats"}),
+            fallback,
+            display,
+            dialogs,
+            raw,
+            events,
+            interactive,
+        ) {
+            Ok(stats) => Ok(Some(stats)),
+            Err(error)
+                if error.downcast_ref::<ChatError>().is_some_and(|error| {
+                    error.source == ErrorSource::Command
+                        && error.message.contains("Unknown command: get_session_stats")
+                }) =>
+            {
+                self.stats_supported = false;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn is_connected(&self) -> bool {
+        !self.disconnected && self.input.is_some()
+    }
+
+    pub(crate) fn has_saved_session(&self) -> bool {
+        matches!(self.resume, SessionStart::Selected(_))
+    }
+
+    /// Stop an untrusted connection before opening another session writer.
+    pub(crate) fn disconnect(&mut self) {
+        self.input.take();
+        let _ = self.control.shutdown(std::net::Shutdown::Both);
+        self.disconnected = true;
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+
+    pub(crate) fn recover_connection(&mut self) -> Result<()> {
+        let start = self.resume.clone();
+        self.disconnect();
+        *self = Self::start_with_diagnostics(start, None)?;
+        Ok(())
+    }
+
+    pub(crate) fn close(&mut self) -> Result<()> {
+        self.disconnect();
+        Ok(())
+    }
+
+    pub(crate) fn reopen(&mut self, start: SessionStart) -> Result<()> {
+        if self.input.is_some() {
+            return Err("pi RPC child must be closed before reopening".into());
+        }
+        *self = Self::start_with_diagnostics(start, None)?;
+        Ok(())
+    }
+
+    /// Reopen a saved session after an external credential change.
+    pub(crate) fn reconnect(&mut self, start: SessionStart) -> Result<()> {
+        self.close()?;
+        self.reopen(start)
+    }
+
+    pub(crate) fn finish(mut self, outcome: Result<()>) -> Result<()> {
+        self.disconnect();
+        outcome
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        if self.input.is_some() {
+            self.disconnect();
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Hibiscus runtime and terminal streams must remain independent.
+fn exchange<F: BufRead, W: ScrollDisplay>(
+    input: &mut impl WireWrite,
+    output: &impl Events,
+    display: &mut W,
+    fallback: &mut F,
+    dialogs: &mut Dialogs,
+    events: Option<&Receiver<u8>>,
+    id: &str,
+    kind: &str,
+    raw: &mut Option<RawMode>,
+    interactive: bool,
+) -> Result<bool> {
+    let ui = Ui::new(interactive);
+    let mut active_tools = HashMap::<String, (String, tool::Call)>::new();
+    let mut reasoning_since = None;
+    let mut accepted = false;
+    let mut settled = false;
+    let mut printed_text = false;
+    let mut pending_newline = false;
+    let mut run = RunState::default();
+    let mut interrupted = false;
+    let mut abort_id = None;
+    let mut abort_done = false;
+    let mut clear_id = None;
+    let mut clear_done = false;
+    let mut rejection = None;
+    let mut cancellation_started = None;
+    let mut pending_queued = HashMap::<String, DraftSubmission>::new();
+    let mut local_done = false;
+    let mut next_queue_id = 0;
+    let mut queued_count = 0;
+    loop {
+        // Capture before polling both sources so a notification arriving
+        // between the polls and sleep cannot be lost.
+        let generation = transport::activity_generation();
+        if matches!(kind, "prompt" | "extension_command") {
+            display.tick_work()?;
+        }
+        // Poll terminal input before consuming queued Runtime events too; a busy
+        // tool can otherwise keep stdout nonempty and starve Esc indefinitely.
+        maybe_interrupt(
+            input,
+            display,
+            events,
+            kind,
+            id,
+            accepted,
+            settled && pending_queued.is_empty() && queued_count == 0,
+            &mut interrupted,
+            &mut clear_id,
+            &mut abort_id,
+            &mut pending_queued,
+            &mut next_queue_id,
+            queued_count,
+        )?;
+        if interrupted
+            && cancellation_started
+                .get_or_insert_with(Instant::now)
+                .elapsed()
+                > std::time::Duration::from_secs(10)
+        {
+            return Err(error::transport(
+                "Cancellation did not settle within 10 seconds; outcome is uncertain",
+            )
+            .into());
+        }
+        let event = match output.recv_timeout(std::time::Duration::ZERO) {
+            Ok(Ok(event)) => event,
+            Ok(Err(error)) => {
+                preserve_uncertain_queue(display, &mut pending_queued)?;
+                return Err(error);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Timed fallback still drives flower/Explore, elapsed status,
+                // pending text frames and cancellation deadlines.
+                transport::wait_activity(generation, std::time::Duration::from_millis(40));
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                preserve_uncertain_queue(display, &mut pending_queued)?;
+                return Err(error::transport("stream ended before the command completed").into());
+            }
+        };
+        if let Err(error) = check_record(&event) {
+            preserve_uncertain_queue(display, &mut pending_queued)?;
+            return Err(error);
+        }
+        run.observe(&event);
+        if kind == "prompt" && event["type"] == "response" {
+            if let Some(queued) = event["id"]
+                .as_str()
+                .and_then(|id| pending_queued.remove(id))
+            {
+                if event["success"] == true && interrupted {
+                    display.rejected_queue(queued, "Runtime is stopping; queue delivery is uncertain. Check history before resending")?;
+                } else if event["success"] == true {
+                    display.queued(&queued)?;
+                    // Acceptance is not a new agent run. A delayed ack can
+                    // arrive after Hibiscus's final agent_settled; only agent_start
+                    // invalidates that authoritative settlement.
+                } else {
+                    display.rejected_queue(
+                        queued,
+                        event["error"].as_str().unwrap_or("unknown error"),
+                    )?;
+                }
+                display.flush()?;
+                // A late queue ack can be the last record after Hibiscus's final
+                // settlement and queue drain. This branch skips the common
+                // completion check below, so finish here when all conditions
+                // are already satisfied; never wait for an invented event.
+                if accepted
+                    && settled
+                    && pending_queued.is_empty()
+                    && queued_count == 0
+                    && (!interrupted || (abort_done && clear_done))
+                {
+                    return finish_turn(
+                        &ui,
+                        display,
+                        printed_text || pending_newline,
+                        run.finish(interrupted),
+                        interrupted,
+                    );
+                }
+                continue;
+            }
+        }
+        if event["type"] == "response" {
+            if (clear_id.as_deref() == event["id"].as_str()
+                || abort_id.as_deref() == event["id"].as_str())
+                && event["id"].is_string()
+                && event["success"] != true
+            {
+                return Err(error::protocol(
+                    "Runtime rejected cancellation; run state is uncertain",
+                )
+                .into());
+            }
+            if clear_id.as_deref() == event["id"].as_str() {
+                clear_done = true;
+                display.clear_queue_display()?;
+                queued_count = 0;
+            }
+            if abort_id.as_deref() == event["id"].as_str() {
+                abort_done = true;
+            }
+        }
+        match event["type"].as_str() {
+            Some("extension_command_output") if kind == "extension_command" => {
+                display.end_turn()?;
+                writeln!(display, "{}", event["text"].as_str().unwrap_or(""))?;
+                display.flush()?;
+            }
+            Some("agent_start") if kind == "prompt" => settled = false,
+            Some("response") if event["id"] == id => {
+                if event["success"] != true {
+                    let error = rejected(&event, kind, id);
+                    if !interrupted || (clear_done && abort_done) {
+                        return Err(error.into());
+                    }
+                    // Esc may already have sent clear_queue/abort. Drain their
+                    // acknowledgements before another prompt can be submitted.
+                    rejection = Some(error);
+                    continue;
+                }
+                accepted = true;
+                if kind == "extension_command" && interrupted && !(clear_done && abort_done) {
+                    local_done = true;
+                    continue;
+                }
+                if kind != "prompt" {
+                    if event["data"]["cancelled"] == true {
+                        return Err(ChatError::cancelled(kind).into());
+                    }
+                    return Ok(interrupted);
+                }
+                if settled
+                    && pending_queued.is_empty()
+                    && queued_count == 0
+                    && (!interrupted || (abort_done && clear_done))
+                {
+                    return finish_turn(
+                        &ui,
+                        display,
+                        printed_text || pending_newline,
+                        run.finish(interrupted),
+                        interrupted,
+                    );
+                }
+            }
+            Some("message_start") if kind == "prompt" && event["message"]["role"] == "user" => {
+                if display.delivered_user(&event["message"])? {
+                    printed_text = false;
+                    pending_newline = false;
+                    display.flush()?;
+                }
+            }
+            Some("queue_update") if kind == "prompt" => {
+                queued_count = event["steering"].as_array().map_or(0, Vec::len)
+                    + event["followUp"].as_array().map_or(0, Vec::len);
+                display.queue_update(&event)?;
+            }
+            Some("message_update") if kind == "prompt" => {
+                let update = &event["assistantMessageEvent"];
+                match update["type"].as_str() {
+                    Some("thinking_start" | "thinking_delta") => {
+                        if reasoning_since.is_none() {
+                            reasoning_since = Some(Instant::now());
+                            if interactive {
+                                display.thinking_start()?;
+                            }
+                        }
+                        display.set_work("Thinking…")?;
+                    }
+                    Some("thinking_end") => {
+                        show_reasoning(&ui, display, &mut reasoning_since)?;
+                        display.set_work("Preparing response…")?;
+                    }
+                    Some("toolcall_start") => {
+                        let name = update["toolName"].as_str().unwrap_or("tool");
+                        display.set_work(&format!("Preparing {}…", safe_detail(name)))?;
+                    }
+                    Some("text_delta") => {
+                        display.set_work("Writing reply…")?;
+                        if let Some(delta) = update["delta"].as_str() {
+                            if !printed_text && reasoning_since.is_some() {
+                                show_reasoning(&ui, display, &mut reasoning_since)?;
+                            }
+                            if pending_newline {
+                                writeln!(display)?;
+                                pending_newline = false;
+                            }
+                            if !printed_text && !pending_newline {
+                                display.split_timeline()?;
+                                if !display.assistant_start()? {
+                                    ui.assistant(display)?;
+                                }
+                            }
+                            display.assistant_text(delta)?;
+                            display.flush()?;
+                            printed_text = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Some("message_end") if kind == "prompt" && event["message"]["role"] == "assistant" => {
+                show_reasoning(&ui, display, &mut reasoning_since)?;
+                let message = &event["message"];
+                // RunState retains the latest attempt error until settlement;
+                // intermediate failures must not be printed as final outcomes.
+                // Some providers emit no text deltas; use the completed message instead.
+                if !printed_text {
+                    if let Some(blocks) = message["content"].as_array() {
+                        for block in blocks {
+                            if block["type"] == "text" {
+                                if let Some(text) = block["text"].as_str() {
+                                    if pending_newline {
+                                        writeln!(display)?;
+                                        pending_newline = false;
+                                    }
+                                    if !printed_text && !pending_newline {
+                                        display.split_timeline()?;
+                                        if !display.assistant_start()? {
+                                            ui.assistant(display)?;
+                                        }
+                                    }
+                                    display.assistant_text(text)?;
+                                    printed_text = true;
+                                }
+                            }
+                        }
+                        display.flush()?;
+                    }
+                }
+                display.end_assistant_text()?;
+                if printed_text {
+                    pending_newline = true;
+                    printed_text = false;
+                }
+            }
+            Some("tool_execution_start") if kind == "prompt" => {
+                show_reasoning(&ui, display, &mut reasoning_since)?;
+                let name = event["toolName"].as_str().unwrap_or("unknown");
+                let label = tool_label(name, &event["args"]);
+                let call = tool_call(name, &event["args"]);
+                if let Some(call_id) = event["toolCallId"].as_str() {
+                    active_tools.insert(call_id.to_owned(), (label.clone(), call.clone()));
+                }
+                display.set_work(&format!("Running {label}…"))?;
+                if interactive {
+                    if printed_text || pending_newline {
+                        writeln!(display)?;
+                        pending_newline = false;
+                    }
+                    if name != "goal"
+                        && !display.tool_start(event["toolCallId"].as_str().unwrap_or(""), &call)?
+                    {
+                        ui.info(display, &format!("↳ {label} …"))?;
+                    }
+                    display.flush()?;
+                } else {
+                    eprintln!("[tool: {name}]");
+                }
+            }
+            Some("tool_execution_end") if kind == "prompt" => {
+                let name = event["toolName"].as_str().unwrap_or("tool");
+                let (label, call) = event["toolCallId"]
+                    .as_str()
+                    .and_then(|id| active_tools.remove(id))
+                    .unwrap_or_else(|| (safe_detail(name), tool_call(name, &Value::Null)));
+                display.set_work("Working…")?;
+                if name == "goal" && event["isError"] != true {
+                    display.goal(&event["result"]["details"])?;
+                }
+                if interactive && name != "goal" {
+                    let outcome = if event["isError"] == true {
+                        "✗ failed"
+                    } else {
+                        "✓ done"
+                    };
+                    let diff = (matches!(name, "edit" | "checkpoint_diff")
+                        && event["isError"] != true)
+                        .then(|| event["result"]["details"]["diff"].as_str())
+                        .flatten();
+                    let output = event["result"]["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|block| block["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let result = tool::Outcome {
+                        failed: event["isError"] == true,
+                        diff,
+                        output: &output,
+                        exit_code: event["result"]["details"]["exitCode"].as_i64(),
+                        changes: event["result"]["details"]["addedLines"]
+                            .as_u64()
+                            .zip(event["result"]["details"]["removedLines"].as_u64()),
+                        elapsed: event["durationMs"]
+                            .as_u64()
+                            .map(std::time::Duration::from_millis),
+                    };
+                    if !display.tool_end(
+                        event["toolCallId"].as_str().unwrap_or(""),
+                        &call,
+                        &result,
+                    )? {
+                        ui.info(display, &format!("{outcome} · {label}"))?;
+                        if diff.is_some() {
+                            show_tool_diff(&ui, display, &label, &event["result"])?;
+                        }
+                    }
+                    display.flush()?;
+                }
+            }
+            Some("compaction_start") if kind == "prompt" => {
+                display.set_work("Compacting context…")?
+            }
+            Some("compaction_end") if event["reason"] != "overflow" => {
+                if let Some(message) = event["errorMessage"].as_str() {
+                    let error = ChatError::new(ErrorSource::Compaction, message);
+                    if interactive {
+                        writeln!(display)?;
+                        ui.info(display, &format!("Warning: {error}"))?;
+                    } else {
+                        eprintln!("runtime: {error}");
+                    }
+                } else if event["aborted"] == true && interactive && !interrupted {
+                    ui.info(
+                        display,
+                        "Context compaction cancelled; chat remains available.",
+                    )?;
+                }
+            }
+            Some("auto_retry_start" | "summarization_retry_scheduled") if kind == "prompt" => {
+                let attempt = event["attempt"].as_u64().unwrap_or(0);
+                let max = event["maxAttempts"].as_u64().unwrap_or(0);
+                let delay = event["delayMs"].as_u64().unwrap_or(0) / 1000;
+                display.set_work(&format!("Runtime retry {attempt}/{max} in {delay}s…"))?;
+            }
+            Some("summarization_retry_attempt_start") if kind == "prompt" => {
+                display.set_work("Retrying context summary…")?;
+            }
+            Some("extension_ui_request" | "extension_error") => {
+                // Full-screen dialogs render through the shared cached modal
+                // component; only line mode uses direct terminal prompts.
+                dialogs.handle(input, &event, fallback, display, raw, events, interactive)?;
+                display.flush()?;
+            }
+            Some("queue_rejected") if kind == "prompt" => {
+                let images = event["images"]
+                    .as_array()
+                    .map(|images| images.iter().cloned().map(std::sync::Arc::new).collect())
+                    .unwrap_or_default();
+                display.clear_queue_display()?;
+                display.rejected_queue(
+                    DraftSubmission {
+                        text: event["message"].as_str().unwrap_or("").into(),
+                        images,
+                        mode: if event["steer"] == true {
+                            QueueMode::Steer
+                        } else {
+                            QueueMode::FollowUp
+                        },
+                    },
+                    event["error"]
+                        .as_str()
+                        .unwrap_or("Queued message was not delivered"),
+                )?;
+            }
+            Some("agent_settled") if kind == "prompt" => {
+                show_reasoning(&ui, display, &mut reasoning_since)?;
+                settled = true;
+                if accepted
+                    && pending_queued.is_empty()
+                    && queued_count == 0
+                    && (!interrupted || (abort_done && clear_done))
+                {
+                    return finish_turn(
+                        &ui,
+                        display,
+                        printed_text || pending_newline,
+                        run.finish(interrupted),
+                        interrupted,
+                    );
+                }
+            }
+            _ => {}
+        }
+        if kind == "extension_command" && local_done && clear_done && abort_done {
+            return Ok(true);
+        }
+        if abort_done && clear_done {
+            if let Some(error) = rejection.take() {
+                return Err(error.into());
+            }
+        }
+        // Runtime may emit the final queue_update after agent_settled. Only leave
+        // once both the final settlement and all correlated queue responses
+        // (and queue counts) agree there is no more work.
+        if kind == "prompt"
+            && accepted
+            && settled
+            && pending_queued.is_empty()
+            && queued_count == 0
+            && (!interrupted || (abort_done && clear_done))
+        {
+            return finish_turn(
+                &ui,
+                display,
+                printed_text || pending_newline,
+                run.finish(interrupted),
+                interrupted,
+            );
+        }
+    }
+}
+
+fn preserve_uncertain_queue(
+    display: &mut impl ScrollDisplay,
+    pending: &mut HashMap<String, DraftSubmission>,
+) -> io::Result<()> {
+    // Recovery has one explicit /restore slot. Keep the newest unacknowledged
+    // submission, without replaying it or overwriting newer live typing.
+    let latest = pending
+        .keys()
+        .max_by_key(|id| {
+            id.rsplit('-')
+                .next()
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0)
+        })
+        .cloned();
+    if let Some(submission) = latest.and_then(|id| pending.remove(&id)) {
+        display.rejected_queue(
+            submission,
+            "Delivery uncertain: RPC connection failed; check history before resending",
+        )?;
+    }
+    Ok(())
+}
+
+fn show_reasoning<W: ScrollDisplay>(
+    ui: &Ui,
+    display: &mut W,
+    since: &mut Option<Instant>,
+) -> Result<()> {
+    if let Some(start) = since.take() {
+        if ui.interactive {
+            let seconds = start.elapsed().as_secs();
+            let duration = if seconds == 0 {
+                "<1s".into()
+            } else {
+                format!("{seconds}s")
+            };
+            if !display.thinking_end()? {
+                ui.info(display, &format!("reasoning · {duration}"))?;
+            }
+            display.flush()?;
+        }
+    }
+    Ok(())
+}
+
+/// Show native post-edit or checkpoint inspection data supplied by the runtime.
+/// Never synthesize a preview from requested edits or display one on failure.
+fn show_tool_diff<W: ScrollDisplay>(
+    ui: &Ui,
+    display: &mut W,
+    label: &str,
+    result: &Value,
+) -> Result<()> {
+    let Some(diff) = result["details"]["diff"]
+        .as_str()
+        .filter(|diff| !diff.is_empty())
+    else {
+        return Ok(());
+    };
+    let path = label.strip_prefix("edit · ").unwrap_or(label);
+    ui.info(display, &format!("diff · {path}"))?;
+    const MAX_LINES: usize = 40;
+    let mut remaining = 0;
+    for (index, line) in diff.lines().enumerate() {
+        if index < MAX_LINES {
+            display.diff_line(&safe_diff_line(line))?;
+        } else {
+            remaining += 1;
+        }
+    }
+    if remaining > 0 {
+        ui.info(display, &format!("… {remaining} more diff lines"))?;
+    }
+    Ok(())
+}
+
+fn safe_diff_line(line: &str) -> String {
+    line.chars()
+        .filter(|ch| !ch.is_control())
+        .take(180)
+        .collect()
+}
+
+fn safe_detail(text: &str) -> String {
+    text.chars()
+        .filter(|ch| !ch.is_control())
+        .take(70)
+        .collect()
+}
+
+fn tool_label(name: &str, args: &Value) -> String {
+    let name = safe_detail(name);
+    if matches!(name.as_str(), "read" | "write" | "edit") {
+        if let Some(path) = args["path"].as_str().or_else(|| args["filePath"].as_str()) {
+            return format!("{name} · {}", safe_detail(path));
+        }
+    }
+    name
+}
+
+fn tool_call(name: &str, args: &Value) -> tool::Call {
+    let target = match name {
+        "bash" => args["command"].as_str(),
+        "read" | "edit" | "write" => args["path"].as_str().or_else(|| args["filePath"].as_str()),
+        _ => None,
+    }
+    .unwrap_or("");
+    tool::Call {
+        name: safe_detail(name),
+        target: if name == "bash" {
+            target.to_owned()
+        } else {
+            target
+                .chars()
+                .map(|c| {
+                    if matches!(c, '\n' | '\r' | '\t') {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .filter(|c| !c.is_control())
+                .take(400)
+                .collect()
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn maybe_interrupt(
+    input: &mut impl WireWrite,
+    display: &mut impl ScrollDisplay,
+    events: Option<&Receiver<u8>>,
+    kind: &str,
+    id: &str,
+    accepted: bool,
+    settled: bool,
+    interrupted: &mut bool,
+    clear_id: &mut Option<String>,
+    abort_id: &mut Option<String>,
+    pending_queued: &mut HashMap<String, DraftSubmission>,
+    next_queue_id: &mut u64,
+    queued_count: usize,
+) -> Result<()> {
+    let stop = if kind == "extension_command" && !*interrupted {
+        match events {
+            Some(rx) if display.live_input() => {
+                let mut stop = false;
+                for _ in 0..8 {
+                    let Some(byte) = display.pending_key().or_else(|| rx.try_recv().ok()) else {
+                        break;
+                    };
+                    match display.active_key(byte, rx)? {
+                        ActiveAction::Stop => {
+                            stop = true;
+                            break;
+                        }
+                        ActiveAction::Submit(draft) => display.hold_queue(draft)?,
+                        ActiveAction::None => {}
+                    }
+                }
+                stop
+            }
+            Some(rx) => active_keys(rx, display)?,
+            None => false,
+        }
+    } else if kind == "prompt" && !settled && !*interrupted {
+        match events {
+            Some(rx) if display.live_input() => poll_live_input(
+                input,
+                display,
+                rx,
+                id,
+                accepted,
+                queued_count,
+                pending_queued,
+                next_queue_id,
+            )?,
+            Some(rx) => active_keys(rx, display)?,
+            None => false,
+        }
+    } else {
+        false
+    };
+    if stop {
+        *interrupted = true;
+        *clear_id = Some(format!("{id}-clear"));
+        *abort_id = Some(format!("{id}-abort"));
+        writeln!(input, "{}", json!({"id":clear_id,"type":"clear_queue"}))
+            .map_err(error::transport)?;
+        writeln!(input, "{}", json!({"id":abort_id,"type":"abort"})).map_err(error::transport)?;
+        input.flush().map_err(error::transport)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // Runtime stdin, terminal events and correlated queue state are independent.
+fn poll_live_input(
+    input: &mut impl WireWrite,
+    display: &mut impl ScrollDisplay,
+    events: &Receiver<u8>,
+    id: &str,
+    accepted: bool,
+    queued_count: usize,
+    pending: &mut HashMap<String, DraftSubmission>,
+    sequence: &mut u64,
+) -> Result<bool> {
+    // Bound input work so a fast paste cannot starve Runtime stdout or the spinner.
+    // Each printable action may consume up to 128 already queued bytes.
+    for _ in 0..8 {
+        let byte = match display.pending_key().or_else(|| events.try_recv().ok()) {
+            Some(byte) => byte,
+            None => break,
+        };
+        match display.active_key(byte, events)? {
+            ActiveAction::Stop => return Ok(true),
+            ActiveAction::None => {}
+            ActiveAction::Submit(submission) => {
+                if !accepted {
+                    display.hold_queue(submission)?;
+                    continue;
+                }
+                if pending.len() + queued_count >= 16 {
+                    display.rejected_queue(submission, "Too many pending queue requests")?;
+                    continue;
+                }
+                *sequence += 1;
+                let queue_id = format!("{id}-queued-{sequence}");
+                let behavior = match submission.mode {
+                    QueueMode::Steer => "steer",
+                    QueueMode::FollowUp => "followUp",
+                };
+                let command = json!({"id":queue_id,"type":"prompt","message":&submission.text,"streamingBehavior":behavior});
+                if let Err(error) = write_command(
+                    &mut input.checked(|| service_sending(display, Some(events), true)),
+                    &command,
+                    &submission.images,
+                ) {
+                    display.rejected_queue(
+                        submission,
+                        "Delivery uncertain: sending failed; check history before resending",
+                    )?;
+                    return Err(error);
+                }
+                pending.insert(queue_id, submission);
+            }
+        }
+    }
+    Ok(false)
+}
+
+// Mouse and page-key CSI sequences also start with Esc. They scroll the
+// transcript rather than aborting a running response.
+fn active_keys(events: &Receiver<u8>, display: &mut impl ScrollDisplay) -> Result<bool> {
+    while let Ok(key) = events.try_recv() {
+        if display.paste_byte(key)? {
+            continue;
+        }
+        if key != 27 {
+            continue;
+        }
+        match escape_key(events) {
+            Navigation::Escape | Navigation::EscapeWith(_) => return Ok(true),
+            Navigation::PasteStart => display.paste_start(),
+            Navigation::Mouse(event) => display.mouse(event)?,
+            nav => display.scroll(nav)?,
+        }
+    }
+    Ok(false)
+}
+
+fn receive_record(
+    output: &impl Events,
+    deadline: Instant,
+    display: &mut impl ScrollDisplay,
+) -> Result<Option<Value>> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err(error::transport(
+                "Runtime command response timed out; connection state is uncertain",
+            )
+            .into());
+        }
+        // Startup/catalog requests can be quiet while stderr is active. Paint
+        // queued diagnostics without resetting the command's original deadline.
+        display.tick_work()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match output.recv_timeout(remaining.min(std::time::Duration::from_millis(40))) {
+            Ok(event) => return event.map(Some),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+fn read_record<R: BufRead>(output: &mut R) -> Result<Option<Value>> {
+    super::transport::read_frame(output, 64 * 1024 * 1024)
+        .map_err(error::transport)?
+        .map(|frame| {
+            serde_json::from_slice(&frame)
+                .map_err(|_| error::protocol("Invalid Hibiscus runtime JSON record").into())
+        })
+        .transpose()
+}
+
+// A partially sent JSONL record cannot be followed by an abort command without
+// corrupting framing. Esc while sending invalidates the connection instead.
+fn service_sending(
+    display: &mut impl ScrollDisplay,
+    events: Option<&Receiver<u8>>,
+    prompt: bool,
+) -> io::Result<()> {
+    if !prompt {
+        return Ok(());
+    }
+    display.tick_work()?;
+    let Some(events) = events else {
+        return Ok(());
+    };
+    let stopped = if display.live_input() {
+        let mut stopped = false;
+        for _ in 0..8 {
+            let Some(byte) = display.pending_key().or_else(|| events.try_recv().ok()) else {
+                break;
+            };
+            match display.active_key(byte, events).map_err(io::Error::other)? {
+                ActiveAction::Stop => {
+                    stopped = true;
+                    break;
+                }
+                ActiveAction::Submit(submission) => display.hold_queue(submission)?,
+                ActiveAction::None => {}
+            }
+        }
+        stopped
+    } else {
+        active_keys(events, display).map_err(io::Error::other)?
+    };
+    if stopped {
+        Err(io::Error::other("Stopped while sending RPC command; delivery is uncertain. Reconnect and review before resending"))
+    } else {
+        Ok(())
+    }
+}
+
+/// Serialize borrowed attachments rather than cloning base64 into another
+/// Value. Buffer small JSON fragments, then flush exactly one LF-framed command.
+fn write_command(input: &mut impl Write, command: &Value, images: &[SharedImage]) -> Result<()> {
+    struct Envelope<'a> {
+        command: &'a Value,
+        images: &'a [SharedImage],
+    }
+    impl serde::Serialize for Envelope<'_> {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::{Error, SerializeMap};
+            let fields = self
+                .command
+                .as_object()
+                .ok_or_else(|| S::Error::custom("command must be an object"))?;
+            let mut map = serializer.serialize_map(None)?;
+            for (key, value) in fields {
+                map.serialize_entry(key, value)?;
+            }
+            if !self.images.is_empty() {
+                map.serialize_entry("images", self.images)?;
+            }
+            map.end()
+        }
+    }
+    let mut writer = std::io::BufWriter::new(input);
+    let result = (|| {
+        serde_json::to_writer(&mut writer, &Envelope { command, images })
+            .map_err(error::transport)?;
+        writer.write_all(b"\n").map_err(error::transport)?;
+        writer.flush().map_err(error::transport)?;
+        Ok(())
+    })();
+    // BufWriter's Drop otherwise retries a failed flush. Once command delivery
+    // is uncertain, only the caller's explicit recovery may send more bytes.
+    let _ = writer.into_parts();
+    result
+}
+
+fn finish_turn<W: ScrollDisplay>(
+    ui: &Ui,
+    display: &mut W,
+    has_text: bool,
+    outcome: RunOutcome,
+    interrupted: bool,
+) -> Result<bool> {
+    display.end_turn()?;
+    if has_text {
+        writeln!(display)?;
+    }
+    if let RunOutcome::Failed(error) = outcome {
+        return Err(error.into());
+    }
+    let done = interrupted;
+    if interrupted {
+        ui.info(display, "Stopped. You can keep chatting.")?;
+    }
+    if ui.interactive {
+        writeln!(display)?;
+    }
+    Ok(done)
+}
+
+fn rejected(event: &Value, kind: &str, id: &str) -> ChatError {
+    let mut error = ChatError::new(
+        if kind == "extension_command" {
+            ErrorSource::Extension
+        } else {
+            ErrorSource::Command
+        },
+        &format!(
+            "Runtime rejected {kind}: {}",
+            event["error"].as_str().unwrap_or("Unknown error")
+        ),
+    );
+    error.command_id = Some(id.into());
+    error
+}
+
+fn check_record(event: &Value) -> Result<()> {
+    let kind = event["type"]
+        .as_str()
+        .ok_or_else(|| error::protocol("Runtime record has no event type"))?;
+    if kind == "response" && !event["success"].is_boolean() {
+        return Err(error::protocol("Runtime response has no success flag").into());
+    }
+    if kind == "response" && event["command"] == "parse" && event["success"] == false {
+        return Err(error::protocol("Runtime rejected RPC framing").into());
+    }
+    if kind == "message_end"
+        && event["message"]["role"] == "assistant"
+        && !event["message"]["stopReason"].is_string()
+    {
+        return Err(error::protocol("Assistant message missing stopReason").into());
+    }
+    Ok(())
+}
+
+// A cloned Unix socket shares O_NONBLOCK with its writer. Poll readiness in
+// the dedicated ingress thread rather than interpreting WouldBlock as EOF.
+struct SocketReader(UnixStream);
+impl std::io::Read for SocketReader {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match std::io::Read::read(&mut self.0, bytes) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    let mut fd = libc::pollfd {
+                        fd: self.0.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    if unsafe { libc::poll(&mut fd, 1, 100) } < 0 {
+                        let e = io::Error::last_os_error();
+                        if e.kind() != io::ErrorKind::Interrupted {
+                            return Err(e);
+                        }
+                    }
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newest_unacknowledged_queue_is_preserved_for_explicit_review() {
+        let mut screen = crate::ui::Frontend::new(false).unwrap();
+        let mut pending = HashMap::new();
+        for n in [2, 10] {
+            pending.insert(
+                format!("hibiscus-1-queued-{n}"),
+                DraftSubmission {
+                    text: format!("draft {n}"),
+                    images: vec![json!({"type":"image","data":"synthetic"}).into()],
+                    mode: QueueMode::Steer,
+                },
+            );
+        }
+        preserve_uncertain_queue(&mut screen, &mut pending).unwrap();
+        let (text, images) = screen.take_rejected_queue().unwrap();
+        assert_eq!(text, "draft 10");
+        assert_eq!(images[0]["data"], "synthetic");
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn borrowed_images_serialize_as_one_jsonl_record_and_preserve_originals() {
+        let command = json!({"id":"request","type":"prompt","message":"line one\nline two"});
+        let images: Vec<SharedImage> = vec![
+            json!({"type":"image","mimeType":"image/png","data":"a".repeat(1024 * 1024)}).into(),
+        ];
+        let pointer = images[0]["data"].as_str().unwrap().as_ptr();
+        let recovery = images.clone();
+        assert!(std::sync::Arc::ptr_eq(&images[0], &recovery[0]));
+        let mut wire = Vec::new();
+        write_command(&mut wire, &command, &images).unwrap();
+        assert_eq!(wire.iter().filter(|&&byte| byte == b'\n').count(), 1);
+        let decoded: Value = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(decoded["images"], json!(images));
+        assert_eq!(decoded["message"], command["message"]);
+        assert_eq!(images[0]["data"].as_str().unwrap().as_ptr(), pointer);
+        assert!(command.get("images").is_none());
+        wire.clear();
+        write_command(&mut wire, &command, &[]).unwrap();
+        assert!(serde_json::from_slice::<Value>(&wire)
+            .unwrap()
+            .get("images")
+            .is_none());
+    }
+
+    #[test]
+    fn buffered_command_does_not_retry_a_failed_write_on_drop() {
+        struct FailsOnce(usize);
+        impl Write for FailsOnce {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0 += 1;
+                if self.0 == 1 {
+                    Err(io::Error::other("uncertain write"))
+                } else {
+                    Ok(bytes.len())
+                }
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut writer = FailsOnce(0);
+        assert!(
+            write_command(&mut writer, &json!({"type":"prompt","message":"test"}), &[]).is_err()
+        );
+        assert_eq!(writer.0, 1, "never implicitly retry a buffered RPC command");
+    }
+
+    #[test]
+    fn edit_preview_uses_result_details_and_limits_output() {
+        let diff = (0..45)
+            .map(|n| format!("+{n} line"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut output = Vec::new();
+        show_tool_diff(
+            &Ui::new(false),
+            &mut output,
+            "edit · file.rs",
+            &json!({"details":{"diff":diff}}),
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("diff · file.rs"));
+        assert!(output.contains("+39 line"));
+        assert!(!output.contains("+40 line"));
+        assert!(output.contains("5 more diff lines"));
+        let mut empty = Vec::new();
+        show_tool_diff(
+            &Ui::new(false),
+            &mut empty,
+            "edit · file.rs",
+            &json!({"details":{}}),
+        )
+        .unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn tool_labels_include_file_paths_but_not_shell_commands_or_controls() {
+        assert_eq!(
+            tool_label("read", &json!({"path":"src/README.md"})),
+            "read · src/README.md"
+        );
+        assert_eq!(
+            tool_label("write", &json!({"path":"bad\u{1b}[2J\nname"})),
+            "write · bad[2Jname"
+        );
+        assert_eq!(
+            tool_label("bash", &json!({"command":"echo SECRET"})),
+            "bash"
+        );
+    }
+
+    #[test]
+    fn mouse_wheel_escape_does_not_abort() {
+        struct ScrollSpy(Vec<Navigation>);
+        impl Write for ScrollSpy {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl ScrollDisplay for ScrollSpy {
+            fn scroll(&mut self, key: Navigation) -> io::Result<()> {
+                self.0.push(key);
+                Ok(())
+            }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        for byte in b"\x1b[<64;10;10M\x1b[5~" {
+            tx.send(*byte).unwrap();
+        }
+        let mut display = ScrollSpy(Vec::new());
+        assert!(!active_keys(&rx, &mut display).unwrap());
+        assert_eq!(
+            display.0,
+            [Navigation::MouseScroll(3, 10), Navigation::ScrollPage(1)]
+        );
+        tx.send(27).unwrap();
+        assert!(active_keys(&rx, &mut display).unwrap());
+    }
+
+    fn records(text: &str) -> Receiver<Result<Value>> {
+        let (tx, rx) = mpsc::channel();
+        for line in text.lines() {
+            tx.send(Ok(serde_json::from_str(line).unwrap())).unwrap();
+        }
+        rx
+    }
+
+    fn run_exchange(
+        text: &str,
+        id: &str,
+        kind: &str,
+        sent: &mut Vec<u8>,
+        shown: &mut Vec<u8>,
+    ) -> Result<bool> {
+        exchange(
+            sent,
+            &records(text),
+            shown,
+            &mut io::Cursor::new(Vec::<u8>::new()),
+            &mut Dialogs,
+            None,
+            id,
+            kind,
+            &mut None,
+            false,
+        )
+    }
+
+    #[test]
+    fn prompt_stream_waits_for_settled_and_supports_next_command() {
+        let events = concat!(
+            "{\"type\":\"response\",\"id\":\"other\",\"success\":true}\n",
+            "{\"type\":\"response\",\"id\":\"hibiscus-1\",\"success\":true}\n",
+            "{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"hello\"}}\n",
+            "{\"type\":\"agent_end\"}\n",
+            "{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\" world\"}}\n",
+            "{\"type\":\"agent_settled\"}\n",
+            "{\"type\":\"response\",\"id\":\"hibiscus-2\",\"success\":true,\"data\":{\"cancelled\":false}}\n"
+        );
+        let mut sent = Vec::new();
+        let mut shown = Vec::new();
+        let rx = records(events);
+        let mut dialogs = Dialogs;
+        let mut fallback = io::Cursor::new(Vec::<u8>::new());
+        exchange(
+            &mut sent,
+            &rx,
+            &mut shown,
+            &mut fallback,
+            &mut dialogs,
+            None,
+            "hibiscus-1",
+            "prompt",
+            &mut None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(shown, b"hello world\n");
+        exchange(
+            &mut sent,
+            &rx,
+            &mut shown,
+            &mut fallback,
+            &mut dialogs,
+            None,
+            "hibiscus-2",
+            "new_session",
+            &mut None,
+            false,
+        )
+        .unwrap();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn rejected_prompt_and_failed_agent_are_errors() {
+        let rejected = b"{\"type\":\"response\",\"id\":\"hibiscus-1\",\"success\":false,\"error\":\"no model\"}\n";
+        assert!(run_exchange(
+            std::str::from_utf8(rejected).unwrap(),
+            "hibiscus-1",
+            "prompt",
+            &mut Vec::new(),
+            &mut Vec::new()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("no model"));
+        let failed = concat!(
+            "{\"type\":\"response\",\"id\":\"hibiscus-1\",\"success\":true}\n",
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"error\"}}\n",
+            "{\"type\":\"agent_settled\"}\n"
+        );
+        assert!(run_exchange(
+            failed,
+            "hibiscus-1",
+            "prompt",
+            &mut Vec::new(),
+            &mut Vec::new()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn extension_dialog_is_cancelled_without_terminal() {
+        let events = concat!(
+            "{\"type\":\"extension_ui_request\",\"id\":\"dialog-1\",\"method\":\"confirm\"}\n",
+            "{\"type\":\"response\",\"id\":\"hibiscus-1\",\"success\":true}\n",
+            "{\"type\":\"agent_settled\"}\n"
+        );
+        let mut sent = Vec::new();
+        run_exchange(events, "hibiscus-1", "prompt", &mut sent, &mut Vec::new()).unwrap();
+        let response: Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(response["id"], "dialog-1");
+        assert_eq!(response["cancelled"], true);
+    }
+
+    #[test]
+    fn escape_sends_clear_then_abort_and_preserves_session() {
+        let events = concat!(
+            "{\"type\":\"response\",\"id\":\"hibiscus-1\",\"success\":true}\n",
+            "{\"type\":\"response\",\"id\":\"hibiscus-1-clear\",\"success\":true}\n",
+            "{\"type\":\"response\",\"id\":\"hibiscus-1-abort\",\"success\":true}\n",
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"aborted\"}}\n",
+            "{\"type\":\"agent_settled\"}\n",
+            "{\"type\":\"response\",\"id\":\"hibiscus-2\",\"success\":true,\"data\":{\"cancelled\":false}}\n"
+        );
+        let rx = records(events);
+        let (tx, keys) = mpsc::channel();
+        tx.send(27).unwrap();
+        let mut sent = Vec::new();
+        let mut shown = Vec::new();
+        let mut fallback = io::Cursor::new(Vec::<u8>::new());
+        let mut dialogs = Dialogs;
+        assert!(exchange(
+            &mut sent,
+            &rx,
+            &mut shown,
+            &mut fallback,
+            &mut dialogs,
+            Some(&keys),
+            "hibiscus-1",
+            "prompt",
+            &mut None,
+            false
+        )
+        .unwrap());
+        assert!(!exchange(
+            &mut sent,
+            &rx,
+            &mut shown,
+            &mut fallback,
+            &mut dialogs,
+            None,
+            "hibiscus-2",
+            "new_session",
+            &mut None,
+            false
+        )
+        .unwrap());
+        let commands: Vec<Value> = sent
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        assert_eq!(
+            commands
+                .iter()
+                .map(|cmd| cmd["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["clear_queue", "abort"]
+        );
+    }
+
+    #[test]
+    fn rejected_preflight_drains_already_sent_cancellation_before_returning() {
+        let rx = records(concat!(
+            "{\"type\":\"response\",\"id\":\"p\",\"success\":false,\"error\":\"no model\"}\n",
+            "{\"type\":\"response\",\"id\":\"p-clear\",\"success\":true}\n",
+            "{\"type\":\"response\",\"id\":\"p-abort\",\"success\":true}\n",
+            "{\"type\":\"response\",\"id\":\"next\",\"success\":true}\n"
+        ));
+        let (sender, keys) = mpsc::channel();
+        sender.send(27).unwrap();
+        assert!(exchange(
+            &mut Vec::new(),
+            &rx,
+            &mut Vec::new(),
+            &mut io::Cursor::new(Vec::<u8>::new()),
+            &mut Dialogs,
+            Some(&keys),
+            "p",
+            "prompt",
+            &mut None,
+            false
+        )
+        .is_err());
+        assert_eq!(rx.recv().unwrap().unwrap()["id"], "next");
+    }
+
+    #[test]
+    fn silent_command_deadline_and_invalid_records_require_reconnection() {
+        let (_sender, receiver) = mpsc::channel();
+        let error = receive_record(&receiver, Instant::now(), &mut Vec::new()).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ChatError>().unwrap().recovery(),
+            super::error::RecoveryAction::Reconnect
+        );
+        for record in [
+            json!({}),
+            json!({"type":"response","success":"yes"}),
+            json!({"type":"response","success":false,"command":"parse"}),
+        ] {
+            assert!(check_record(&record).is_err());
+        }
+        assert!(check_record(&json!({"type":"future_event"})).is_ok());
+        let error = read_record(&mut b"private invalid payload\n".as_slice()).unwrap_err();
+        assert!(!error.to_string().contains("private invalid payload"));
+    }
+
+    #[test]
+    fn strict_lf_framing_accepts_unicode_separators() {
+        let mut stream =
+            "{\"type\":\"message_update\",\"text\":\"a\u{2028}b\"}\n{\"type\":\"agent_settled\"}\n"
+                .as_bytes();
+        assert_eq!(
+            read_record(&mut stream).unwrap().unwrap()["text"],
+            "a\u{2028}b"
+        );
+        assert_eq!(
+            read_record(&mut stream).unwrap().unwrap()["type"],
+            "agent_settled"
+        );
+    }
+}
