@@ -1,5 +1,24 @@
 # Current state
 
+## Issue #43 implementation
+
+Preparing source version 0.3.8. All external workflow action references are pinned, checkouts do not persist credentials, Rust is fixed at1.99.1 and Linux cross images use registry digests. One reusable readonly builder returns separate per-target archive hashes/cache keys. Readonly transport verification and a checkout-free writer verify exact expected hashes before publishing. Direct-upload recovery uses exact digest-bound cache entries, preserving the existing-draft guard. No-tag normal/cache dispatches never publish. Nineteen local workflow boundary checks and actionlint pass. Full local verification passes:259 Rust tests, including196 unit/62native integration and one launcher for20Python checks; strict Clippy, formatting, shell installer/version-bump, offline npm tests,19workflow checks and actionlint. Actual remote builds/transports, PR feedback, main merge, issue/task closure and a new published Scorecard result are pending. Published installer examples remain on v0.3.7; no new release/tag is claimed.
+
+## Security improvement backlog, 2026-11-01
+
+The owner requested checking security and creating Mokara tasks. Verified the current public Scorecard result, workflow/source setup and repository security APIs without changing runtime code or repository settings. Eight separate owner-assigned todo tasks are created with four acceptance steps each and linked GitHub issues #43–50; all eight Mokara links are synced. The owner now directly authorized implementing #43, patch bump, dev push, PR/merge into main, resolving feedback and measuring the next public score. Other security tasks remain queued.
+
+- #43: Harden GitHub Actions permissions and pin build dependencies (high, in progress). Mokara task affe89df-d165-4782-9b24-1f3af87dfeeb.
+- #44: Require CI checks on main and dev and strengthen merge rules (high). Mokara task 2d31a4ee-94e6-4c7e-b800-9c383c6edc9a.
+- #45: Automate dependency updates and Rust vulnerability audits (high). Mokara task fe120ea1-c593-4a0b-91a6-d2f2dd3c3986.
+- #46: Add Rust CodeQL analysis to pull requests and scheduled scans (high). Mokara task 5cf89549-8f82-4d2d-b138-638a8a7e0fc7.
+- #47: Enable secret scanning and push protection (high). Mokara task 0e01252f-d3fb-4e4f-8673-e16532cef9ce.
+- #48: Publish a security policy and private vulnerability reporting process (medium). Mokara task 5dd46dcf-af9a-4065-986a-47f1f4dcc0b4.
+- #49: Publish signed release provenance and verify download authenticity (high). Mokara task 17b13c23-f65c-4ac5-a2bb-d4645ab5b7d4.
+- #50: Fuzz native input parsers and filesystem boundary validation (medium). Mokara task 40300788-e7ab-4393-b83c-23ece6a33523.
+
+Start with #43 workflow permissions/pins, then #44 CI/branch requirements. Main already has an active PR/no-force-push/no-deletion ruleset, but no required checks or independent approvers; dev is not protected. Dependabot alerts are enabled, security updates disabled; secret scanning/push protection and private reporting disabled. CodeQL is not configured. No security policy, dependency updater, release provenance or dedicated fuzz setup is present. Scorecard Maintained0 is due to repository age under90days, not established neglect; Code-Review0 measures approved changesets. No clean source-code audit or vulnerability-free claim is made. Existing #31–34 and contributor issues remain unchanged.
+
 ## v0.3.7 release
 
 The owner requested a patch bump, dev push, PR into main, merge and new release tag. Version 0.3.7 includes native extension versions, workspace checkpoints, the persistent HIBI header, development coding evaluations and restored README. Release commit 96b052643b7e8645493b3169fbf1bba4a98d29a7 passed CI 41285949109 on Linux/macOS and the lint/installer job. PR #41 merged into main as 27fb82b3863930919a7c6bc2e78d781e3b7041a5; the merged tree exactly matches tested dev. Annotated remote v0.3.7 resolves to that main commit. Release workflow 41286176273 passed exact-tag verification, all four platform builds and draft asset upload. GitHub Release v0.3.7 was published as latest, non-prerelease at 2026-11-01T07:54:50Z after independent verification of all five assets. Downloaded hashes match SHA256SUMS and GitHub digests; each archive contains one executable of the expected ELF/Mach-O architecture. macOS ARM64 codesign and isolated --version pass. The public tagged installer matches source, installs 0.3.7 in a temporary HOME and creates config0600/cache0700/empty extensions0700 without global changes or provider credentials. Other target binaries were inspected but not executed locally. An initial draft-asset download hit a transient TLS error; its read-only retry succeeded. npm registry publication is separate and is not requested.
