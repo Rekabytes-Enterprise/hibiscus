@@ -1,0 +1,46 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    assignees: [rekabytes]
+    groups:
+      cargo-compatible:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    assignees: [rekabytes]
+    groups:
+      actions-compatible:
+        update-types: [minor, patch]
+  # Security updates always use the default branch. Zero disables version PRs
+  # here, leaving normal version maintenance on dev and security fixes enabled.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    assignees: [rekabytes]
+    groups:
+      cargo-security:
+        applies-to: security-updates
+        patterns: ['*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    assignees: [rekabytes]
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns: ['*']
