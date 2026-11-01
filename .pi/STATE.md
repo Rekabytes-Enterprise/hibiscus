@@ -1,12 +1,10 @@
 # Current state
 
-## Actual README screenshots prepared locally
+## v0.3.14 release prepared
 
-After the #74/#47 security work completed through main and final dev syncPR77, the owner requested actual TUI/CLI/Mermaid application screenshots in README/assets. Branchcodex/readme-real-screenshots is based on clean dev7ba78110d4d3cc97e238182463a8436e2b6ae7bc. README now replaces its two illustrated terminal embeds with real TUI tool/diff and Mermaid/table captures, adds a real CLI fail/edit/pass capture, and refreshes the pinned quick-start example to verified v0.3.13. Existing branding, badges, navigation, feature/key/command tables, footer and original SVG files are preserved.
+The owner explicitly requested publishing the actual README screenshot work, bumping the patch and releasing through the existing dev/main flow. Branch codex/readme-real-screenshots contains the three real v0.3.13 application captures and method notes, preserving README branding, badges, navigation and original SVG artwork. Version references are synchronized to 0.3.14 and the changelog includes the README update plus repository-only secret protection since v0.3.13. Capture notes retain their actual source version; runtime/UI code remains unchanged.
 
-Three JPEGs live in docs/assets/screenshots with capture notes. They show the actual verified v0.3.13 macOS ARM64 binary running in isolated PTYs. Native/runtime UI code is unchanged since released sourcededdeee2. Read-only xterm.js5.5.0 displays unchanged ANSI output because native Terminal app control is restricted in this environment. A local loopback provider supplies explicitly labeled sample prose/tool plans; Hibiscus performs the real reads/edits/Python test runs. Initial CLI tests genuinely fail; after native edits both tests pass. Mermaid's supported linear source genuinely renders as Unicode after settlement. No real provider credential, private workspace or billable model call is used.
-
-Captures were visually inspected and include the full terminal/footer. TUI116x41=1010x770px, CLI116x40=1010x752px, Mermaid116x48=1010x896px. Local image references, JPEG signatures/dimensions and diff whitespace are verified. No runtime code changed and no new tests were added for documentation-only changes. These README/assets changes are local; no screenshot/source push, PR, tag or release has been authorized for this new documentation task. Security #47 remains completed, main47eedaf and published v0.3.13 are unchanged.
+Local verification and protected PR checks must pass before merges. Tag the exact merged main commit without moving old tags. Verify the four archive hashes, signed provenance, asset metadata and isolated macOS ARM64 execution/installation before publishing the draft. No npm or image-registry publication is requested. This section records preparation, not a completed release.
 
 ## Issue #47 complete; native secret leak prevention on main
 
