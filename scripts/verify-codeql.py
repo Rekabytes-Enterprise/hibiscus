@@ -41,6 +41,9 @@ def main():
             raise RuntimeError('Expected one Rust query pack in the linked CodeQL bundle')
         for filename in ['qlpack.yml', 'codeql-pack.lock.yml']:
             shutil.copyfile(paths[0].parent / filename, pack / filename)
+        # Compiled packs resolve dependencies from their vendored library tree,
+        # not the CLI search path. Keep that tree with its manifest and lockfile.
+        shutil.copytree(paths[0].parent / '.codeql', pack / '.codeql')
         query = pack / 'Probe.ql'
         query.write_text('''/**
  * @name Harmless Rust extraction probe
@@ -52,7 +55,9 @@ def main():
 import rust
 
 from IfExpr expression
-where expression.getThen().(BlockExpr).getStmtList().getNumberOfStmtOrExpr() = 0
+where
+  expression.getLocation().getFile().getRelativePath() = "src/lib.rs" and
+  expression.getThen().(BlockExpr).getStmtList().getNumberOfStmtOrExpr() = 0
 select expression, "Hibiscus extraction probe."
 ''', encoding='utf-8')
         database = root / 'database'
@@ -60,7 +65,7 @@ select expression, "Hibiscus extraction probe."
             '--source-root=' + str(source), '--threads=2', '--ram=2048')
         report = root / 'probe.sarif'
         run('database', 'analyze', str(database), str(query),
-            '--additional-packs=' + str(bundle), '--format=sarif-latest',
+            '--format=sarif-latest',
             '--output=' + str(report), '--threads=2', '--ram=2048')
         results = [item for entry in json.loads(report.read_text())['runs']
                    for item in entry.get('results', [])]
