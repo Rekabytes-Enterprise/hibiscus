@@ -4,16 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-11-01
+
 ### Added
 
 - Development-only coding evaluations with versioned learning/selection/held-out tasks, paired baseline/candidate runs, native extension preflight, independent grading and private JSON reports. Offline fixtures are the default; live providers require explicit configuration.
-
 - Native workspace checkpoints for write/edit, with request/session correlation, recorded diffs, conflict-checked selective restore, interrupted-operation recovery and explicit retention tools.
-
 - Extension candidate updates with retained version history, parent and changed-file records, configured regression commands/protocol checks, native history/diff/rollback tools and atomic activation.
 
 ### Changed
 
+- Restore the full README presentation with native runtime documentation and prepare a default-branch OpenSSF Scorecard workflow. The score badge remains hidden until a published scan is verified.
 - Keep the raspberry HIBI banner pinned above TUI conversations, with live thinking/model/workspace/session metadata and compact layouts for small terminals and multiline drafts. Unicode labels respect terminal column widths.
 - Remove thinking confirmations from TUI chat and the obsolete Pi attribution from CLI confirmations; guard installer wording against the old Pi-ready message.
 - Extension registry snapshots now retain implementation files with their metadata. Existing source folders are preserved; rejected updates and interrupted candidates keep the last active version usable.
