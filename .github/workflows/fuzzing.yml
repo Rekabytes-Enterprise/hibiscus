@@ -1,0 +1,71 @@
+name: Native fuzzing
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+  schedule:
+    - cron: '39 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzzing-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fuzz:
+    name: Native parser fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    env:
+      # Same official entry points as ClusterFuzzLite's actions, pinned by image
+      # digest so a mutable upstream v1 image cannot change a reviewed run.
+      CFL_PLATFORM: github
+      LANGUAGE: rust
+      SANITIZER: address
+      PROJECT_SRC_PATH: /github/workspace
+      LOW_DISK_SPACE: 'True'
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Build real sanitized targets with ClusterFuzzLite
+        uses: docker://gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers@sha256:f0fbb9dfd1bcae3a2df6d140ece1284964d6bb80b84d88d7dcf8cd9e86507fc2
+        env:
+          BAD_BUILD_CHECK: 'True'
+          ALLOWED_BROKEN_TARGETS_PERCENTAGE: '0'
+          KEEP_UNAFFECTED_FUZZ_TARGETS: 'True'
+          UPLOAD_BUILD: 'False'
+          DRY_RUN: 'False'
+      - name: Run bounded ClusterFuzzLite campaign
+        uses: docker://gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers@sha256:7aa7e82b5a4f0d56a3cfeeca86658c7319ae0a1900f44a2403adfab1c3dfecb3
+        env:
+          FUZZ_SECONDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '600' || '60' }}
+          MODE: code-change
+          PARALLEL_FUZZING: 'False'
+          OUTPUT_SARIF: 'False'
+          MINIMIZE_CRASHES: 'True'
+          REPORT_UNREPRODUCIBLE_CRASHES: 'True'
+          REPORT_TIMEOUTS: 'True'
+          REPORT_OOMS: 'True'
+          DRY_RUN: 'False'
+      - name: Retain synthetic crash reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-fuzzing-failures
+          path: |
+            out/artifacts
+            cifuzz-artifacts
+          if-no-files-found: warn
+          retention-days: 5

@@ -332,3 +332,6 @@ pub(crate) fn definitions() -> Vec<Value> {
         json!({"name":tool.name(),"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     }).collect()
 }
+
+#[cfg(feature = "fuzzing")]
+pub(crate) mod fuzzing;

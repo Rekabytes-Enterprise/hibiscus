@@ -256,29 +256,30 @@ struct Decoder {
 }
 impl Decoder {
     fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>> {
-        self.buffer.extend_from_slice(bytes);
-        if self.buffer.len() > 2 * 1024 * 1024 {
+        if bytes.len() > (2 * 1024 * 1024_usize).saturating_sub(self.buffer.len()) {
             return Err("Provider streaming frame exceeds 2 MiB".into());
         }
+        self.buffer.extend_from_slice(bytes);
         let mut frames = vec![];
+        let mut consumed = 0;
         loop {
-            let marker = self
-                .buffer
-                .windows(2)
-                .position(|v| v == b"\n\n")
-                .map(|i| (i, 2))
-                .or_else(|| {
-                    self.buffer
-                        .windows(4)
-                        .position(|v| v == b"\r\n\r\n")
-                        .map(|i| (i, 4))
-                });
+            let remaining = &self.buffer[consumed..];
+            // Pick the first delimiter on the wire, regardless of line endings.
+            let marker = remaining.windows(2).enumerate().find_map(|(i, pair)| {
+                if pair == b"\n\n" {
+                    Some((i, 2))
+                } else if pair == b"\r\n" && remaining.get(i..i + 4) == Some(b"\r\n\r\n") {
+                    Some((i, 4))
+                } else {
+                    None
+                }
+            });
             let Some((end, skip)) = marker else { break };
-            let frame = String::from_utf8(self.buffer.drain(..end + skip).collect())?;
+            let frame = std::str::from_utf8(&remaining[..end])?;
             let data = frame
                 .lines()
-                .filter_map(|l| {
-                    l.strip_prefix("data:")
+                .filter_map(|line| {
+                    line.strip_prefix("data:")
                         .map(|s| s.strip_prefix(' ').unwrap_or(s))
                 })
                 .collect::<Vec<_>>()
@@ -286,7 +287,10 @@ impl Decoder {
             if !data.is_empty() {
                 frames.push(data);
             }
+            consumed += end + skip;
         }
+        // Drain once rather than repeatedly shifting every remaining frame.
+        self.buffer.drain(..consumed);
         Ok(frames)
     }
 }
@@ -344,6 +348,10 @@ impl Stream {
                 Some("content_block_start") => {
                     let i = v["index"].as_u64().ok_or("Invalid content block index")?;
                     let block = v["content_block"].clone();
+                    block
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .ok_or("Invalid content block")?;
                     if block["type"] == "tool_use" {
                         self.calls.insert(
                             i,
@@ -364,7 +372,11 @@ impl Stream {
                             let t = d["text"].as_str().ok_or("Invalid text delta")?;
                             delta = Some(t.into());
                             let b = self.blocks.get_mut(&i).ok_or("Unknown content block")?;
-                            b["text"] = json!(format!("{}{}", b["text"].as_str().unwrap_or(""), t));
+                            if b["type"] != "text" {
+                                return Err("Text delta does not match a text block".into());
+                            }
+                            let previous = b["text"].as_str().ok_or("Invalid text block")?;
+                            b["text"] = json!(format!("{previous}{t}"));
                         }
                         Some("input_json_delta") => {
                             self.calls
@@ -639,5 +651,117 @@ mod tests {
         assert_eq!(reply.input, Some(15));
         assert_eq!(reply.cache, Some(20));
         assert_eq!(reply.context, Some(70));
+    }
+}
+
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_stream(bytes: &[u8]) {
+    let Some((&selection, payload)) = bytes.split_first() else {
+        return;
+    };
+    fn frames(bytes: &[u8], chunk: usize) -> Result<Vec<String>> {
+        let mut decoder = Decoder::default();
+        let mut frames = Vec::new();
+        for bytes in bytes.chunks(chunk.max(1)) {
+            frames.extend(decoder.push(bytes)?);
+        }
+        Ok(frames)
+    }
+    if let Ok(whole) = frames(payload, payload.len()) {
+        let chunks = frames(payload, usize::from(selection) + 1)
+            .expect("SSE decoding depends on network chunk size");
+        assert_eq!(whole, chunks, "SSE frame boundaries changed across chunks");
+    }
+    let api = match selection % 3 {
+        0 => Api::Responses,
+        1 => Api::Anthropic,
+        _ => Api::ChatCompletions,
+    };
+    let events: Vec<Value> = match serde_json::from_slice(payload) {
+        Ok(Value::Array(values)) => values.into_iter().take(64).collect(),
+        Ok(value) => vec![value],
+        Err(_) => frames(payload, 31)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|frame| serde_json::from_str(&frame).ok())
+            .take(64)
+            .collect(),
+    };
+    let mut stream = Stream::default();
+    for event in events {
+        if stream.observe(&api, &event).is_err() {
+            return;
+        }
+        if stream.done {
+            let _ = stream.reply(&api);
+            return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod parser_fuzz_regressions {
+    use super::*;
+
+    #[test]
+    fn mixed_sse_delimiters_preserve_wire_order_across_chunks() {
+        let wire = b"data: first\r\n\r\ndata: second\n\n";
+        for chunk in 1..=wire.len() {
+            let mut decoder = Decoder::default();
+            let frames: Vec<_> = wire
+                .chunks(chunk)
+                .flat_map(|bytes| decoder.push(bytes).unwrap())
+                .collect();
+            assert_eq!(frames, ["first", "second"], "chunk size {chunk}");
+        }
+    }
+
+    #[test]
+    fn rejected_stream_chunk_preserves_the_bounded_buffer() {
+        let mut decoder = Decoder::default();
+        decoder.push(b"data: pending").unwrap();
+        let before = decoder.buffer.clone();
+        assert!(decoder.push(&vec![b'x'; 2 * 1024 * 1024]).is_err());
+        assert_eq!(decoder.buffer, before);
+    }
+
+    #[test]
+    fn malformed_anthropic_blocks_return_errors() {
+        for block in [
+            Value::Null,
+            json!(false),
+            json!(1),
+            json!([]),
+            json!("text"),
+        ] {
+            let mut stream = Stream::default();
+            assert!(stream
+                .observe(
+                    &Api::Anthropic,
+                    &json!({
+                        "type":"content_block_start", "index":0, "content_block":block
+                    })
+                )
+                .is_err());
+        }
+        let mut stream = Stream::default();
+        stream
+            .observe(
+                &Api::Anthropic,
+                &json!({
+                    "type":"content_block_start", "index":0,
+                    "content_block":{"type":"thinking","thinking":"example"}
+                }),
+            )
+            .unwrap();
+        assert!(stream
+            .observe(
+                &Api::Anthropic,
+                &json!({
+                    "type":"content_block_delta", "index":0,
+                    "delta":{"type":"text_delta","text":"hello"}
+                })
+            )
+            .is_err());
     }
 }

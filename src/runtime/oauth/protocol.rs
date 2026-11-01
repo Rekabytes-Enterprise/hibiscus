@@ -100,42 +100,7 @@ impl Pending {
         }
     }
     fn callback(&self, input: &str) -> Result<Callback> {
-        if input.len() > 16384 || input.chars().any(char::is_control) {
-            return Err("Invalid Codex redirect URL".into());
-        }
-        let url = reqwest::Url::parse(input.trim())
-            .map_err(|_| "Paste the full Codex redirect URL, including its state")?;
-        let expected = reqwest::Url::parse(&self.redirect)?;
-        if url.scheme() != expected.scheme()
-            || url.host_str() != expected.host_str()
-            || url.port_or_known_default() != expected.port_or_known_default()
-            || url.path() != expected.path()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
-            return Err("Codex redirect does not match this login attempt".into());
-        }
-        let mut params = HashMap::new();
-        for (key, value) in url.query_pairs() {
-            if params
-                .insert(key.into_owned(), value.into_owned())
-                .is_some()
-            {
-                return Err("Duplicate Codex redirect parameter".into());
-            }
-        }
-        if params.get("state") != Some(&self.state) {
-            return Err("Codex login state mismatch. Retry /login.".into());
-        }
-        if params.contains_key("error") {
-            return Ok(Callback::Denied);
-        }
-        params
-            .remove("code")
-            .filter(|s| !s.is_empty() && s.len() <= 8192 && !s.chars().any(char::is_control))
-            .map(Callback::Code)
-            .ok_or_else(|| "Missing Codex authorization code".into())
+        callback(input, &self.redirect, &self.state)
     }
     pub(super) async fn complete(
         self,
@@ -289,3 +254,55 @@ fn account_id(access: &str) -> Result<String> {
 
 #[cfg(test)]
 pub(super) mod tests;
+
+fn callback(input: &str, redirect: &str, state: &str) -> Result<Callback> {
+    if input.len() > 16384 || input.chars().any(char::is_control) {
+        return Err("Invalid Codex redirect URL".into());
+    }
+    let url = reqwest::Url::parse(input.trim())
+        .map_err(|_| "Paste the full Codex redirect URL, including its state")?;
+    let expected = reqwest::Url::parse(redirect)?;
+    if url.scheme() != expected.scheme()
+        || url.host_str() != expected.host_str()
+        || url.port_or_known_default() != expected.port_or_known_default()
+        || url.path() != expected.path()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Codex redirect does not match this login attempt".into());
+    }
+    let mut params = HashMap::new();
+    for (key, value) in url.query_pairs() {
+        if params
+            .insert(key.into_owned(), value.into_owned())
+            .is_some()
+        {
+            return Err("Duplicate Codex redirect parameter".into());
+        }
+    }
+    if params.get("state").map(String::as_str) != Some(state) {
+        return Err("Codex login state mismatch. Retry /login.".into());
+    }
+    if params.contains_key("error") {
+        return Ok(Callback::Denied);
+    }
+    params
+        .remove("code")
+        .filter(|s| !s.is_empty() && s.len() <= 8192 && !s.chars().any(char::is_control))
+        .map(Callback::Code)
+        .ok_or_else(|| "Missing Codex authorization code".into())
+}
+
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_callback(bytes: &[u8]) {
+    if let Ok(input) = std::str::from_utf8(bytes) {
+        let _ = callback(input, REDIRECT, "fuzz-state");
+        if matches!(
+            callback(input, REDIRECT, "fuzz-state"),
+            Ok(Callback::Code(_))
+        ) {
+            assert!(callback(input, REDIRECT, "different-state").is_err());
+        }
+    }
+}

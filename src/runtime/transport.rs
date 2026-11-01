@@ -655,6 +655,22 @@ impl<W: WireWrite, F: FnMut() -> io::Result<()>> Write for Checked<'_, W, F> {
     }
 }
 
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_record(bytes: &[u8]) {
+    let ordinary = serde_json::from_slice::<Value>(bytes);
+    let decoded = decode_record(bytes);
+    if let Ok(decoded) = decoded {
+        let ordinary = ordinary.expect("RPC decoder accepted invalid JSON");
+        assert!(ordinary.is_object());
+        if ordinary["type"] != "tool_execution_update" && ordinary["type"] != "message_start" {
+            assert_eq!(decoded, ordinary);
+        }
+    }
+    // Bounded real JSONL framing, without sockets, threads or environment access.
+    let mut input = std::io::Cursor::new(bytes);
+    let _ = read_frame(&mut input, 65536);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

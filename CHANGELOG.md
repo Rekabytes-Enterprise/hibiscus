@@ -4,6 +4,22 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-11-02
+
+### Added
+
+- Six bounded native parser fuzz targets, curated malformed inputs and a digest-pinned ClusterFuzzLite workflow for pull requests and scheduled campaigns. Normal builds have no fuzzing dependency.
+
+### Fixed
+
+- Preserve SSE frame order with mixed LF/CRLF delimiters regardless of network chunk boundaries, and avoid repeatedly shifting the remaining stream buffer.
+- Reject malformed Anthropic content blocks and mismatched text deltas with normal errors instead of panicking.
+
+### Changed
+
+- Share the application entry point through a library while keeping native modules private; expose fuzz adapters only through an explicit development feature.
+- Share one workspace lockfile between native and fuzz builds so dependency auditing and updates cover both packages.
+
 ## [0.3.14] - 2026-11-02
 
 ### Changed

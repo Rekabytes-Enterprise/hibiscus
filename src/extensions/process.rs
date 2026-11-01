@@ -88,7 +88,14 @@ pub(super) async fn invoke(
         }
         .into());
     }
-    let mut reply: Reply = serde_json::from_slice(&output.stdout).map_err(|_| {
+    decode_reply(&output.stdout, id)
+}
+
+fn decode_reply(bytes: &[u8], id: &str) -> Result<Reply> {
+    if bytes.len() > process::OUTPUT_LIMIT {
+        return Err("Extension reply exceeds 64 KiB".into());
+    }
+    let mut reply: Reply = serde_json::from_slice(bytes).map_err(|_| {
         "Extension must write one valid JSON reply to stdout; diagnostics belong on stderr"
     })?;
     if reply.api_version != 1 || reply.id != id {
@@ -103,4 +110,16 @@ fn clean(text: &str) -> String {
         .chars()
         .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
         .collect()
+}
+
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_reply(bytes: &[u8]) {
+    if let Ok(reply) = decode_reply(bytes, "fuzz-call") {
+        assert_eq!(reply.api_version, 1);
+        assert_eq!(reply.id, "fuzz-call");
+        assert!(!reply
+            .text
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\t')));
+    }
 }

@@ -1,0 +1,10 @@
+.git
+/target
+/fuzz/target
+/fuzz/artifacts
+/fuzz/generated-corpus
+.env
+.env.*
+**/.hibiscus
+**/.codex-attachments
+__pycache__
