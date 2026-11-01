@@ -1,0 +1,53 @@
+name: OpenSSF Scorecard
+
+on:
+  push:
+    # Published Scorecard results must come from the default branch.
+    branches:
+      - main
+  schedule:
+    - cron: '21 2 * * 1'
+
+permissions: read-all
+
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    name: Repository security practices
+    if: github.repository == 'Rekabytes-Enterprise/hibiscus'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: read
+      pull-requests: read
+      statuses: read
+      security-events: read
+      # Authenticates published results to the OpenSSF service.
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Analyze and publish Scorecard results
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: scorecard-results.json
+          results_format: json
+          publish_results: true
+
+      - name: Retain detailed results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openssf-scorecard-results
+          path: scorecard-results.json
+          if-no-files-found: warn
+          retention-days: 5
