@@ -102,3 +102,12 @@ no shared Cargo cache and receives no release token. Workflow analysis can still
 flag manual-dispatch source as potentially cache-poisoning because the source
 verification crosses reusable-job outputs. Keep that trust assumption visible;
 do not suppress a query or dismiss an alert solely to obtain a clean report.
+
+The first full protected-branch Python scan also flagged evaluation configuration
+as clear-text credential storage. `apiKeyEnv` contains the validated environment
+variable name, not its value. The evaluation runner supplies the value only in the
+agent process environment. The real loopback execution regression checks that the
+configuration stores only that name with mode 0600, and that no retained run file
+or report contains the synthetic credential. This finding needs that data-flow
+context when triaged; renaming the field or excluding the file would hide the
+question rather than verify the boundary.
