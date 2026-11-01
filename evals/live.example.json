@@ -1,0 +1,34 @@
+{
+  "formatVersion": 1,
+  "id": "live-example-v1",
+  "mode": "live",
+  "suite": "suite.json",
+  "repetitions": 2,
+  "limits": {
+    "maxSteps": 8,
+    "timeoutSeconds": 120,
+    "checkTimeoutSeconds": 5
+  },
+  "provider": {
+    "id": "evaluation",
+    "api": "responses",
+    "baseUrl": "https://configure-your-provider.example/v1",
+    "apiKeyEnv": "HIBISCUS_EVAL_API_KEY",
+    "model": {
+      "id": "configure-your-model",
+      "maxTokens": 4096
+    }
+  },
+  "variants": [
+    {
+      "id": "baseline",
+      "instructions": "variants/baseline.md",
+      "extensions": []
+    },
+    {
+      "id": "candidate",
+      "instructions": "variants/candidate.md",
+      "extensions": []
+    }
+  ]
+}

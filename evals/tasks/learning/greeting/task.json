@@ -1,0 +1,40 @@
+{
+  "id": "greeting",
+  "split": "learning",
+  "prompt": "Fix greet(name) so leading and trailing whitespace is stripped and blank names produce Hello, friend!. Preserve named greetings and run the visible tests.",
+  "changed": [
+    "app.py"
+  ],
+  "preserved": [
+    "notes.txt",
+    "test_app.py"
+  ],
+  "offline": [
+    [
+      {
+        "name": "read",
+        "arguments": {
+          "path": "app.py"
+        }
+      }
+    ],
+    [
+      {
+        "name": "edit",
+        "arguments": {
+          "path": "app.py",
+          "oldText": "def greet(name):\n    return f\"Hello, {name}!\"\n",
+          "newText": "def greet(name):\n    name = name.strip() or \"friend\"\n    return f\"Hello, {name}!\"\n"
+        }
+      }
+    ],
+    [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "python3 -B -m unittest -v"
+        }
+      }
+    ]
+  ]
+}
