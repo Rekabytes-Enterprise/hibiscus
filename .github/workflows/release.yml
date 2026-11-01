@@ -27,11 +27,16 @@ jobs:
   verify:
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
+          ref: ${{ inputs.release_tag || github.sha }}
           persist-credentials: false
+      - name: Freeze checked source
+        id: source
+        run: printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
@@ -74,7 +79,7 @@ jobs:
     permissions:
       contents: read
     with:
-      source_ref: ${{ inputs.release_tag || github.ref }}
+      source_ref: ${{ needs.verify.outputs.source_commit }}
       target: x86_64-unknown-linux-musl
       runner: ubuntu-latest
       cache_transport: ${{ inputs.direct_upload || false }}
@@ -85,7 +90,7 @@ jobs:
     permissions:
       contents: read
     with:
-      source_ref: ${{ inputs.release_tag || github.ref }}
+      source_ref: ${{ needs.verify.outputs.source_commit }}
       target: aarch64-unknown-linux-musl
       runner: ubuntu-latest
       cache_transport: ${{ inputs.direct_upload || false }}
@@ -96,7 +101,7 @@ jobs:
     permissions:
       contents: read
     with:
-      source_ref: ${{ inputs.release_tag || github.ref }}
+      source_ref: ${{ needs.verify.outputs.source_commit }}
       target: x86_64-apple-darwin
       runner: macos-15-intel
       cache_transport: ${{ inputs.direct_upload || false }}
@@ -107,7 +112,7 @@ jobs:
     permissions:
       contents: read
     with:
-      source_ref: ${{ inputs.release_tag || github.ref }}
+      source_ref: ${{ needs.verify.outputs.source_commit }}
       target: aarch64-apple-darwin
       runner: macos-15
       cache_transport: ${{ inputs.direct_upload || false }}

@@ -87,6 +87,7 @@ class WorkflowPolicy(unittest.TestCase):
             self.assertIn('target: ' + target, block)
             self.assertIn('runner: ' + runner, block)
             self.assertIn('contents: read', block)
+            self.assertIn('source_ref: ${{ needs.verify.outputs.source_commit }}', block)
             self.assertIn('needs.' + name + '.outputs.sha256', source)
             self.assertIn('needs.' + name + '.outputs.cache_key', source)
 
