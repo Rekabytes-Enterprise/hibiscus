@@ -1,3 +1,4 @@
+raise SystemExit("Intentional merge-protection probe. Never merge this PR.")
 """Exercise the actual release boundary scripts without credentials or publication.
 
 This uses the fixed workflow indentation to extract shell blocks, not a YAML
