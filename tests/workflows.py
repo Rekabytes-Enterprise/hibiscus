@@ -116,6 +116,7 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertIn('test "v$version" = "$RELEASE_TAG"', source)
         self.assertIn("if: inputs.direct_upload && inputs.release_tag != ''", source)
         self.assertNotIn('contents: write', job(source, 'verify'))
+        self.assertIn("inputs.release_tag || (github.ref_type == 'tag' && github.ref) || github.sha", source)
 
 
 class ReleaseShell(unittest.TestCase):
@@ -168,6 +169,34 @@ class ReleaseShell(unittest.TestCase):
         for target, runner in [('x86_64-apple-darwin', 'ubuntu-latest'), ('$(touch injected)', 'ubuntu-latest')]:
             self.assertNotEqual(run(script, self.root, {'TARGET': target, 'BUILD_RUNNER': runner}).returncode, 0)
         self.assertFalse((self.root / 'injected').exists())
+
+    def test_annotated_tag_checkout_preserves_ref_for_exact_release_verification(self):
+        source = self.root / 'source'
+        checkout = self.root / 'checkout'
+        source.mkdir()
+        checkout.mkdir()
+        env = {'PATH': os.environ['PATH'], 'HOME': str(self.root)}
+        options = ['git', '-c', 'init.templateDir=', '-c', 'core.hooksPath=/dev/null',
+                   '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid']
+        def git(directory, *args):
+            return subprocess.check_output(options + list(args), cwd=directory,
+                                           env=env, text=True, stderr=subprocess.PIPE).strip()
+        git(source, 'init', '-q')
+        (source / 'Cargo.toml').write_text('[package]\nversion = "1.2.3"\n')
+        git(source, 'add', 'Cargo.toml')
+        git(source, 'commit', '-qm', 'fixture')
+        git(source, 'tag', '-a', 'v1.2.3', '-m', 'fixture release')
+        commit = git(source, 'rev-parse', 'HEAD')
+        git(checkout, 'init', '-q')
+        git(checkout, 'fetch', '--no-tags', '--depth=1', str(source), commit)
+        git(checkout, 'checkout', '--detach', '-q', 'FETCH_HEAD')
+        verification = shell(RELEASE, 'Check release tag matches Cargo version')
+        self.assertNotEqual(run(verification, checkout, {'RELEASE_TAG': 'v1.2.3'}).returncode, 0)
+        git(checkout, 'fetch', '--no-tags', '--depth=1', str(source),
+            '+refs/tags/v1.2.3:refs/tags/v1.2.3')
+        result = run(verification, checkout, {'RELEASE_TAG': 'v1.2.3'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(commit, result.stdout)
 
     def test_actual_packaging_generates_digest_and_run_bound_cache_key(self):
         target = TARGETS['macos_arm64'][0]
