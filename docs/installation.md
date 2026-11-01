@@ -23,7 +23,43 @@ Use the installer from the versioned tag so its behavior matches the release:
 curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.11/install.sh | HIBISCUS_VERSION=v0.3.11 sh
 ```
 
-A dev push does not publish release assets. The GitHub release workflow builds all four platform archives and `SHA256SUMS` before publication.
+A dev push does not publish release assets. The GitHub release workflow builds all four platform archives and `SHA256SUMS`. The staged provenance workflow signs and verifies the archive identities before uploading its bundle with a new release; this support does not alter existing published releases.
+
+## Optional provenance verification
+
+The normal installer and `hibiscus update` verify SHA-256 checksums. They do not
+verify publisher signatures or build origin. This staged rollout keeps their
+current dependencies and download size unchanged.
+
+For releases containing `hibiscus-provenance.sigstore.json`, you can explicitly
+verify a downloaded archive before installing or running it. Use a trusted
+source checkout, Python 3 and GitHub CLI. The verifier is tested with GitHub CLI
+2.103.3; it checks the local bundle without requiring a GitHub account, login,
+Pi or Node. No verifier is downloaded by normal installation.
+
+Download the archive for your platform and its bundle into `downloads/`, then
+use the tag's expected commit from an independently reviewed Git tag or GitHub
+source view. Do not take the expected commit only from the unverified bundle.
+
+```sh
+python3 scripts/release_provenance.py verify \
+  --archive downloads/hibiscus-aarch64-apple-darwin.tar.gz \
+  --bundle downloads/hibiscus-provenance.sigstore.json \
+  --tag vMAJOR.MINOR.PATCH --source-commit EXPECTED_40_HEX_TAG_COMMIT
+```
+
+For a draft rebuilt by the current protected workflow, also pass its independently
+reviewed execution identity, for example `--workflow-ref refs/heads/dev
+--workflow-commit EXPECTED_40_HEX_WORKFLOW_COMMIT`. The tag's actual source and
+this workflow revision can differ. The policy verifies both, as well as archive
+digests, certificate identity/issuer, hosted-runner identity and signed metadata.
+It never executes the downloaded archive. Errors or missing provenance stop the
+explicit verification command without falling back to checksums.
+
+Releases published before the provenance rollout have no such bundle and remain
+checksum-only; older tags/assets are not retroactively changed. A valid bundle establishes
+origin and byte integrity, not that the code is vulnerability-free. See the
+[provenance design and trust policy](development/release-provenance.md).
 
 ## Install with npx
 
@@ -48,6 +84,6 @@ The npm package is published separately from GitHub release assets; check the pa
 
 Publication needs a separate explicit owner request. Version references in Cargo.toml, Cargo.lock, package.json, this guide and the installer fixture must agree. Prepare a bump with `sh scripts/bump-version.sh 0.3.11`, substituting the intended next version, then review and verify locally. A Git tag, GitHub Release and npm publication are separate events.
 
-When explicitly authorized, tag the exact approved release commit with an annotated tag such as `v0.3.11`. The release workflow verifies the tag/version, tests, builds platform archives and publishes checksum-verified assets. The npm package must be published separately at the matching version. Never force-move an existing tag to replace a release.
+When explicitly authorized, tag the exact approved release commit with an annotated tag such as `v0.3.11`. The release workflow verifies the tag/version, tests, builds platform archives, verifies signed provenance and uploads assets through the isolated publisher. Rebuilds require an existing draft; already published releases are not overwritten. The npm package must be published separately at the matching version. Never force-move an existing tag to replace a release.
 
 Release workflows keep compilation read-only and verify compiler hashes before a separate publisher uploads archives. See [workflow security and recovery](development/release-workflows.md).
