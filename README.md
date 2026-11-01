@@ -23,6 +23,7 @@
   <a href="#your-everyday-commands">Commands</a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="SECURITY.md">Security</a> ·
   <a href="LICENSE">MIT license</a>
 </p>
 
@@ -40,7 +41,7 @@ Chat, switch models, pick up an earlier session, and share screenshots—without
 **Linux, WSL, and macOS · x86-64 and ARM64**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.9/install.sh | HIBISCUS_VERSION=v0.3.9 sh
+curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.10/install.sh | HIBISCUS_VERSION=v0.3.10 sh
 ```
 
 Alternatively, install through **npx** (requires Node.js 22.19+ and npm):

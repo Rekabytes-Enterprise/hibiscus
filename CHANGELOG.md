@@ -4,6 +4,15 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-11-01
+
+### Changed
+
+- Analyze Rust, JavaScript/TypeScript, Python and GitHub Actions with pinned CodeQL on PRs, protected-branch pushes and a weekly schedule; verify actual Rust extraction and finding detection with a disposable fixture.
+- Require passing CI, RustSec and CodeQL checks on both development and release branches, while preserving PR, thread-resolution, deletion and force-push protections without a hidden bypass.
+- Reject unmerged release source before checkout or compilation; compiler helpers accept only frozen commit SHAs and never run on PR events.
+- Publish a security reporting policy with private GitHub reports, latest-release fixes and accurate local execution and checkpoint limits.
+
 ## [0.3.9] - 2026-11-01
 
 ### Changed

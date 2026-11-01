@@ -224,6 +224,13 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(len(fixture.requests), 4)
         self.assertIsNone(result["fixtureProfile"])
         self.assertNotIn("SYNTHETIC-LIVE-BRANCH", json.dumps(result))
+        config_path = self.root / "run/app/config.json"
+        stored = json.loads(config_path.read_text())
+        self.assertEqual(stored["providers"][0]["apiKeyEnv"], "HIBISCUS_EVAL_API_KEY")
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+        for path in (self.root / "run").rglob("*"):
+            if path.is_file():
+                self.assertNotIn(b"SYNTHETIC-LIVE-BRANCH", path.read_bytes(), str(path))
 
     def test_bounded_process_caps_output_and_completed_leader_descendants(self):
         root = self.root / "output"
