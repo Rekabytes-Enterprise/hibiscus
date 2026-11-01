@@ -18,7 +18,7 @@ All notable changes to Hibiscus are documented here.
 ### Changed
 
 - Share the application entry point through a library while keeping native modules private; expose fuzz adapters only through an explicit development feature.
-- Keep the fuzz package's native dependency lock synchronized during version bumps.
+- Share one workspace lockfile between native and fuzz builds so dependency auditing and updates cover both packages.
 
 ## [0.3.14] - 2026-11-02
 

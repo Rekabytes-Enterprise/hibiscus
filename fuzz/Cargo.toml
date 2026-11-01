@@ -11,8 +11,6 @@ cargo-fuzz = true
 libfuzzer-sys = "=0.4.12"
 hibiscus = { path = "..", features = ["fuzzing"] }
 
-[workspace]
-members = ["."]
 
 [[bin]]
 name = "extension_manifest"
