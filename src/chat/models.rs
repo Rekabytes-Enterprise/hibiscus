@@ -233,7 +233,9 @@ pub(crate) fn choose_thinking<R: BufRead>(
     };
     let Some(index) = selected else { return Ok(()) };
     if Some(index) == active {
-        writeln!(output, "Already using {} thinking.", levels[index])?;
+        if !output.is_full() {
+            writeln!(output, "Already using {} thinking.", levels[index])?;
+        }
         return Ok(());
     }
     rpc.request(
@@ -260,7 +262,9 @@ pub(crate) fn choose_thinking<R: BufRead>(
     if !levels.contains(&level) {
         return Err("Runtime returned an unsupported thinking level".into());
     }
-    writeln!(output, "Thinking level: {level} (Pi).")?;
+    if !output.is_full() {
+        writeln!(output, "Thinking level: {level}.")?;
+    }
     Ok(())
 }
 

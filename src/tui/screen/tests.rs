@@ -213,15 +213,7 @@ fn pi_stats_are_confirmed_not_inferred_and_goal_keeps_its_right_edge() {
 }
 
 #[test]
-fn narrow_header_and_footer_keep_only_complete_fields() {
-    assert_eq!(
-        mobile_header("openai-codex/gpt-6-sol", Some("medium"), "01a0e1abc", 42),
-        "gpt-6-sol · medium · 01a0e1abc"
-    );
-    assert_eq!(
-        mobile_header("openai-codex/gpt-6-sol", Some("medium"), "session-id", 15),
-        "gpt-6-sol"
-    );
+fn narrow_footer_keeps_only_complete_fields() {
     let usage = SessionUsage::from_runtime(&serde_json::json!({
         "contextUsage":{"tokens":3900,"contextWindow":272000,"percent":1.4},
         "tokens":{"input":19000,"output":9000},"cost":0.62

@@ -10,7 +10,7 @@ Use `hibiscus --cli` to start directly in CLI, or `hibiscus --cli --continue` to
 
 Both welcome layouts show the command for the other view. The `/login` tip and TUI command suggestion disappear when any configured provider has credentials. You can still type `/login` to add or replace credentials. Credential presence does not verify remote access.
 
-CLI starts with a plain text name/version, model, workspace and command hints. The large HIBI logo and bordered welcome panel appear only in TUI. CLI edits multiline drafts in normal scrollback, streams responses and supports Esc to stop an active run. `/models` uses a numbered list in CLI. The docked composer, staged images, transcript selection and live steering/followup controls belong to TUI. `/login` and `/logout` temporarily open the native fullscreen dialogs, then return to CLI.
+CLI starts with a plain text name/version, model, workspace and command hints. The large HIBI logo and bordered header panel appear only in TUI. CLI edits multiline drafts in normal scrollback, streams responses and supports Esc to stop an active run. `/models` uses a numbered list in CLI. The docked composer, staged images, transcript selection and live steering/followup controls belong to TUI. `/login` and `/logout` temporarily open the native fullscreen dialogs, then return to CLI.
 
 The CLI welcome uses two lines. Each user turn has one raspberry `hibi` label; assistant updates and tool results follow beneath it. A running tool occupies one temporary row, replaced on completion by a green success row or a red failure row. Consecutive successful reads share a row. Plain `NO_COLOR` output prints completed rows without cursor rewriting.
 
@@ -91,3 +91,5 @@ Fullscreen color mode uses the aubergine background and raspberry highlights. CL
 Native runtime diagnostics are sanitized and bounded. Provider bodies and credentials are not printed into the transcript. A diagnostic does not imply successful authentication or run completion. Initial startup or terminal I/O errors may exit when a usable UI cannot be established.
 
 Automated PTY tests check bytes, keyboard behavior and reconstructed views. They do not prove flicker-free rendering, clipboard success or perfect Unicode alignment in every physical terminal. Report the terminal, OS and minimal reproduction without sharing private conversations or credentials.
+
+The fullscreen HIBI banner stays pinned above conversations, including resumed chats. Its panel shows the current thinking level beside model/workspace/session information. It compacts on small terminals so dialogs and the composer remain usable; only the conversation body scrolls.
