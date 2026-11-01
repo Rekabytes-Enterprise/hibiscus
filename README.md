@@ -14,9 +14,7 @@
   <a href="https://github.com/Rekabytes-Enterprise/hibiscus/actions/workflows/ci.yml?query=branch%3Adev"><img src="https://img.shields.io/github/actions/workflow/status/Rekabytes-Enterprise/hibiscus/ci.yml?branch=dev&amp;style=flat-square&amp;label=dev%20CI" alt="CI status on dev"></a>
   <a href="https://github.com/Rekabytes-Enterprise/hibiscus/releases"><img src="https://img.shields.io/github/downloads/Rekabytes-Enterprise/hibiscus/total?style=flat-square&amp;color=ec4a7d&amp;label=release%20downloads" alt="Total GitHub release asset downloads"></a>
   <a href="docs/installation.md"><img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-63304b?style=flat-square" alt="Platforms: Linux and macOS"></a>
-  <!-- Enable after the first verified published scan; see docs/security-scorecard.md.
   <a href="https://scorecard.dev/viewer/?uri=github.com/Rekabytes-Enterprise/hibiscus"><img src="https://api.scorecard.dev/projects/github.com/Rekabytes-Enterprise/hibiscus/badge" alt="OpenSSF Scorecard"></a>
-  -->
 </p>
 
 <p align="center">
