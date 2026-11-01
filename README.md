@@ -98,3 +98,5 @@ node tests/npm-install.mjs
 ```
 
 Provider integration tests use local HTTP servers and synthetic keys, not real provider accounts. See [architecture](docs/architecture.md), [development](docs/development.md) and [contribution instructions](CONTRIBUTING.md). Pull requests target `dev`.
+
+The development-only [coding evaluation suite](docs/evaluations.md) compares baseline and candidate instructions or extension implementations in fresh workspaces, with independent file/test checks and versioned JSON reports. Its default provider is an offline fixture; live evaluations require explicit configuration and `--live`.

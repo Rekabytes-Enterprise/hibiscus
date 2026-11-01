@@ -1,0 +1,35 @@
+{
+  "formatVersion": 1,
+  "id": "offline-v1",
+  "mode": "offline",
+  "suite": "suite.json",
+  "repetitions": 2,
+  "limits": {
+    "maxSteps": 8,
+    "timeoutSeconds": 20,
+    "checkTimeoutSeconds": 5
+  },
+  "provider": {
+    "id": "evaluation",
+    "api": "responses",
+    "model": {
+      "id": "synthetic-model",
+      "contextWindow": 128000,
+      "maxTokens": 1024,
+      "reasoning": false,
+      "images": false
+    }
+  },
+  "variants": [
+    {
+      "id": "baseline",
+      "instructions": "variants/baseline.md",
+      "extensions": []
+    },
+    {
+      "id": "candidate",
+      "instructions": "variants/candidate.md",
+      "extensions": []
+    }
+  ]
+}

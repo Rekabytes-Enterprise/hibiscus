@@ -1,0 +1,9 @@
+{
+  "formatVersion": 1,
+  "id": "coding-v1",
+  "tasks": [
+    "tasks/learning/greeting/task.json",
+    "tasks/selection/slug/task.json",
+    "tasks/held_out/totals/task.json"
+  ]
+}

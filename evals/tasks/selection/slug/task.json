@@ -1,0 +1,40 @@
+{
+  "id": "slug",
+  "split": "selection",
+  "prompt": "Fix slug(text): lowercase the text, trim outer whitespace, and join whitespace-separated words with a single hyphen. Preserve punctuation. Run the visible tests and preserve notes.txt.",
+  "changed": [
+    "app.py"
+  ],
+  "preserved": [
+    "notes.txt",
+    "test_app.py"
+  ],
+  "offline": [
+    [
+      {
+        "name": "read",
+        "arguments": {
+          "path": "app.py"
+        }
+      }
+    ],
+    [
+      {
+        "name": "edit",
+        "arguments": {
+          "path": "app.py",
+          "oldText": "def slug(text):\n    return text.lower().replace(\" \", \"-\")\n",
+          "newText": "def slug(text):\n    return \"-\".join(text.lower().split())\n"
+        }
+      }
+    ],
+    [
+      {
+        "name": "bash",
+        "arguments": {
+          "command": "python3 -B -m unittest -v"
+        }
+      }
+    ]
+  ]
+}
