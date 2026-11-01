@@ -30,13 +30,35 @@ jobs:
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
     steps:
+      - name: Authorize merged release source
+        id: authorize
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name) || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ || "$SOURCE_REF" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          commit=$(gh api "repos/$GH_REPO/commits/$SOURCE_REF" --jq .sha)
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          accepted=false
+          for branch in main dev; do
+            state=$(gh api "repos/$GH_REPO/compare/$branch...$commit" --jq .status)
+            case "$state" in identical|behind) accepted=true ;; esac
+          done
+          test "$accepted" = true
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref) || github.sha }}
           persist-credentials: false
       - name: Freeze checked source
         id: source
-        run: printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          AUTHORIZED_COMMIT: ${{ steps.authorize.outputs.commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"
+          printf 'commit=%s\n' "$AUTHORIZED_COMMIT" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1

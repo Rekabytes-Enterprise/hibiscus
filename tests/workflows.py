@@ -47,6 +47,51 @@ def run(script, directory, env=None):
 
 
 class WorkflowPolicy(unittest.TestCase):
+    def test_required_checks_cover_both_branches_without_secret_pr_execution(self):
+        paths = ['ci.yml', 'dependency-security.yml', 'codeql.yml']
+        for name in paths:
+            text = (ROOT / '.github/workflows' / name).read_text()
+            for event in ['push', 'pull_request']:
+                section = re.search(r'^  ' + event + r':\n(.*?)(?=^  \w|\npermissions:)',
+                                    text, re.M | re.S)[1]
+                self.assertIn('dev', section)
+                self.assertIn('main', section)
+                self.assertNotIn('paths:', section)
+                self.assertNotIn('paths-ignore:', section)
+            for unsafe in ['pull_request_target:', 'secrets.', 'secrets: inherit',
+                           'contents: write', 'id-token: write']:
+                self.assertNotIn(unsafe, text)
+
+    def test_codeql_uses_isolated_upload_permissions_and_actual_rust_probe(self):
+        text = (ROOT / '.github/workflows/codeql.yml').read_text()
+        self.assertIn('\npermissions:\n  contents: read\n', text)
+        self.assertNotIn('security-events:', text.split('\njobs:')[0])
+        self.assertEqual(text.count('security-events: write'), 1)
+        self.assertIn('language: [rust, javascript-typescript, python, actions]', text)
+        for required in ['build-mode: none', 'tools: linked', 'queries: security-extended',
+                         'wait-for-processing: true', 'python3 scripts/verify-codeql.py']:
+            self.assertIn(required, text)
+        self.assertNotIn('continue-on-error:', text)
+        self.assertNotIn('upload: never', text)
+
+    def test_branch_rules_have_no_bypass_and_preserve_merge_protections(self):
+        rules = json.loads((ROOT / '.github/security/branch-rules.json').read_text())
+        self.assertEqual(rules['enforcement'], 'active')
+        self.assertEqual(rules['bypass_actors'], [])
+        self.assertEqual(set(rules['conditions']['ref_name']['include']),
+                         {'refs/heads/main', 'refs/heads/dev'})
+        self.assertEqual(rules['conditions']['ref_name']['exclude'], [])
+        by_type = {rule['type']: rule.get('parameters', {}) for rule in rules['rules']}
+        self.assertTrue({'deletion', 'non_fast_forward', 'pull_request',
+                         'required_status_checks'} <= by_type.keys())
+        self.assertTrue(by_type['pull_request']['required_review_thread_resolution'])
+        checks = by_type['required_status_checks']
+        self.assertTrue(checks['strict_required_status_checks_policy'])
+        self.assertFalse(checks['do_not_enforce_on_create'])
+        self.assertEqual(len(checks['required_status_checks']), 8)
+        self.assertTrue(all(c['integration_id'] == 15368
+                            for c in checks['required_status_checks']))
+
     def test_all_external_actions_are_immutable(self):
         for path in (ROOT / '.github/workflows').glob('*.yml'):
             for line in path.read_text().splitlines():
@@ -117,6 +162,9 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertIn("if: inputs.direct_upload && inputs.release_tag != ''", source)
         self.assertNotIn('contents: write', job(source, 'verify'))
         self.assertIn("inputs.release_tag || (github.ref_type == 'tag' && github.ref) || github.sha", source)
+        self.assertLess(source.index('name: Authorize merged release source'),
+                        source.index('uses: actions/checkout@'))
+        self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', source)
 
 
 class ReleaseShell(unittest.TestCase):
@@ -134,6 +182,48 @@ class ReleaseShell(unittest.TestCase):
 
     def test_exact_four_receipts_pass(self):
         self.assertEqual(run(self.verify, self.root, self.env).returncode, 0)
+
+    def test_release_compiler_accepts_only_a_frozen_commit(self):
+        script = shell(BUILD, 'Validate frozen source')
+        self.assertEqual(run(script, self.root, {'SOURCE_REF': 'a' * 40}).returncode, 0)
+        for value in ['', 'main', 'refs/pull/1/head', 'v1.2.3', 'a' * 39,
+                      'a' * 41, '$(touch injected)', 'a' * 40 + '\nmain']:
+            self.assertNotEqual(run(script, self.root, {'SOURCE_REF': value}).returncode, 0)
+        self.assertFalse((self.root / 'injected').exists())
+        self.assertIn("if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'",
+                      job(BUILD.read_text(), 'build'))
+
+    def test_release_source_requires_merged_ancestry_and_available_evidence(self):
+        directory = self.root / 'bin'
+        directory.mkdir()
+        gh = directory / 'gh'
+        gh.write_text('''#!/usr/bin/env python3
+import os,sys
+if os.environ.get('API_FAIL') == 'true': sys.exit(1)
+route = sys.argv[2]
+if '/commits/' in route: print('a' * 40)
+elif '/compare/main...' in route: print(os.environ['MAIN_STATE'])
+elif '/compare/dev...' in route: print(os.environ['DEV_STATE'])
+else: sys.exit(2)
+''')
+        gh.chmod(0o755)
+        script = shell(RELEASE, 'Authorize merged release source')
+        output = self.root / 'authorized-output'
+        env = {'PATH': str(directory) + os.pathsep + os.environ['PATH'],
+               'SOURCE_REF': 'v1.2.3', 'GH_REPO': 'fixture/repo',
+               'GITHUB_OUTPUT': str(output)}
+        for main, dev in [('identical', 'behind'), ('ahead', 'identical'),
+                          ('behind', 'diverged')]:
+            result = run(script, self.root, dict(env, MAIN_STATE=main, DEV_STATE=dev))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('commit=' + 'a' * 40, output.read_text())
+            output.unlink()
+        for extra in [{'MAIN_STATE': 'ahead', 'DEV_STATE': 'diverged'},
+                      {'MAIN_STATE': 'unknown', 'DEV_STATE': 'unknown'},
+                      {'MAIN_STATE': 'identical', 'DEV_STATE': 'identical', 'API_FAIL': 'true'},
+                      {'MAIN_STATE': 'identical', 'DEV_STATE': 'identical', 'SOURCE_REF': 'main'}]:
+            self.assertNotEqual(run(script, self.root, dict(env, **extra)).returncode, 0)
+            self.assertFalse(output.exists())
 
     def test_modified_archive_fails(self):
         next((self.root / 'dist').iterdir()).write_bytes(b'tampered')
