@@ -67,7 +67,7 @@ run_case() {
 run_case Linux x86_64 x86_64-unknown-linux-musl latest existing
 run_case Linux aarch64 aarch64-unknown-linux-musl latest native
 run_case Darwin x86_64 x86_64-apple-darwin latest native
-run_case Darwin arm64 aarch64-apple-darwin 0.3.12 missing
+run_case Darwin arm64 aarch64-apple-darwin 0.3.13 missing
 run_case Darwin arm64 aarch64-apple-darwin latest checksum
 run_case Linux x86_64 x86_64-unknown-linux-musl latest download
 printf 'native installer tests passed\n'
