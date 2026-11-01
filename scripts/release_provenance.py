@@ -24,8 +24,9 @@ from typing import Union
 REPOSITORY = "Rekabytes-Enterprise/hibiscus"
 WORKFLOW = f"{REPOSITORY}/.github/workflows/release.yml"
 PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
-BUILD_TYPE = (f"https://github.com/{REPOSITORY}/blob/main/"
-              "docs/development/release-provenance.md#build-type-v1")
+BUILD_TYPE = "https://actions.github.io/buildtypes/workflow/v1"
+REPOSITORY_ID = "1385080995"
+OWNER_ID = "314102738"
 TARGETS = ("aarch64-apple-darwin", "aarch64-unknown-linux-musl",
            "x86_64-apple-darwin", "x86_64-unknown-linux-musl")
 ARCHIVES = tuple(f"hibiscus-{target}.tar.gz" for target in TARGETS)
@@ -112,6 +113,9 @@ def build_context(release, source_sha256, event, run_id, attempt):
 
 def context_from_env():
     require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY, "Wrong repository")
+    require(os.environ.get("GITHUB_REPOSITORY_ID") == REPOSITORY_ID and
+            os.environ.get("GITHUB_REPOSITORY_OWNER_ID") == OWNER_ID, "Wrong repository ownership")
+    require(os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "Untrusted runner")
     release = expected_release(os.environ["RELEASE_TAG"], os.environ["SOURCE_COMMIT"],
                                os.environ["GITHUB_REF"], os.environ["GITHUB_WORKFLOW_SHA"])
     require(os.environ["GITHUB_WORKFLOW_REF"] == f"{WORKFLOW}@{release.workflow_ref}",
@@ -127,14 +131,18 @@ def predicate(context: BuildContext) -> dict:
     return {
         "buildDefinition": {
             "buildType": BUILD_TYPE,
-            "externalParameters": {"releaseTag": release.tag, "targets": list(TARGETS)},
-            "internalParameters": {"github": {"event": context.event, "runId": context.run_id,
-                                               "runAttempt": context.attempt}},
+            "externalParameters": {"workflow": {"ref": release.workflow_ref,
+                "repository": f"https://github.com/{REPOSITORY}", "path": ".github/workflows/release.yml"}},
+            "internalParameters": {
+                "github": {"event_name": context.event, "repository_id": REPOSITORY_ID,
+                           "repository_owner_id": OWNER_ID, "runner_environment": "github-hosted"},
+                "hibiscus": {"releaseTag": release.tag, "targets": list(TARGETS),
+                             "runId": context.run_id, "runAttempt": context.attempt}},
             "resolvedDependencies": [
-                {"name": "source", "uri": f"{source_uri}@refs/tags/{release.tag}",
-                 "digest": {"gitCommit": release.source_commit}},
                 {"name": "workflow", "uri": f"{source_uri}@{release.workflow_ref}",
-                 "digest": {"gitCommit": release.workflow_commit}}]},
+                 "digest": {"gitCommit": release.workflow_commit}},
+                {"name": "source", "uri": f"{source_uri}@refs/tags/{release.tag}",
+                 "digest": {"gitCommit": release.source_commit}}]},
         "runDetails": {
             "builder": {"id": f"https://github.com/{WORKFLOW}@{release.workflow_ref}"},
             "metadata": {"invocationId": f"https://github.com/{REPOSITORY}/actions/runs/{context.run_id}/attempts/{context.attempt}"},
@@ -147,15 +155,17 @@ def context_from_predicate(value):
         definition = value["buildDefinition"]
         dependencies = definition["resolvedDependencies"]
         require(isinstance(dependencies, list) and len(dependencies) == 2, "Invalid source dependencies")
-        release_tag = definition["externalParameters"]["releaseTag"]
+        internal = definition["internalParameters"]
+        release_tag = internal["hibiscus"]["releaseTag"]
         prefix = f"git+https://github.com/{REPOSITORY}@"
-        workflow_uri = dependencies[1]["uri"]
+        workflow_uri = dependencies[0]["uri"]
         require(isinstance(workflow_uri, str) and workflow_uri.startswith(prefix), "Wrong workflow repository")
-        release = expected_release(release_tag, dependencies[0]["digest"]["gitCommit"],
-                                   workflow_uri[len(prefix):], dependencies[1]["digest"]["gitCommit"])
-        github = definition["internalParameters"]["github"]
+        release = expected_release(release_tag, dependencies[1]["digest"]["gitCommit"],
+                                   workflow_uri[len(prefix):], dependencies[0]["digest"]["gitCommit"])
+        github = internal["github"]
+        hibiscus = internal["hibiscus"]
         context = build_context(release, value["runDetails"]["byproducts"][0]["digest"]["sha256"],
-                                github["event"], github["runId"], github["runAttempt"])
+                                github["event_name"], hibiscus["runId"], hibiscus["runAttempt"])
         require(predicate(context) == value, "Unexpected provenance claims")
         return context
     except (KeyError, IndexError, TypeError) as error:

@@ -128,14 +128,6 @@ jobs:
           test "v$version" = "$RELEASE_TAG"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
           git show --no-patch --format='Release source: %H' HEAD
-      - name: Require an existing draft for release rebuilds
-        if: inputs.release_tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          test -n "$RELEASE_TAG"
-          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
       # This job never runs repository programs. Its receipt cannot be changed by build/test code.
       - name: Package authorized source snapshot
         id: snapshot
@@ -892,14 +884,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           DIRECT_UPLOAD: ${{ inputs.direct_upload || false }}
+          REBUILD: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
           (cd dist && shasum -a 256 *.tar.gz > SHA256SUMS)
-          if [ "$DIRECT_UPLOAD" = true ]; then
-            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          if [ "$DIRECT_UPLOAD" = true ] || [ "$REBUILD" = true ]; then
+            draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+            test "$draft" = true
             gh release upload "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --clobber
           elif gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+            draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+            test "$draft" = true
             gh release upload "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --clobber
           else
             gh release create "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --draft --verify-tag --generate-notes --title "$RELEASE_TAG"

@@ -76,11 +76,14 @@ authorized draft tag. Existing published tags/assets stay immutable.
 
 ## Build type v1
 
-The predicate uses SLSA provenance v1 with this document's `#build-type-v1` URI as
-its custom build type. `externalParameters` contains the immutable release tag
-and supported targets. The `source` resolved dependency is the compiled tag's
-Git commit; the `workflow` dependency is the executing workflow's Git commit and
-ref. `runDetails` records the signer workflow, invocation and verified source
+The predicate uses SLSA provenance v1 and GitHub's supported
+[`https://actions.github.io/buildtypes/workflow/v1`](https://github.com/actions/buildtypes/tree/main/workflow/v1)
+build type. `externalParameters.workflow` identifies the executing repository,
+workflow path and ref. Required internal GitHub parameters bind the numeric
+repository/owner IDs, event and hosted runner. `internalParameters.hibiscus`
+records the immutable release tag, supported targets and run/attempt. The first
+resolved dependency is the executing workflow commit/ref; the second is the
+actual compiled release source. Both are required and checked independently. `runDetails` records the signer workflow, invocation and verified source
 archive SHA-256. These are builder claims authenticated by the signature. The
 certificate's immutable identity claims are checked separately by GitHub CLI.
 
@@ -94,7 +97,7 @@ selected local archives must match their signed digests.
 ## Synthesis decision
 
 Two read-only designs were compared. The base is a separate GitHub attestor with
-a custom SLSA v1 predicate, adapted to the owner's staged-install choice. A
+a strictly checked SLSA v1 predicate using the supported GitHub workflow build type, adapted to the owner's staged-install choice. A
 shared policy script avoids duplicating identity rules in workflow literals and
 manual commands. Its fixed-workflow checkout changes the proposed entirely
 checkout-free attestor into one that executes only reviewed orchestration code;
@@ -135,3 +138,13 @@ only the newly observed result, without altering older tags or assets.
 - [Attestation action inputs](https://github.com/actions/attest/tree/1e69f48acb82d1966a394da916b4c1698aa569d6)
 - [GitHub CLI verification](https://cli.github.com/manual/gh_attestation_verify)
 - [SLSA provenance v1](https://slsa.dev/provenance/v1)
+
+## Hosted compatibility check
+
+The first draft signing run rejected the original custom build-type URI at
+GitHub's attestation storage boundary. The corrected schema follows the supported
+GitHub workflow build type, including its required workflow and internal GitHub
+parameters. Hibiscus-specific release claims remain in internal parameters and a
+separate source dependency. Offline tests cannot establish service acceptance;
+actual draft signing and recovery remain required. Never move a frozen tag to
+repair orchestration.

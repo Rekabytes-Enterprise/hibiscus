@@ -46,19 +46,35 @@ class ReleasePolicy(unittest.TestCase):
 
     def test_tag_source_and_signer_are_bound_to_one_commit(self):
         value = policy.predicate(self.context)
-        self.assertEqual(value['buildDefinition']['resolvedDependencies'][0], {
+        self.assertEqual(value['buildDefinition']['resolvedDependencies'][1], {
             'name': 'source', 'uri': 'git+https://github.com/Rekabytes-Enterprise/hibiscus@refs/tags/v1.2.3',
             'digest': {'gitCommit': 'a' * 40}})
         self.assertEqual(policy.context_from_predicate(value), self.context)
         self.check(self.output())
+
+    def test_supported_github_workflow_build_type_and_required_parameters(self):
+        value = policy.predicate(self.context)
+        definition = value['buildDefinition']
+        self.assertEqual(definition['buildType'], 'https://actions.github.io/buildtypes/workflow/v1')
+        self.assertEqual(definition['externalParameters'], {'workflow': {
+            'ref': 'refs/tags/v1.2.3', 'repository': 'https://github.com/Rekabytes-Enterprise/hibiscus',
+            'path': '.github/workflows/release.yml'}})
+        self.assertEqual(definition['internalParameters']['github'], {
+            'event_name': 'push', 'repository_id': '1385080995',
+            'repository_owner_id': '314102738', 'runner_environment': 'github-hosted'})
+        for key in ['buildType', 'externalParameters', 'internalParameters']:
+            output = self.output()
+            output[0]['verificationResult']['statement']['predicate']['buildDefinition'][key] = {}
+            with self.subTest(key=key), self.assertRaises(policy.InvalidProvenance):
+                self.check(output)
 
     def test_recovery_preserves_actual_old_source_and_new_workflow_identity(self):
         expected = policy.expected_release('v1.2.3', 'a' * 40, 'refs/heads/dev', 'b' * 40)
         context = policy.build_context(expected, 'c' * 64, 'workflow_dispatch', '456', '2')
         value = policy.predicate(context)
         deps = value['buildDefinition']['resolvedDependencies']
-        self.assertEqual(deps[0]['digest']['gitCommit'], 'a' * 40)
-        self.assertEqual(deps[1]['digest']['gitCommit'], 'b' * 40)
+        self.assertEqual(deps[1]['digest']['gitCommit'], 'a' * 40)
+        self.assertEqual(deps[0]['digest']['gitCommit'], 'b' * 40)
         self.check(self.output(context), expected)
         with self.assertRaises(policy.InvalidProvenance):
             self.check(self.output(context), policy.expected_release('v1.2.3', 'b' * 40, 'refs/heads/dev', 'b' * 40))
@@ -87,7 +103,9 @@ class ReleasePolicy(unittest.TestCase):
                 policy.build_context(self.release, 'c' * 64, 'push', value, '1')
 
     def environment(self):
-        return {'GITHUB_REPOSITORY': policy.REPOSITORY, 'RELEASE_TAG': 'v1.2.3',
+        return {'GITHUB_REPOSITORY': policy.REPOSITORY, 'GITHUB_REPOSITORY_ID': policy.REPOSITORY_ID,
+                'GITHUB_REPOSITORY_OWNER_ID': policy.OWNER_ID, 'RUNNER_ENVIRONMENT': 'github-hosted',
+                'RELEASE_TAG': 'v1.2.3',
                 'SOURCE_COMMIT': 'a' * 40, 'SOURCE_SHA256': 'c' * 64,
                 'GITHUB_REF': 'refs/tags/v1.2.3', 'GITHUB_SHA': 'a' * 40,
                 'GITHUB_WORKFLOW_SHA': 'a' * 40,
@@ -98,7 +116,9 @@ class ReleasePolicy(unittest.TestCase):
         with mock.patch.dict(os.environ, self.environment(), clear=True):
             self.assertEqual(policy.context_from_env(), self.context)
         for change in [{'GITHUB_REPOSITORY': 'other/repo'}, {'GITHUB_WORKFLOW_REF': 'other/workflow'},
-                       {'GITHUB_SHA': 'b' * 40}, {'GITHUB_EVENT_NAME': 'pull_request'}]:
+                       {'GITHUB_SHA': 'b' * 40}, {'GITHUB_EVENT_NAME': 'pull_request'},
+                       {'GITHUB_REPOSITORY_ID': '1'}, {'GITHUB_REPOSITORY_OWNER_ID': '1'},
+                       {'RUNNER_ENVIRONMENT': 'self-hosted'}]:
             with self.subTest(change=change), mock.patch.dict(os.environ, dict(self.environment(), **change), clear=True):
                 with self.assertRaises(policy.InvalidProvenance):
                     policy.context_from_env()
@@ -108,12 +128,12 @@ class ReleasePolicy(unittest.TestCase):
             value = self.output()
             predicate = value[0]['verificationResult']['statement']['predicate']
             definition = predicate['buildDefinition']
-            if field == 'tag': definition['externalParameters']['releaseTag'] = 'v1.2.4'
-            elif field == 'source': definition['resolvedDependencies'][0]['digest']['gitCommit'] = 'b' * 40
-            elif field == 'workflow': definition['resolvedDependencies'][1]['digest']['gitCommit'] = 'b' * 40
+            if field == 'tag': definition['internalParameters']['hibiscus']['releaseTag'] = 'v1.2.4'
+            elif field == 'source': definition['resolvedDependencies'][1]['digest']['gitCommit'] = 'b' * 40
+            elif field == 'workflow': definition['resolvedDependencies'][0]['digest']['gitCommit'] = 'b' * 40
             elif field == 'builder': predicate['runDetails']['builder']['id'] = 'https://github.com/attacker/workflow'
-            elif field == 'targets': definition['externalParameters']['targets'].pop()
-            elif field == 'uri': definition['resolvedDependencies'][0]['uri'] = 'git+https://github.com/other/repo'
+            elif field == 'targets': definition['internalParameters']['hibiscus']['targets'].pop()
+            elif field == 'uri': definition['resolvedDependencies'][1]['uri'] = 'git+https://github.com/other/repo'
             elif field == 'snapshot': predicate['runDetails']['byproducts'][0]['digest']['sha256'] = 'invalid'
             elif field == 'run': predicate['runDetails']['metadata']['invocationId'] += '/other'
             else: predicate['unreviewed'] = True
