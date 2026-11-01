@@ -5,6 +5,7 @@ parser. actionlint checks YAML, expressions and action schemas independently.
 """
 import hashlib
 import io
+import ast
 import json
 import os
 from pathlib import Path
@@ -121,7 +122,8 @@ class WorkflowPolicy(unittest.TestCase):
             lines = path.read_text().splitlines()
             for i, line in enumerate(lines):
                 if 'uses: actions/checkout@' in line:
-                    self.assertIn('persist-credentials: false', '\n'.join(lines[i + 1:i + 6]))
+                    end = next((j for j in range(i + 1, len(lines)) if lines[j].startswith('      - ')), len(lines))
+                    self.assertIn('persist-credentials: false', '\n'.join(lines[i + 1:end]))
 
     def test_four_receipts_do_not_use_matrix_last_outputs(self):
         source = RELEASE.read_text()
@@ -144,7 +146,7 @@ class WorkflowPolicy(unittest.TestCase):
         source = RELEASE.read_text()
         readonly = job(source, 'verify_transport').split('    steps:\n', 1)[1].strip()
         publisher = job(source, 'publish').split('    steps:\n', 1)[1]
-        self.assertEqual(readonly, publisher.split('      - name: Publish verified release assets')[0].strip())
+        self.assertEqual(readonly, publisher.split('      - name: Download verified provenance')[0].strip())
         self.assertEqual(readonly.count('fail-on-cache-miss: true'), 4)
         self.assertNotIn('restore-keys:', readonly)
 
@@ -177,7 +179,57 @@ class WorkflowPolicy(unittest.TestCase):
             self.assertNotIn('run-id:', consumer)
             self.assertNotIn('github-token:', consumer)
         self.assertEqual(source.count('HIBISCUS_SOURCE_UNPACK_SCRIPT: |'), 1)
-        self.assertEqual(source.count('actions/checkout@'), 1)
+        self.assertEqual(source.count('actions/checkout@'), 2)
+
+    def test_signing_authority_is_isolated_from_builds_and_publisher(self):
+        source = RELEASE.read_text()
+        signer = job(source, 'provenance')
+        self.assertEqual(source.count('id-token: write'), 1)
+        self.assertEqual(source.count('attestations: write'), 1)
+        for permission in ['contents: read', 'id-token: write', 'attestations: write']:
+            self.assertIn(permission, signer)
+        self.assertIn("if: github.event_name == 'push' || inputs.release_tag != ''", signer)
+        self.assertIn('verify_transport', signer.split('    steps:')[0])
+        self.assertIn('SOURCE_COMMIT: ${{ needs.verify.outputs.source_commit }}', signer)
+        self.assertIn('SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}', signer)
+        self.assertIn('ref: ${{ github.workflow_sha }}', signer)
+        self.assertIn('sparse-checkout: scripts/release_provenance.py', signer)
+        self.assertLess(signer.index('name: Authorize signer workflow'), signer.index('uses: actions/checkout@'))
+        self.assertLess(signer.index('name: Verify compiler receipts'), signer.index('name: Sign release archives'))
+        self.assertLess(signer.index('name: Verify signed release identity'), signer.index('name: Record verified provenance receipt'))
+        for unsafe in ['cargo ', 'cross ', 'npm ', 'secrets: inherit', 'contents: write']:
+            self.assertNotIn(unsafe, signer)
+        self.assertIn('--context-env --verifier "$VERIFIER_PATH"', signer)
+        publisher = job(source, 'publish')
+        self.assertIn('needs: [provenance, verify_transport,', publisher)
+        for unsafe in ['id-token:', 'attestations:', 'python3 ', 'actions/checkout@']:
+            self.assertNotIn(unsafe, publisher)
+
+    def test_provenance_transport_is_distinct_and_exact(self):
+        source = RELEASE.read_text()
+        for name in ['provenance', 'publish']:
+            block = job(source, name)
+            self.assertIn('name: verified-provenance', block)
+            self.assertNotIn('name: release-provenance', block)
+            self.assertIn('path: provenance/hibiscus-provenance.sigstore.json', block)
+            self.assertNotIn('restore-keys:', block)
+        publisher = job(source, 'publish')
+        self.assertIn('key: ${{ needs.provenance.outputs.cache_key }}', publisher)
+        self.assertIn('PROVENANCE_SHA256: ${{ needs.provenance.outputs.sha256 }}', publisher)
+        self.assertLess(publisher.index('name: Verify attestor receipt'), publisher.index('name: Publish verified release assets'))
+        signer = job(source, 'provenance')
+        self.assertIn('cache_key=provenance-%s-%s-%s', signer)
+        self.assertIn('"$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$digest"', signer)
+
+    def test_provenance_targets_and_required_ci_match_release_contract(self):
+        tree = ast.parse((ROOT / 'scripts/release_provenance.py').read_text())
+        definition = next(node.value for node in tree.body if isinstance(node, ast.Assign)
+                          and any(isinstance(t, ast.Name) and t.id == 'TARGETS' for t in node.targets))
+        self.assertEqual(set(ast.literal_eval(definition)), {target for target, _ in TARGETS.values()})
+        ci = (ROOT / '.github/workflows/ci.yml').read_text()
+        self.assertIn('python3 tests/release_provenance.py', ci)
+        self.assertIn('python3 tests/provenance_verifier.py --verifier "$verifier"', ci)
+        self.assertIn('scripts/release_provenance.py verifier --directory "$RUNNER_TEMP/provenance-verifier"', ci)
 
     def test_toolchain_images_and_cross_are_pinned(self):
         source = RELEASE.read_text()
@@ -196,7 +248,7 @@ class WorkflowPolicy(unittest.TestCase):
         source = RELEASE.read_text()
         self.assertIn('git rev-parse "$RELEASE_TAG^{commit}"', source)
         self.assertIn('test "v$version" = "$RELEASE_TAG"', source)
-        self.assertIn("if: inputs.direct_upload && inputs.release_tag != ''", source)
+        self.assertIn("if: inputs.release_tag != ''", job(source, 'verify'))
         self.assertNotIn('contents: write', job(source, 'verify'))
         self.assertIn("inputs.release_tag || (github.ref_type == 'tag' && github.ref) || github.sha", source)
         self.assertLess(source.index('name: Authorize merged release source'),
@@ -374,7 +426,57 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
                 self.assertEqual(calls[-1][:2], ['release', 'upload' if exists else 'create'])
                 if not exists:
                     self.assertIn('--verify-tag', calls[-1])
+                    self.assertIn('--draft', calls[-1])
                 self.assertEqual(len((self.root / 'dist/SHA256SUMS').read_text().splitlines()), 4)
+
+    def test_normal_rebuild_also_refuses_an_already_published_release(self):
+        result, calls = self.publisher(direct=False, exists=True, draft=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(all(x[:2] == ['release', 'view'] for x in calls))
+
+    def test_provenance_receipt_rejects_tampering_missing_extra_and_symlink(self):
+        folder = self.root / 'provenance'
+        folder.mkdir()
+        bundle = folder / 'hibiscus-provenance.sigstore.json'
+        bundle.write_bytes(b'verified-fixture')
+        digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+        script = shell(RELEASE, 'Verify attestor receipt')
+        env = {'PROVENANCE_SHA256': digest}
+        self.assertEqual(run(script, self.root, env).returncode, 0)
+        bundle.write_bytes(b'tampered')
+        self.assertNotEqual(run(script, self.root, env).returncode, 0)
+        bundle.unlink()
+        self.assertNotEqual(run(script, self.root, env).returncode, 0)
+        original = self.root / 'original-bundle'
+        original.write_bytes(b'verified-fixture')
+        bundle.symlink_to(original)
+        self.assertNotEqual(run(script, self.root, env).returncode, 0)
+        bundle.unlink()
+        bundle.write_bytes(original.read_bytes())
+        extra = folder / '.hidden'
+        extra.write_bytes(b'extra')
+        self.assertNotEqual(run(script, self.root, env).returncode, 0)
+        extra.unlink()
+        for malformed in ['', 'z' * 64, 'a' * 63, 'a' * 64 + '\nfile']:
+            self.assertNotEqual(run(script, self.root, {'PROVENANCE_SHA256': malformed}).returncode, 0)
+
+    def test_signer_context_rejects_untrusted_workflows_before_checkout(self):
+        script = shell(RELEASE, 'Authorize signer workflow')
+        env = {'GITHUB_REPOSITORY': 'Rekabytes-Enterprise/hibiscus', 'RELEASE_TAG': 'v1.2.3',
+               'GITHUB_WORKFLOW_SHA': 'b' * 40, 'GITHUB_SHA': 'b' * 40,
+               'SOURCE_COMMIT': 'a' * 40, 'GITHUB_EVENT_NAME': 'workflow_dispatch',
+               'GITHUB_REF': 'refs/heads/dev',
+               'GITHUB_WORKFLOW_REF': 'Rekabytes-Enterprise/hibiscus/.github/workflows/release.yml@refs/heads/dev'}
+        self.assertEqual(run(script, self.root, env).returncode, 0)
+        for change in [{'GITHUB_EVENT_NAME': 'pull_request'}, {'GITHUB_REF': 'refs/heads/feature'},
+                       {'GITHUB_REPOSITORY': 'attacker/hibiscus'}, {'GITHUB_WORKFLOW_SHA': 'dev'},
+                       {'GITHUB_SHA': 'c' * 40}, {'GITHUB_WORKFLOW_REF': 'other/workflow'}]:
+            self.assertNotEqual(run(script, self.root, dict(env, **change)).returncode, 0)
+        env.update(GITHUB_EVENT_NAME='push', GITHUB_REF='refs/tags/v1.2.3',
+                   GITHUB_WORKFLOW_REF='Rekabytes-Enterprise/hibiscus/.github/workflows/release.yml@refs/tags/v1.2.3')
+        self.assertNotEqual(run(script, self.root, env).returncode, 0)
+        env['SOURCE_COMMIT'] = 'b' * 40
+        self.assertEqual(run(script, self.root, env).returncode, 0)
 
     def test_direct_upload_requires_draft(self):
         result, calls = self.publisher(direct=True, draft=True)
