@@ -1,5 +1,7 @@
 # Development
 
+The [security checks and branch rules](development/security-checks.md) describe required CI, CodeQL coverage, independent review and recovery. Report suspected vulnerabilities through the [private reporting process](../SECURITY.md).
+
 Install Rust/Cargo and a C linker. Pi and Node are not agent dependencies. The npm installer test requires Node/npm, shell tests require standard Unix tools, and coding-evaluation development tests require Python 3.9 or newer. Python is not required by the shipped Hibiscus executable. Provider tests use local HTTP servers and synthetic keys. Extension tests use local `/bin/sh` fixtures; the optional Python example requires Python 3 only when invoked.
 
 ```sh

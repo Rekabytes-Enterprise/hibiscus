@@ -1,12 +1,14 @@
 # Current state
 
-## Issue #48 policy prepared locally; private reporting enabled
+## Issues #44/#46/#48 implementation and release preparation
 
-The owner authorized the next recommended security task, #48. Added SECURITY.md with the actual GitHub private-report URL, latest-stable fix policy, older/development report acceptance, coordinated disclosure without an invented response SLA, redaction guidance and accurate native-tool/extension/checkpoint boundaries. CONTRIBUTING.md links the policy and private form; README gains a Security navigation link while preserving its existing layout and badges. Runtime and version are unchanged.
+The owner explicitly authorized continuing #46 and #44, PR/merge into dev, proper issue closure, patch promotion into main and a new tag/release. This includes the previously prepared #48 policy. Publication is now authorized for this Hibiscus change; prior local-only hold is resolved. Version remains0.3.9 until the requested patch bump after the feature PR.
 
-GitHub private-vulnerability-reporting read false before the authorized PUT and true afterward. The real report URL reaches GitHub sign-in with the repository destination retained; no report or synthetic advisory was submitted. The latest stable release is still v0.3.9. Local documentation validation checked all30relative file targets in the three affected public documents; diff whitespace checks pass. Source checks confirm direct shell/extension execution and native write/edit checkpoint coverage. Runtime tests were not rerun for this documentation-only change.
+CodeQL workflow uses immutable actionv4.39.1 linked to bundle2.27.3, with Rust/JavaScript-TypeScript/Python/Actions analysis, security-extended queries, no-build extraction, PR/push coverage for dev/main and weekly/manual runs. Only analysis jobs get security-eventswrite; repository access stays read-only, checkouts do not persist credentials, fork PRs use pull_request without supplied secrets. A temporary harmless Rust empty-branch query exercises real extraction and SARIF detection with a nonempty negative control. No synthetic finding is uploaded.
 
-Publication remains pending explicit authorization under the owner's local-by-default publication instruction. Do not close #48 or mark its policy-discovery step complete until the policy is on main and GitHub discovery is checked. No push, PR, version bump, tag or release is part of this local preparation. The last measured Scorecard remains5.3 at7d2f71c; no policy-related increase is claimed. Mokara #48 is in progress.
+Versioned branch-rules.json preserves the existing active main deletion/force-push/PR/thread protections, extends them to dev and adds eight strict GitHub-Actions-bound required CI/audit/CodeQL checks. Repository has one maintainer; no impossible independent self-approval or bypass actor is configured. Live rule activation awaits successful real check results, then a controlled failing PR will verify rejection. Contributor/security-check documentation covers future independent review and narrow recorded administrator recovery.
+
+SECURITY.md and contributor/README links are prepared. Private vulnerability reporting is enabled/readbacktrue; anonymous form reaches GitHub sign-in. Main policy discovery is pending promotion. Local23workflow boundary checks and actionlint pass. Complete native/installer/wrapper checks and actual CodeQL extraction/detection/triage are in progress. Do not close these issues or claim a score increase until real acceptance evidence is available. Baseline Scorecard5.3 at7d2f71c.
 
 ## v0.3.9 published, issue #45 complete
 

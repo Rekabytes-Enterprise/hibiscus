@@ -52,3 +52,7 @@ Report suspected vulnerabilities through [GitHub's private reporting form](https
 Never commit API keys, OAuth data, `~/.hibiscus/auth.json`, private sessions, chat transcripts, or user-specific paths. Don't place real credentials in fixtures, logs, screenshots, or issue reports. Native tools execute directly after validation, including shell commands in non-interactive mode. Preserve bounded local framing, request-ID correlation and the run-settlement boundary.
 
 For `/login`, keep key entry masked and store credentials only in Hibiscus's private auth file. Do not log provider response bodies or keys. Authentication never launches another agent. Test with local HTTP fixtures and synthetic credentials. Preserve the existing session and recoverable draft after failures, and never replay a tool with an unknown outcome automatically.
+
+## Required checks and review
+
+Both `dev` and `main` require passing Linux/macOS tests, formatting/Clippy/installer checks, the RustSec dependency audit, and CodeQL analysis for Rust, JavaScript/TypeScript, Python and GitHub Actions. Update your PR branch when its target changes and resolve review threads before merging. The current single-maintainer policy has no independent-approval requirement or configured bypass actor. See [security checks and protected branches](docs/development/security-checks.md) for exact check names, scanner coverage, the future independent-review requirement and administrator recovery.
