@@ -128,8 +128,8 @@ jobs:
           test "v$version" = "$RELEASE_TAG"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
           git show --no-patch --format='Release source: %H' HEAD
-      - name: Require an existing draft for direct uploads
-        if: inputs.direct_upload && inputs.release_tag != ''
+      - name: Require an existing draft for release rebuilds
+        if: inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -670,9 +670,141 @@ jobs:
           [[ "$MACOS_ARM64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
           test -f dist/hibiscus-aarch64-apple-darwin.tar.gz && test ! -L dist/hibiscus-aarch64-apple-darwin.tar.gz || exit 1
           printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/hibiscus-aarch64-apple-darwin.tar.gz | shasum -a 256 -c
+  provenance:
+    if: github.event_name == 'push' || inputs.release_tag != ''
+    needs: [verify, verify_transport, linux_x64, linux_arm64, macos_x64, macos_arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+      cache_key: ${{ steps.receipt.outputs.cache_key }}
+    env:
+      SOURCE_COMMIT: ${{ needs.verify.outputs.source_commit }}
+      SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}
+    steps:
+      - name: Authorize signer workflow
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = Rekabytes-Enterprise/hibiscus
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF"
+          [[ "$GITHUB_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF" in
+            "push:refs/tags/$RELEASE_TAG") test "$SOURCE_COMMIT" = "$GITHUB_WORKFLOW_SHA" ;;
+            workflow_dispatch:refs/heads/dev | workflow_dispatch:refs/heads/main) ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-x86_64-unknown-linux-musl.tar.gz
+          key: ${{ needs.linux_x64.outputs.cache_key }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-aarch64-unknown-linux-musl.tar.gz
+          key: ${{ needs.linux_arm64.outputs.cache_key }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-x86_64-apple-darwin.tar.gz
+          key: ${{ needs.macos_x64.outputs.cache_key }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-aarch64-apple-darwin.tar.gz
+          key: ${{ needs.macos_arm64.outputs.cache_key }}
+          fail-on-cache-miss: true
+      - name: Verify compiler receipts
+        shell: bash
+        env:
+          LINUX_X64_SHA: ${{ needs.linux_x64.outputs.sha256 }}
+          LINUX_ARM64_SHA: ${{ needs.linux_arm64.outputs.sha256 }}
+          MACOS_X64_SHA: ${{ needs.macos_x64.outputs.sha256 }}
+          MACOS_ARM64_SHA: ${{ needs.macos_arm64.outputs.sha256 }}
+        run: |
+          shopt -s nullglob dotglob
+          files=(dist/*)
+          test "${#files[@]}" -eq 4
+          [[ "$LINUX_X64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test -f dist/hibiscus-x86_64-unknown-linux-musl.tar.gz && test ! -L dist/hibiscus-x86_64-unknown-linux-musl.tar.gz || exit 1
+          printf '%s  %s\n' "$LINUX_X64_SHA" dist/hibiscus-x86_64-unknown-linux-musl.tar.gz | shasum -a 256 -c
+          [[ "$LINUX_ARM64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test -f dist/hibiscus-aarch64-unknown-linux-musl.tar.gz && test ! -L dist/hibiscus-aarch64-unknown-linux-musl.tar.gz || exit 1
+          printf '%s  %s\n' "$LINUX_ARM64_SHA" dist/hibiscus-aarch64-unknown-linux-musl.tar.gz | shasum -a 256 -c
+          [[ "$MACOS_X64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test -f dist/hibiscus-x86_64-apple-darwin.tar.gz && test ! -L dist/hibiscus-x86_64-apple-darwin.tar.gz || exit 1
+          printf '%s  %s\n' "$MACOS_X64_SHA" dist/hibiscus-x86_64-apple-darwin.tar.gz | shasum -a 256 -c
+          [[ "$MACOS_ARM64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test -f dist/hibiscus-aarch64-apple-darwin.tar.gz && test ! -L dist/hibiscus-aarch64-apple-darwin.tar.gz || exit 1
+          printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/hibiscus-aarch64-apple-darwin.tar.gz | shasum -a 256 -c
+      # Load only policy from the executing workflow, never historical build source.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: orchestration
+          sparse-checkout: scripts/release_provenance.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Prepare actual-source provenance
+        run: python3 orchestration/scripts/release_provenance.py prepare --directory dist --output provenance/predicate.json
+      - name: Sign release archives
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: provenance/predicate.json
+      - name: Install pinned attestation verifier
+        id: verifier
+        shell: bash
+        run: |
+          verifier=$(python3 orchestration/scripts/release_provenance.py verifier --directory "$RUNNER_TEMP/provenance-verifier")
+          printf 'path=%s\n' "$verifier" >> "$GITHUB_OUTPUT"
+      - name: Verify signed release identity
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          VERIFIER_PATH: ${{ steps.verifier.outputs.path }}
+        run: |
+          python3 orchestration/scripts/release_provenance.py verify --directory dist --bundle "$BUNDLE_PATH" --context-env --verifier "$VERIFIER_PATH"
+          cp "$BUNDLE_PATH" provenance/hibiscus-provenance.sigstore.json
+      - name: Record verified provenance receipt
+        id: receipt
+        shell: bash
+        run: |
+          digest=$(shasum -a 256 provenance/hibiscus-provenance.sigstore.json | cut -d ' ' -f 1)
+          printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'cache_key=provenance-%s-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-provenance
+          path: provenance/hibiscus-provenance.sigstore.json
+          if-no-files-found: error
+          retention-days: 5
+          archive: true
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: provenance/hibiscus-provenance.sigstore.json
+          key: ${{ steps.receipt.outputs.cache_key }}
+
   publish:
     if: github.event_name == 'push' || inputs.release_tag != ''
-    needs: [verify_transport, linux_x64, linux_arm64, macos_x64, macos_arm64]
+    needs: [provenance, verify_transport, linux_x64, linux_arm64, macos_x64, macos_arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -731,6 +863,29 @@ jobs:
           [[ "$MACOS_ARM64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
           test -f dist/hibiscus-aarch64-apple-darwin.tar.gz && test ! -L dist/hibiscus-aarch64-apple-darwin.tar.gz || exit 1
           printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/hibiscus-aarch64-apple-darwin.tar.gz | shasum -a 256 -c
+      - name: Download verified provenance
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-provenance
+          path: provenance
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: provenance/hibiscus-provenance.sigstore.json
+          key: ${{ needs.provenance.outputs.cache_key }}
+          fail-on-cache-miss: true
+      - name: Verify attestor receipt
+        shell: bash
+        env:
+          PROVENANCE_SHA256: ${{ needs.provenance.outputs.sha256 }}
+        run: |
+          shopt -s nullglob dotglob
+          files=(provenance/*)
+          test "${#files[@]}" -eq 1
+          [[ "$PROVENANCE_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          test -f provenance/hibiscus-provenance.sigstore.json && test ! -L provenance/hibiscus-provenance.sigstore.json || exit 1
+          printf '%s  %s\n' "$PROVENANCE_SHA256" provenance/hibiscus-provenance.sigstore.json | shasum -a 256 -c
       - name: Publish verified release assets
         shell: bash
         env:
@@ -742,9 +897,10 @@ jobs:
           (cd dist && shasum -a 256 *.tar.gz > SHA256SUMS)
           if [ "$DIRECT_UPLOAD" = true ]; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-            gh release upload "$RELEASE_TAG" dist/* --clobber
+            gh release upload "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --clobber
           elif gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+            gh release upload "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --clobber
           else
-            gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "$RELEASE_TAG"
+            gh release create "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --draft --verify-tag --generate-notes --title "$RELEASE_TAG"
           fi

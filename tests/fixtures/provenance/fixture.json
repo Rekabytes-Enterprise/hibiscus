@@ -1,0 +1,13 @@
+{
+  "repository": "actions/attest-demo",
+  "workflow": ".github/workflows/build-python.yml",
+  "ref": "refs/heads/main",
+  "commit": "a6c23b9806c593664f68637c8f9d45dfcf98b2db",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "artifact_sha256": "ae57936def59bc4c75edd3a837d89bcefc6d3a5e31d55a6fa7a71624f92c3c3b",
+  "files": {
+    "artifact.b64": "d8539c10d2959a0321e31f1e640f7799eb2ed34ea3d68af2f899a2c59071ffd0",
+    "bundle.jsonl": "4f8c096e38a0eee242574ab100d16701928605409225e59784a3636f742bb27e",
+    "trusted-roots.jsonl": "65ca537f6ed8a47fd0e560c421baa1f6c1efb8b25fc200d8c5c02c0e92eb2b9c"
+  }
+}

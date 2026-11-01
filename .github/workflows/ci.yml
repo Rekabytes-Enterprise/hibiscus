@@ -42,6 +42,13 @@ jobs:
         run: python3 tests/dependency_audit.py
       - name: Test workflow trust boundaries
         run: python3 tests/workflows.py
+      - name: Test release provenance policy
+        run: python3 tests/release_provenance.py
+      - name: Test real provenance verification
+        shell: bash
+        run: |
+          verifier=$(python3 scripts/release_provenance.py verifier --directory "$RUNNER_TEMP/provenance-verifier")
+          python3 tests/provenance_verifier.py --verifier "$verifier"
       - name: Test installer and version bump
         run: sh -n install.sh && sh -n scripts/bump-version.sh && sh tests/install.sh && sh tests/bump-version.sh
 
