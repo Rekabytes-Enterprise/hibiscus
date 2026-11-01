@@ -51,6 +51,8 @@ Report suspected vulnerabilities through [GitHub's private reporting form](https
 
 Never commit API keys, OAuth data, `~/.hibiscus/auth.json`, private sessions, chat transcripts, or user-specific paths. Don't place real credentials in fixtures, logs, screenshots, or issue reports. Native tools execute directly after validation, including shell commands in non-interactive mode. Preserve bounded local framing, request-ID correlation and the run-settlement boundary.
 
+Run the [pinned secret detector](docs/development/secret-scanning.md) before publishing changes. The required formatting/Clippy job also scans full Git history. Removing a credential from the latest file does not remove it from previous commits. Review false positives with a specific rule and fixture; do not add a blanket exclusion or bypass a real leak.
+
 For `/login`, keep key entry masked and store credentials only in Hibiscus's private auth file. Do not log provider response bodies or keys. Authentication never launches another agent. Test with local HTTP fixtures and synthetic credentials. Preserve the existing session and recoverable draft after failures, and never replay a tool with an unknown outcome automatically.
 
 ## Required checks and review

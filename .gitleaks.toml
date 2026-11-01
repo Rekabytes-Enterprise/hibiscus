@@ -1,0 +1,21 @@
+title = "Hibiscus secret detection"
+
+[extend]
+useDefault = true
+
+# Native provider stores have provider IDs as keys, without an api_key label.
+[[rules]]
+id = "hibiscus-saved-api-key"
+description = "A saved provider credential in native auth.json"
+path = '''(^|/)auth\.json$'''
+regex = '''"[^"\\\r\n]{1,128}"\s*:\s*"([^"\\\r\n]{10,})"'''
+secretGroup = 1
+
+# Opaque refresh credentials need not resemble a provider API key or JWT.
+[[rules]]
+id = "hibiscus-codex-credential"
+description = "A native Codex access or refresh credential"
+path = '''(^|/)codex-auth\.json$'''
+regex = '''"(?:access|refresh)"\s*:\s*"([^"\\\r\n]{10,})"'''
+secretGroup = 1
+keywords = ["access", "refresh"]
