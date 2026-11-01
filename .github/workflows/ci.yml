@@ -27,6 +27,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Install pinned secret detector
+        id: secret_scanner
+        shell: bash
+        run: |
+          scanner=$(python3 scripts/secret-scanning.py install --directory "$RUNNER_TEMP/secret-detector")
+          printf 'path=%s\n' "$scanner" >> "$GITHUB_OUTPUT"
+      - name: Test actual secret detection and failure handling
+        env:
+          SCANNER_PATH: ${{ steps.secret_scanner.outputs.path }}
+        run: python3 tests/secret_scanning.py --scanner "$SCANNER_PATH"
+      - name: Scan complete Git history for secrets
+        env:
+          SCANNER_PATH: ${{ steps.secret_scanner.outputs.path }}
+        run: python3 scripts/secret-scanning.py git --scanner "$SCANNER_PATH"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
