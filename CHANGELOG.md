@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-11-02
+
+### Changed
+
+- Replace illustrated README terminal previews with actual TUI, CLI and Mermaid captures, including real file edits, colored diffs and test results from local demo sessions. Preserve the existing README layout and document the capture method.
+- Scan full Git history with a checksum-pinned secret detector and native credential-store rules in required CI, with actual detection and failure-handling controls. This changes repository checks only; the native runtime is unchanged.
+
 ## [0.3.10] - 2026-11-01
 
 ### Changed
