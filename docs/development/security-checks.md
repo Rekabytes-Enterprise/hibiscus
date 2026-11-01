@@ -77,3 +77,25 @@ excludes a nonempty control branch. The fixture is never executed, committed as
 Rust production code, or uploaded as a repository alert. Tool/extraction/query
 failures and missing findings fail the job. This checks scanner wiring; it does
 not measure the detection rate of every security query.
+
+## Initial workflow finding review
+
+The initial extended Actions scan reported four findings in the existing release
+compiler helper: two poisonable build steps, cache transport, and a checkout
+reported as possibly receiving PR source. These appeared in retained SARIF even
+though GitHub's PR summary excluded them as unchanged lines. Always inspect both
+the retained report and GitHub's analysis result.
+
+The compiler helper now rejects PR events and accepts only a full frozen commit
+SHA before checkout. Its caller obtains that SHA from the exact checked source;
+tagged publication also checks the tag and Cargo version. Manual release builds
+are a maintainer operation: select only source you trust. They execute Cargo and
+its dependencies. Read-only repository permission does not make builds a sandbox.
+
+Cache transport is an explicit recovery mode for the release archives, separate
+from reusable dependency/build caches. It uses exact run/target/digest keys and
+checks independent compiler receipts before publication. The compiler helper has
+no shared Cargo cache and receives no release token. Workflow analysis can still
+flag manual-dispatch source as potentially cache-poisoning because the source
+verification crosses reusable-job outputs. Keep that trust assumption visible;
+do not suppress a query or dismiss an alert solely to obtain a clean report.

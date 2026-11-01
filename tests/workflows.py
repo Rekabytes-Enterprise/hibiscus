@@ -180,6 +180,16 @@ class ReleaseShell(unittest.TestCase):
     def test_exact_four_receipts_pass(self):
         self.assertEqual(run(self.verify, self.root, self.env).returncode, 0)
 
+    def test_release_compiler_accepts_only_a_frozen_commit(self):
+        script = shell(BUILD, 'Validate frozen source')
+        self.assertEqual(run(script, self.root, {'SOURCE_REF': 'a' * 40}).returncode, 0)
+        for value in ['', 'main', 'refs/pull/1/head', 'v1.2.3', 'a' * 39,
+                      'a' * 41, '$(touch injected)', 'a' * 40 + '\nmain']:
+            self.assertNotEqual(run(script, self.root, {'SOURCE_REF': value}).returncode, 0)
+        self.assertFalse((self.root / 'injected').exists())
+        self.assertIn("if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'",
+                      job(BUILD.read_text(), 'build'))
+
     def test_modified_archive_fails(self):
         next((self.root / 'dist').iterdir()).write_bytes(b'tampered')
         self.assertNotEqual(run(self.verify, self.root, self.env).returncode, 0)

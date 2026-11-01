@@ -26,6 +26,8 @@ permissions:
 
 jobs:
   build:
+    # This helper compiles verified release source, never an untrusted PR event.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 25
     outputs:
@@ -34,6 +36,12 @@ jobs:
     env:
       TARGET: ${{ inputs.target }}
     steps:
+      - name: Validate frozen source
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
       - name: Validate target and runner
         shell: bash
         env:
