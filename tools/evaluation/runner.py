@@ -9,18 +9,18 @@ import sys
 import tempfile
 import time
 
-from .execution import environment, grade, prepare, process, session_evidence
+from .execution import AGENT_CREDENTIAL_ENV, environment, grade, prepare, process, session_evidence
 from .fixture import Fixture
 from .spec import InvalidSpec, digest, load_plan, load_suite, read_file
 
 
-def config(plan, base_url, key_env, preflight=False):
+def config(plan, base_url, preflight=False):
     provider = plan.provider
     return {"model": f"{provider['id']}/{provider['model']['id']}",
             "maxSteps": plan.limits["maxSteps"], "providers": [{
                 "id": provider["id"], "baseUrl": base_url,
                 "api": "responses" if preflight else provider["api"],
-                "apiKeyEnv": key_env, "models": [provider["model"]]}]}
+                "apiKeyEnv": AGENT_CREDENTIAL_ENV, "models": [provider["model"]]}]}
 
 
 def inspect_variant(plan, variant, binary, root):
@@ -28,10 +28,10 @@ def inspect_variant(plan, variant, binary, root):
     batches = (json.dumps([{"name": "list_extensions", "arguments": {}}]),)
     prompt = "Inspect installed extension metadata only. Do not execute extension programs."
     with Fixture(batches) as fixture:
-        cfg = config(plan, fixture.base_url, "HIBISCUS_EVAL_FIXTURE_KEY", preflight=True)
+        cfg = config(plan, fixture.base_url, preflight=True)
         prepare(root, (), variant, cfg)
         result = process([str(binary), prompt], root / "workspace",
-                         environment(root, ("HIBISCUS_EVAL_FIXTURE_KEY", "SYNTHETIC")),
+                         environment(root, "SYNTHETIC"),
                          plan.limits["timeoutSeconds"], root / "native")
     evidence = session_evidence(root / "app", [plan.provider["id"], plan.provider["model"]["id"]], prompt)
     report = evidence["extensionReport"]
@@ -56,13 +56,12 @@ def inspect_variant(plan, variant, binary, root):
 def run_case(plan, task, variant, binary, root, profile="repair"):
     fixture_context = Fixture(task.offline, profile) if plan.mode == "offline" else nullcontext(None)
     with fixture_context as fixture:
-        key_env = "HIBISCUS_EVAL_FIXTURE_KEY" if fixture else plan.provider["apiKeyEnv"]
-        key = "SYNTHETIC" if fixture else os.environ[key_env]
+        key = "SYNTHETIC" if fixture else os.environ[plan.provider["apiKeyEnv"]]
         base_url = fixture.base_url if fixture else plan.provider["baseUrl"]
-        prepare(root, task.files, variant, config(plan, base_url, key_env))
+        prepare(root, task.files, variant, config(plan, base_url))
         # The key is supplied only to the agent. Independent graders never receive it.
         execution = process([str(binary), task.prompt], root / "workspace",
-                            environment(root, (key_env, key)), plan.limits["timeoutSeconds"], root / "native")
+                            environment(root, key), plan.limits["timeoutSeconds"], root / "native")
     evidence = session_evidence(root / "app", [plan.provider["id"], plan.provider["model"]["id"]], task.prompt)
     objective = grade(task, root, environment(root), plan.limits["checkTimeoutSeconds"])
     objective["successfulToolObserved"] = any(not t["isError"] for t in evidence["tools"])
