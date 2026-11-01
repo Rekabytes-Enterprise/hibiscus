@@ -8,16 +8,17 @@ import time
 from .spec import InvalidSpec, inventory, materialize, read_file
 
 OUTPUT_LIMIT = 8 * 1024 * 1024
+AGENT_CREDENTIAL_ENV = "HIBISCUS_EVAL_PROVIDER_API_KEY"
 
 
-def environment(root, key=None):
+def environment(root, provider_key=None):
     # Never inherit model overrides, proxy settings, other provider keys or homes.
     env = {"PATH": os.defpath, "HOME": str(root / "user"),
            "HIBISCUS_HOME": str(root / "app"), "HIBISCUS_NO_UPDATE_CHECK": "1",
            "NO_COLOR": "1", "TERM": "dumb", "LANG": "C.UTF-8",
            "PYTHONDONTWRITEBYTECODE": "1"}
-    if key:
-        env[key[0]] = key[1]
+    if provider_key is not None:
+        env[AGENT_CREDENTIAL_ENV] = provider_key
     return env
 
 

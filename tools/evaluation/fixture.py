@@ -5,11 +5,13 @@ import threading
 
 
 class Fixture:
-    def __init__(self, batches, profile="repair"):
+    def __init__(self, batches, profile="repair", expected_bearer=None):
         self.batches = batches
         self.profile = profile
         self.requests = []
         self.errors = []
+        self.authenticated_requests = 0
+        self.rejected_authentication = 0
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -23,6 +25,12 @@ class Fixture:
                     if not 0 < size <= 4 * 1024 * 1024 or self.path != "/v1/responses":
                         raise ValueError("invalid fixture request")
                     request = json.loads(self.rfile.read(size))
+                    if expected_bearer is not None:
+                        if self.headers.get("Authorization") != "Bearer " + expected_bearer:
+                            fixture.rejected_authentication += 1
+                            self.send_error(401, "Synthetic credential mismatch")
+                            return
+                        fixture.authenticated_requests += 1
                     index = len(fixture.requests)
                     fixture.requests.append(request)
                     if fixture.profile == "provider_error":
