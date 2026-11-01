@@ -1,5 +1,13 @@
 # Current state
 
+## Issue #48 policy prepared locally; private reporting enabled
+
+The owner authorized the next recommended security task, #48. Added SECURITY.md with the actual GitHub private-report URL, latest-stable fix policy, older/development report acceptance, coordinated disclosure without an invented response SLA, redaction guidance and accurate native-tool/extension/checkpoint boundaries. CONTRIBUTING.md links the policy and private form; README gains a Security navigation link while preserving its existing layout and badges. Runtime and version are unchanged.
+
+GitHub private-vulnerability-reporting read false before the authorized PUT and true afterward. The real report URL reaches GitHub sign-in with the repository destination retained; no report or synthetic advisory was submitted. The latest stable release is still v0.3.9. Local documentation validation checked all30relative file targets in the three affected public documents; diff whitespace checks pass. Source checks confirm direct shell/extension execution and native write/edit checkpoint coverage. Runtime tests were not rerun for this documentation-only change.
+
+Publication remains pending explicit authorization under the owner's local-by-default publication instruction. Do not close #48 or mark its policy-discovery step complete until the policy is on main and GitHub discovery is checked. No push, PR, version bump, tag or release is part of this local preparation. The last measured Scorecard remains5.3 at7d2f71c; no policy-related increase is claimed. Mokara #48 is in progress.
+
 ## v0.3.9 published, issue #45 complete
 
 The owner authorized #45, a feature PR into dev, patch bump/main promotion and a new release tag. PR #52 merged into dev as be456804d991a87c10311e49ba9ca0595098ef2d after Linux/macOS CI41291566449 and live audit41291566502 passed. Source0.3.8 was bumped to0.3.9 by96ff05a. PR #53 merged into main as7d2f71cb293ef8b5021c8b69c1dfe69b46942e30; the merge tree matches the tested candidate. Dev and main-PR CI/audit runs41292321937/41292322098/41292326759/41292326782 passed. No review comments or change requests were present at final checks. Issue #45 is CLOSED/COMPLETED and all four linked Mokara steps are done.

@@ -23,6 +23,7 @@
   <a href="#your-everyday-commands">Commands</a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="SECURITY.md">Security</a> ·
   <a href="LICENSE">MIT license</a>
 </p>
 

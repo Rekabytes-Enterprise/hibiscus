@@ -47,6 +47,8 @@ Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, se
 
 ## Safety and privacy
 
+Report suspected vulnerabilities through [GitHub's private reporting form](https://github.com/Rekabytes-Enterprise/hibiscus/security/advisories/new), following the [security policy](SECURITY.md). Keep vulnerability details out of public issues and pull requests. The policy explains supported versions, coordinated disclosure, and the limits of native tools, extensions, and checkpoint recovery.
+
 Never commit API keys, OAuth data, `~/.hibiscus/auth.json`, private sessions, chat transcripts, or user-specific paths. Don't place real credentials in fixtures, logs, screenshots, or issue reports. Native tools execute directly after validation, including shell commands in non-interactive mode. Preserve bounded local framing, request-ID correlation and the run-settlement boundary.
 
 For `/login`, keep key entry masked and store credentials only in Hibiscus's private auth file. Do not log provider response bodies or keys. Authentication never launches another agent. Test with local HTTP fixtures and synthetic credentials. Preserve the existing session and recoverable draft after failures, and never replay a tool with an unknown outcome automatically.
