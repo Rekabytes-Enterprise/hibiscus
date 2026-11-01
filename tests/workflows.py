@@ -244,11 +244,12 @@ class WorkflowPolicy(unittest.TestCase):
             text = path.read_text()
             self.assertEqual(text.count('uses: dtolnay/rust-toolchain@'), text.count('toolchain: 1.99.1'))
 
-    def test_exact_tag_verification_and_readonly_draft_preflight_remain(self):
+    def test_exact_tag_verification_and_publisher_owned_draft_enforcement(self):
         source = RELEASE.read_text()
         self.assertIn('git rev-parse "$RELEASE_TAG^{commit}"', source)
         self.assertIn('test "v$version" = "$RELEASE_TAG"', source)
-        self.assertIn("if: inputs.release_tag != ''", job(source, 'verify'))
+        self.assertNotIn("gh release view", job(source, 'verify'))
+        self.assertIn("REBUILD: ${{ github.event_name == 'workflow_dispatch' }}", job(source, 'publish'))
         self.assertNotIn('contents: write', job(source, 'verify'))
         self.assertIn("inputs.release_tag || (github.ref_type == 'tag' && github.ref) || github.sha", source)
         self.assertLess(source.index('name: Authorize merged release source'),
@@ -395,7 +396,7 @@ else: sys.exit(2)
             self.assertEqual(stream.getnames(), ['hibiscus'])
             self.assertEqual(stream.extractfile('hibiscus').read(), binary.read_bytes())
 
-    def publisher(self, direct=False, exists=True, draft=True, tag='v1.2.3'):
+    def publisher(self, direct=False, exists=True, draft=True, tag='v1.2.3', rebuild=False):
         directory = self.root / 'bin'
         directory.mkdir(exist_ok=True)
         gh = directory / 'gh'
@@ -410,7 +411,7 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
 ''')
         gh.chmod(0o755)
         env = {'PATH': str(directory) + os.pathsep + os.environ['PATH'],
-               'RELEASE_TAG': tag, 'DIRECT_UPLOAD': str(direct).lower(),
+               'RELEASE_TAG': tag, 'DIRECT_UPLOAD': str(direct).lower(), 'REBUILD': str(rebuild).lower(),
                'EXISTS': str(exists).lower(), 'DRAFT': str(draft).lower(),
                'GH_REPO': 'fixture/repo', 'GH_TOKEN': 'synthetic-not-a-credential'}
         result = run(shell(RELEASE, 'Publish verified release assets'), self.root, env)
@@ -489,6 +490,16 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
             result, calls = self.publisher(direct=True, exists=exists, draft=draft)
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue(all(x[:2] == ['release', 'view'] for x in calls))
+
+    def test_artifact_rebuild_requires_existing_draft_before_any_write(self):
+        for exists, draft in [(True, False), (False, False), (False, True)]:
+            (self.root / 'calls.jsonl').unlink(missing_ok=True)
+            result, calls = self.publisher(rebuild=True, exists=exists, draft=draft)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(all(x[:2] == ['release', 'view'] for x in calls))
+        result, calls = self.publisher(rebuild=True, exists=True, draft=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[-1][:2], ['release', 'upload'])
 
     def test_empty_or_invalid_tag_never_contacts_github(self):
         for tag in ['', 'v1.2.3;touch injected', 'v01.2.3']:
