@@ -6,6 +6,7 @@ All notable changes to Hibiscus are documented here.
 
 ### Changed
 
+- Add reviewed Cargo/Actions dependency update PRs, daily pinned RustSec audits, expiring advisory exceptions and real vulnerable-input detection checks.
 - Prepare version 0.3.8 with immutable CI/release action pins, a fixed Rust toolchain and digest-pinned Linux build images.
 - Keep release verification and compilation read-only; verify all four compiler archive hashes before a separate publisher uploads assets. Recovery uses cache transport without granting write access to build jobs.
 

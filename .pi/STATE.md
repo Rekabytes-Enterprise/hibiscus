@@ -1,5 +1,9 @@
 # Current state
 
+## Issue #45 dependency security
+
+The owner authorized #45, a feature PR into dev, patch bump/promotion to main and a new release tag. Feature branch codex/45-dependency-security starts from dev4bd4147. Source currently0.3.8, so the requested next patch will be0.3.9. Dependabot adds grouped/bounded Cargo and Actions version updates todev and default-branch security-only entries. Dependency audits use pinned cargo-audit0.22.2, fresh official RustSec data, strict report checks and an empty expiring-exception policy. Main PRs now receive ordinary CI for security-fix PRs, while required checks/review rules stay in #44. Tests exercise false-clean errors and a temporary known-vulnerable lockfile without compiling it. Pinned0.22.2 audited all204dependencies against RustSec2295466c4e9df26647fd67d8fa1c705ac2fc7f81 with no findings/activeexceptions. All13audit checks pass, including two actual-tool vulnerable-input and reviewed-exception controls; 19workflow checks,259Rust tests, strict Clippy, formatting and actionlint pass. Local tool build required resolving the explicit selected SDK rather than an incompatible inherited SDK. Repository security settings, feature CI/merge, release bump/main PR, tag/assets and measured score remain pending.
+
 ## Issue #43 merged, source version 0.3.8
 
 The owner directly authorized #43, patch bump, dev push, PR/merge into main, feedback resolution and a fresh score comparison. Implementation commits d4c708a and f01e98d were pushed to dev. PR #51 merged into main as 417d8a5e08fdeb868085c424bfe52b95e3d2f66f at2026-11-01T09:39:26Z; the merge tree exactly matches tested f01e98d16e0c3d66101c194fe045f24a87248d73. No review comments or requested changes were present at the final check. Issue #43 closed as COMPLETED through the main closing reference. Mokara task affe89df-d165-4782-9b24-1f3af87dfeeb is done; all four steps are done and the task records CI, transport, PR and measured score evidence.
