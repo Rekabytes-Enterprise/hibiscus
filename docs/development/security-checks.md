@@ -4,6 +4,12 @@ Pull requests into `dev` and `main` run the same checks. Contributor changes tar
 `dev`; releases promote a tested `dev` revision into `main`. Dependency security
 fixes may target the default branch directly and receive the same checks.
 
+After merging a release promotion into `main`, open a PR from a branch based on
+that released main commit back into `dev`. Use a merge commit for this sync to
+preserve main ancestry, which the next strict main promotion needs. Final release
+records can accompany this PR. The same required checks apply; sync does not move
+the release tag or publish another release.
+
 ## Required checks
 
 The branch rules require these GitHub Actions checks, with the source branch up
