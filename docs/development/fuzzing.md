@@ -26,8 +26,9 @@ python3 scripts/fuzzing.py smoke --seconds 15
 ```
 
 `fuzz/Cargo.toml` is the target inventory used by the build and smoke scripts.
-Both lockfiles are tracked; the version-bump helper updates the native package
-entry in each. cargo-fuzz has no `--locked` build option. The container build
+Both packages share the root Cargo.lock. The root workspace defaults to the
+application, so ordinary builds do not build fuzz targets. Existing dependency
+audits, Dependabot and the version-bump helper cover the shared lockfile. cargo-fuzz has no `--locked` build option. The container build
 validates with `cargo fetch --locked` and refuses lock changes before packaging.
 
 For one input or a longer focused run:

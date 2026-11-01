@@ -120,7 +120,10 @@ class WorkflowPolicy(unittest.TestCase):
                          r'FROM gcr.io/oss-fuzz-base/base-builder-rust@sha256:[0-9a-f]{64}')
         build = (ROOT / '.clusterfuzzlite/build.sh').read_text()
         self.assertLess(build.index('cargo fetch --locked'), build.index('cargo fuzz build'))
-        self.assertLess(build.index('cmp fuzz/Cargo.lock'), build.index('fuzzing.py package'))
+        self.assertLess(build.index('cmp Cargo.lock'), build.index('fuzzing.py package'))
+        self.assertIn('members = ["fuzz"]', (ROOT / 'Cargo.toml').read_text())
+        self.assertIn('default-members = ["."]', (ROOT / 'Cargo.toml').read_text())
+        self.assertFalse((ROOT / 'fuzz/Cargo.lock').exists())
 
     def test_only_publisher_has_repository_write_access(self):
         source = RELEASE.read_text()
