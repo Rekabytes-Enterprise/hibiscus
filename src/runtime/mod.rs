@@ -23,3 +23,6 @@ pub(crate) fn native_tool_count() -> usize {
 }
 
 pub(crate) use tools::edit_diff;
+
+#[cfg(feature = "fuzzing")]
+pub(crate) mod fuzzing;

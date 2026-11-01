@@ -100,7 +100,27 @@ class WorkflowPolicy(unittest.TestCase):
                     continue
                 ref = line.split('uses:', 1)[1].strip().split()[0]
                 self.assertTrue(ref.startswith('./.github/workflows/') or
-                                re.fullmatch(r'[\w./-]+@[0-9a-f]{40}', ref), (path, ref))
+                                re.fullmatch(r'[\w./-]+@[0-9a-f]{40}', ref) or
+                                re.fullmatch(r'docker://[\w./-]+@sha256:[0-9a-f]{64}', ref), (path, ref))
+
+    def test_native_fuzzing_is_bounded_readonly_and_runs_both_branches(self):
+        source = (ROOT / '.github/workflows/fuzzing.yml').read_text()
+        for forbidden in ['pull_request_target:', ': write', 'secrets.', 'continue-on-error:']:
+            self.assertNotIn(forbidden, source)
+        self.assertIn('branches: [dev, main]', source)
+        self.assertIn('timeout-minutes: 30', source)
+        self.assertIn("&& '600' || '60'", source)
+        self.assertNotIn("DRY_RUN: 'True'", source)
+        self.assertIn("KEEP_UNAFFECTED_FUZZ_TARGETS: 'True'", source)
+        refs = re.findall(r'uses: (docker://\S+)', source)
+        self.assertEqual(len(refs), 2)
+        for ref in refs:
+            self.assertRegex(ref, r'^docker://gcr.io/oss-fuzz-base/clusterfuzzlite-[a-z-]+@sha256:[0-9a-f]{64}$')
+        self.assertRegex((ROOT / '.clusterfuzzlite/Dockerfile').read_text(),
+                         r'FROM gcr.io/oss-fuzz-base/base-builder-rust@sha256:[0-9a-f]{64}')
+        build = (ROOT / '.clusterfuzzlite/build.sh').read_text()
+        self.assertLess(build.index('cargo fetch --locked'), build.index('cargo fuzz build'))
+        self.assertLess(build.index('cmp fuzz/Cargo.lock'), build.index('fuzzing.py package'))
 
     def test_only_publisher_has_repository_write_access(self):
         source = RELEASE.read_text()

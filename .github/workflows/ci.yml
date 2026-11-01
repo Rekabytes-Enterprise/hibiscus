@@ -48,9 +48,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --check && cargo fmt --manifest-path fuzz/Cargo.toml --check
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets --features fuzzing -- -D warnings
       - name: Lint workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes= .github/workflows/*.yml
       - name: Test audit policy and failure handling
@@ -99,3 +99,5 @@ jobs:
         env:
           TERM: dumb
         run: cargo test --locked
+      - name: Replay curated fuzz boundary regressions
+        run: cargo test --locked --features fuzzing --test fuzz_boundaries

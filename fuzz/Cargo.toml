@@ -1,0 +1,57 @@
+[package]
+name = "hibiscus-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.12"
+hibiscus = { path = "..", features = ["fuzzing"] }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "extension_manifest"
+path = "fuzz_targets/extension_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension_reply"
+path = "fuzz_targets/extension_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rpc_record"
+path = "fuzz_targets/rpc_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "provider_stream"
+path = "fuzz_targets/provider_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oauth_callback"
+path = "fuzz_targets/oauth_callback.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relative_paths"
+path = "fuzz_targets/relative_paths.rs"
+test = false
+doc = false
+bench = false

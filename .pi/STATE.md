@@ -1,5 +1,11 @@
 # Current state
 
+## Issue #50 implementation and v0.3.15 preparation
+
+The owner authorized the next security task and a release, paused to ask about a platform notice, then explicitly requested completion. Branch codex/50-native-fuzzing starts from devfea5250. Six feature-gated adapters call the real manifest/reply/RPC/provider/OAuth/relative-path boundaries without runtime startup or external side effects. The normal CLI delegates to one private-module library entry point. Separate fuzz dependencies and33curated inputs live under fuzz; official ClusterFuzzLite build/run/base images are digest-pinned with read-only CI permissions. Version references are synchronized to0.3.15.
+
+Actual address-sanitized baseline inputs reproduced mixed-SSE chunk-dependent framing and an Anthropic scalar-block panic. Both ordinary regressions failed before and pass after targeted boundary fixes. A real six-target15seconds-per-target campaign completed437553inputs with no crashes/timeouts, peakRSS491MiB. All262Rust tests including curated replay passed locally, strict feature-enabled Clippy and actionlint passed. Workflow policy tests are being finalized; hosted ClusterFuzzLite and main score detection are not yet verified. No PR/tag/release for50 has been published yet. Existing v0.3.14 remains unchanged.
+
 ## v0.3.14 published with actual README captures
 
 The owner explicitly requested patch bump and release after the README screenshot work. PR78 merged the reviewed version0.3.14/screenshots candidate into devbb8d5e23ad82c8fa4325244327bb388a489aba67 at2026-11-01T18:48:38Z. PR79 merged the identical tree into main4f7bea761c63f9399530534f85eed1228f1ca0d6 at18:54:57Z. All eight required check names passed for both PRs, including both platform suites and all four CodeQL languages, with no outstanding review feedback or bypass.259Rust tests passed on Linux and macOS. Local installer, version-bump, offline npm and image-link/hash checks passed; full-history secret detection reports0findings. Public exact-source README and all three captures match reviewed local bytes.

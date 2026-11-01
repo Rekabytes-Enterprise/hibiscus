@@ -144,3 +144,8 @@ fn open_browser(url: &str) {
         });
     }
 }
+
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_callback(bytes: &[u8]) {
+    protocol::fuzz_callback(bytes);
+}

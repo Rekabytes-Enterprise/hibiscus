@@ -26,6 +26,7 @@ grep -Fq "version = \"$old\"" Cargo.lock &&
 
 backup=$(mktemp -d "${TMPDIR:-/tmp}/hibiscus-version.XXXXXXXX")
 files='Cargo.toml Cargo.lock package.json docs/installation.md tests/install.sh'
+if [ -f fuzz/Cargo.lock ]; then files="$files fuzz/Cargo.lock"; fi
 for file in $files; do
     mkdir -p "$backup/$(dirname "$file")"
     cp -p "$file" "$backup/$file"
@@ -46,6 +47,9 @@ old_pattern=$(printf '%s' "$old" | sed 's/\./\\./g')
 sed "s/^version = \"${old_pattern}\"$/version = \"$next\"/" Cargo.toml > "$backup/manifest"
 cp "$backup/manifest" Cargo.toml
 cargo update --workspace --offline --quiet
+if [ -f fuzz/Cargo.toml ]; then
+    cargo update --manifest-path fuzz/Cargo.toml --workspace --offline --quiet
+fi
 sed "s/\"version\": \"${old_pattern}\"/\"version\": \"$next\"/" package.json > "$backup/package.tmp"
 cp "$backup/package.tmp" package.json
 sed -e "s/v${old_pattern}/v${next}/g" \

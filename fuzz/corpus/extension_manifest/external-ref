@@ -1,0 +1,1 @@
+{"apiVersion":1,"id":"sample","description":"Example","command":["never-execute-this"],"tools":[{"name":"hello","description":"Example","parameters":{"type":"object","$ref":"https://invalid.example/schema"}}]}

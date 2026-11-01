@@ -41,7 +41,7 @@ Chat, switch models, pick up an earlier session, and share screenshots—without
 **Linux, WSL, and macOS · x86-64 and ARM64**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.14/install.sh | HIBISCUS_VERSION=v0.3.14 sh
+curl -fsSL https://raw.githubusercontent.com/Rekabytes-Enterprise/hibiscus/v0.3.15/install.sh | HIBISCUS_VERSION=v0.3.15 sh
 ```
 
 Alternatively, install through **npx** (requires Node.js 22.19+ and npm):

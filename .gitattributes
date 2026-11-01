@@ -1,0 +1,3 @@
+
+# Blank lines and CRLF are intentional protocol bytes in SSE seed inputs.
+fuzz/corpus/provider_stream/** whitespace=-blank-at-eof,cr-at-eol
