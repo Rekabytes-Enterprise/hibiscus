@@ -1,9 +1,13 @@
 [package]
 name = "hibiscus"
-version = "0.3.14"
+version = "0.3.15"
 edition = "2021"
 description = "A standalone Rust coding agent"
 license = "MIT"
+
+[features]
+# Development-only access to bounded, side-effect-free fuzz adapters.
+fuzzing = []
 
 [dependencies]
 serde = { version = "1", features = ["rc", "derive"] }

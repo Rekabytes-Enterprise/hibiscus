@@ -1,0 +1,1 @@
+{"apiVersion":1,"id":"sample","description":"Local example","command":["never-execute-this"],"commands":[{"name":"hello","description":"Example command"}]}

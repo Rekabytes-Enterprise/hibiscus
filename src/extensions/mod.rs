@@ -377,3 +377,6 @@ impl Registry {
         Ok(json!({"text":reply.text,"isError":reply.is_error}))
     }
 }
+
+#[cfg(feature = "fuzzing")]
+pub(crate) mod fuzzing;
