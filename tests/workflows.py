@@ -426,6 +426,7 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
                 self.assertEqual(calls[-1][:2], ['release', 'upload' if exists else 'create'])
                 if not exists:
                     self.assertIn('--verify-tag', calls[-1])
+                    self.assertIn('--draft', calls[-1])
                 self.assertEqual(len((self.root / 'dist/SHA256SUMS').read_text().splitlines()), 4)
 
     def test_normal_rebuild_also_refuses_an_already_published_release(self):

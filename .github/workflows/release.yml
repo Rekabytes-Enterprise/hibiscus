@@ -902,5 +902,5 @@ jobs:
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
             gh release upload "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --clobber
           else
-            gh release create "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --verify-tag --generate-notes --title "$RELEASE_TAG"
+            gh release create "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --draft --verify-tag --generate-notes --title "$RELEASE_TAG"
           fi

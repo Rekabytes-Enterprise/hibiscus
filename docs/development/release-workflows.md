@@ -2,7 +2,7 @@
 
 ## Usage
 
-Normal tag pushes verify the source, build all four archives, verify the compiler hashes and publish through a separate job. An existing draft receives assets but stays a draft for independent inspection. Existing tags are never moved.
+Normal tag pushes verify the source, build all four archives, verify the compiler hashes and upload through a separate job. New releases are created as drafts for independent verification and explicit publication. An existing draft receives assets but stays a draft for independent inspection. Existing tags are never moved.
 
 To test builds and the ordinary artifact transport without publishing:
 
