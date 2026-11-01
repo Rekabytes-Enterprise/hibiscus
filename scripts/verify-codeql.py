@@ -6,6 +6,7 @@ security analysis is separate. A tool failure or absent finding fails the job.
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
@@ -31,17 +32,15 @@ def main():
             '}\n', encoding='utf-8')
         pack = root / 'query'
         pack.mkdir()
-        (pack / 'qlpack.yml').write_text(
-            'name: hibiscus/extractor-probe\nversion: 0.0.0\n'
-            'dependencies:\n  codeql/rust-all: "*"\n', encoding='utf-8')
         # The action supplies its linked, versioned bundle and library packs.
-        # Resolve those packs rather than downloading the latest Rust library.
-        libraries = subprocess.check_output(
-            [codeql, 'resolve', 'qlpacks', '--format=json'], text=True, timeout=60)
-        paths = json.loads(libraries).get('codeql/rust-all', [])
+        # Reuse its exact dependency manifest/lockfile for the disposable query.
+        # `resolve qlpacks` alone does not search every action-installed bundle.
+        bundle = Path(codeql).resolve().parent
+        paths = list((bundle / 'qlpacks/codeql/rust-queries').glob('*/qlpack.yml'))
         if len(paths) != 1:
-            raise RuntimeError('Expected one Rust library in the linked CodeQL bundle')
-        library = Path(paths[0])
+            raise RuntimeError('Expected one Rust query pack in the linked CodeQL bundle')
+        for filename in ['qlpack.yml', 'codeql-pack.lock.yml']:
+            shutil.copyfile(paths[0].parent / filename, pack / filename)
         query = pack / 'Probe.ql'
         query.write_text('''/**
  * @name Harmless Rust extraction probe
@@ -61,7 +60,7 @@ select expression, "Hibiscus extraction probe."
             '--source-root=' + str(source), '--threads=2', '--ram=2048')
         report = root / 'probe.sarif'
         run('database', 'analyze', str(database), str(query),
-            '--additional-packs=' + str(library), '--format=sarif-latest',
+            '--search-path=' + str(bundle), '--format=sarif-latest',
             '--output=' + str(report), '--threads=2', '--ram=2048')
         results = [item for entry in json.loads(report.read_text())['runs']
                    for item in entry.get('results', [])]
