@@ -4,6 +4,8 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-11-01
+
 ### Changed
 
 - Analyze Rust, JavaScript/TypeScript, Python and GitHub Actions with pinned CodeQL on PRs, protected-branch pushes and a weekly schedule; verify actual Rust extraction and finding detection with a disposable fixture.
