@@ -4,6 +4,7 @@ This uses the fixed workflow indentation to extract shell blocks, not a YAML
 parser. actionlint checks YAML, expressions and action schemas independently.
 """
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / '.github/workflows/release.yml'
-BUILD = ROOT / '.github/workflows/release-build.yml'
 TARGETS = {
     'linux_x64': ('x86_64-unknown-linux-musl', 'ubuntu-latest'),
     'linux_arm64': ('aarch64-unknown-linux-musl', 'ubuntu-latest'),
@@ -110,9 +110,10 @@ class WorkflowPolicy(unittest.TestCase):
         for unsafe in ['actions/checkout@', 'cargo ', 'cross build', 'secrets: inherit']:
             self.assertNotIn(unsafe, publisher)
         self.assertIn("if: github.event_name == 'push' || inputs.release_tag != ''", publisher)
-        for path in [BUILD, ROOT / '.github/workflows/ci.yml']:
-            self.assertNotIn(': write', path.read_text())
-        self.assertNotIn('GH_TOKEN', BUILD.read_text())
+        for name in TARGETS:
+            self.assertNotIn(': write', job(source, name))
+            self.assertNotIn('GH_TOKEN', job(source, name))
+        self.assertNotIn(': write', (ROOT / '.github/workflows/ci.yml').read_text())
         self.assertNotIn('secrets: inherit', source)
 
     def test_checkouts_do_not_persist_credentials(self):
@@ -124,15 +125,18 @@ class WorkflowPolicy(unittest.TestCase):
 
     def test_four_receipts_do_not_use_matrix_last_outputs(self):
         source = RELEASE.read_text()
-        self.assertEqual(set(re.findall(r'^      target: (.+)$', source, re.M)),
+        self.assertEqual(set(re.findall(r'^      TARGET: (.+)$', source, re.M)),
                          {t for t, _ in TARGETS.values()})
         for name, (target, runner) in TARGETS.items():
             block = job(source, name)
-            self.assertIn('uses: ./.github/workflows/release-build.yml', block)
-            self.assertIn('target: ' + target, block)
-            self.assertIn('runner: ' + runner, block)
+            self.assertIn('needs: [verify, test_source]', block)
+            self.assertNotIn('uses: ./.github/workflows/', block)
+            self.assertIn('TARGET: ' + target, block)
+            self.assertIn('runs-on: ' + runner, block)
+            self.assertIn('BUILD_RUNNER: ' + runner, block)
             self.assertIn('contents: read', block)
-            self.assertIn('source_ref: ${{ needs.verify.outputs.source_commit }}', block)
+            self.assertNotIn('actions/checkout@', block)
+            self.assertIn('SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}', block)
             self.assertIn('needs.' + name + '.outputs.sha256', source)
             self.assertIn('needs.' + name + '.outputs.cache_key', source)
 
@@ -144,16 +148,49 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertEqual(readonly.count('fail-on-cache-miss: true'), 4)
         self.assertNotIn('restore-keys:', readonly)
 
+    def test_compiler_steps_share_one_contract_without_callable_source_inputs(self):
+        source = RELEASE.read_text()
+        steps = [job(source, name).split('    steps:\n', 1)[1] for name in TARGETS]
+        self.assertEqual(len(set(steps)), 1, 'Compiler steps must change together')
+        self.assertNotIn('workflow_call:', source)
+        self.assertNotIn('inputs.source_ref', source)
+        self.assertFalse((ROOT / '.github/workflows/release-build.yml').exists())
+
+    def test_source_receipt_is_produced_before_any_repository_program_runs(self):
+        source = RELEASE.read_text()
+        verifier = job(source, 'verify')
+        for executable in ['cargo ', 'cross ', 'node ', 'sh tests/', 'python3 tests/']:
+            self.assertNotIn(executable, verifier)
+        self.assertIn('Package authorized source snapshot', verifier)
+        self.assertIn('source_sha256: ${{ steps.snapshot.outputs.sha256 }}', verifier)
+        consumers = [job(source, name) for name in ['test_source'] + list(TARGETS)]
+        for consumer in consumers:
+            self.assertNotIn('actions/checkout@', consumer)
+            self.assertNotIn('restore-keys:', consumer)
+            self.assertIn('fail-on-cache-miss: true', consumer)
+            self.assertIn('name: verified-source', consumer)
+            self.assertIn('key: ${{ needs.verify.outputs.source_cache_key }}', consumer)
+            self.assertIn('path: release-source-transport/source.tar', consumer)
+            self.assertNotIn('path: ${{ runner.temp }}', consumer)
+            self.assertIn('name: Stage source archive outside workspace', consumer)
+            self.assertIn('python3 -c "$HIBISCUS_SOURCE_UNPACK_SCRIPT"', consumer)
+            self.assertNotIn('run-id:', consumer)
+            self.assertNotIn('github-token:', consumer)
+        self.assertEqual(source.count('HIBISCUS_SOURCE_UNPACK_SCRIPT: |'), 1)
+        self.assertEqual(source.count('actions/checkout@'), 1)
+
     def test_toolchain_images_and_cross_are_pinned(self):
-        source = BUILD.read_text()
-        self.assertEqual(source.count('@sha256:'), 2)
-        for value in re.findall(r'IMAGE: (.+)', source):
-            self.assertRegex(value, r'^ghcr.io/cross-rs/[\w-]+@sha256:[0-9a-f]{64}$')
-        self.assertIn('cargo install cross --locked --version 0.2.5', source)
-        for path in [BUILD, RELEASE, ROOT / '.github/workflows/ci.yml']:
+        source = RELEASE.read_text()
+        for name in TARGETS:
+            compiler = job(source, name)
+            self.assertEqual(compiler.count('@sha256:'), 2)
+            for value in re.findall(r'IMAGE: (.+)', compiler):
+                self.assertRegex(value, r'^ghcr.io/cross-rs/[\w-]+@sha256:[0-9a-f]{64}$')
+            self.assertIn('cargo install cross --locked --version 0.2.5', compiler)
+            self.assertIn('archive: true', compiler)
+        for path in [RELEASE, ROOT / '.github/workflows/ci.yml']:
             text = path.read_text()
             self.assertEqual(text.count('uses: dtolnay/rust-toolchain@'), text.count('toolchain: 1.99.1'))
-        self.assertIn('archive: true', source)
 
     def test_exact_tag_verification_and_readonly_draft_preflight_remain(self):
         source = RELEASE.read_text()
@@ -184,14 +221,14 @@ class ReleaseShell(unittest.TestCase):
         self.assertEqual(run(self.verify, self.root, self.env).returncode, 0)
 
     def test_release_compiler_accepts_only_a_frozen_commit(self):
-        script = shell(BUILD, 'Validate frozen source')
+        script = shell(RELEASE, 'Validate frozen source')
         self.assertEqual(run(script, self.root, {'SOURCE_REF': 'a' * 40}).returncode, 0)
         for value in ['', 'main', 'refs/pull/1/head', 'v1.2.3', 'a' * 39,
                       'a' * 41, '$(touch injected)', 'a' * 40 + '\nmain']:
             self.assertNotEqual(run(script, self.root, {'SOURCE_REF': value}).returncode, 0)
         self.assertFalse((self.root / 'injected').exists())
         self.assertIn("if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'",
-                      job(BUILD.read_text(), 'build'))
+                      job(RELEASE.read_text(), 'linux_x64'))
 
     def test_release_source_requires_merged_ancestry_and_available_evidence(self):
         directory = self.root / 'bin'
@@ -253,7 +290,7 @@ else: sys.exit(2)
             self.assertNotEqual(run(self.verify, self.root, env).returncode, 0)
 
     def test_target_runner_boundary_accepts_only_supported_pairs(self):
-        script = shell(BUILD, 'Validate target and runner')
+        script = shell(RELEASE, 'Validate target and runner')
         for target, runner in TARGETS.values():
             self.assertEqual(run(script, self.root, {'TARGET': target, 'BUILD_RUNNER': runner}).returncode, 0)
         for target, runner in [('x86_64-apple-darwin', 'ubuntu-latest'), ('$(touch injected)', 'ubuntu-latest')]:
@@ -295,7 +332,7 @@ else: sys.exit(2)
         binary.write_bytes(b'not-executed-fixture')
         binary.chmod(0o755)
         output = self.root / 'outputs'
-        result = run(shell(BUILD, 'Package binary and receipt'), self.root,
+        result = run(shell(RELEASE, 'Package binary and receipt'), self.root,
                      {'TARGET': target, 'GITHUB_OUTPUT': str(output), 'GITHUB_RUN_ID': '123'})
         self.assertEqual(result.returncode, 0, result.stderr)
         archive = self.root / 'dist' / ('hibiscus-' + target + '.tar.gz')
@@ -357,6 +394,181 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(calls, [])
         self.assertFalse((self.root / 'injected').exists())
+
+
+class SourceSnapshot(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='hibiscus-source-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source = self.root / 'source'
+        self.source.mkdir()
+        self.workspace = self.root / 'consumer'
+        self.workspace.mkdir()
+        self.temp = self.root / 'runner'
+        self.archive = self.temp / 'verified-source/source.tar'
+        self.archive.parent.mkdir(parents=True)
+        lines = RELEASE.read_text().splitlines()
+        start = lines.index('  HIBISCUS_SOURCE_UNPACK_SCRIPT: |') + 1
+        end = lines.index('jobs:')
+        self.unpack = textwrap.dedent('\n'.join(lines[start:end]))
+
+    def git(self, *args):
+        return subprocess.check_output(
+            ['git', '-c', 'init.templateDir=', '-c', 'core.hooksPath=/dev/null',
+             '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid'] + list(args),
+            cwd=self.source, env={'PATH': os.environ['PATH'], 'HOME': str(self.root)},
+            text=True, stderr=subprocess.PIPE).strip()
+
+    def freeze(self):
+        self.git('init', '-q')
+        (self.source / 'Cargo.toml').write_text('[package]\nversion = "1.2.3"\n')
+        executable = self.source / 'script.sh'
+        executable.write_text('#!/bin/sh\nexit 0\n')
+        executable.chmod(0o755)
+        (self.source / 'literal').write_text('$Format:%H$\n')
+        (self.source / '.gitattributes').write_text(
+            'Cargo.toml export-ignore\nliteral export-subst\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'fixture')
+        return self.git('rev-parse', 'HEAD')
+
+    def package(self, commit):
+        output = self.root / 'outputs'
+        result = run(shell(RELEASE, 'Package authorized source snapshot'), self.source,
+                     {'SOURCE_COMMIT': commit, 'RUNNER_TEMP': str(self.temp),
+                      'GITHUB_OUTPUT': str(output), 'GITHUB_RUN_ID': '123',
+                      'GITHUB_RUN_ATTEMPT': '2'})
+        if result.returncode == 0:
+            transport = self.source / 'release-source-transport'
+            transport.rename(self.workspace / 'release-source-transport')
+            staged = run(shell(RELEASE, 'Stage source archive outside workspace'),
+                         self.workspace, {'RUNNER_TEMP': str(self.temp)})
+            self.assertEqual(staged.returncode, 0, staged.stderr)
+        return result, output
+
+    def restore(self, digest=None):
+        expected = digest if digest is not None else hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        return run('python3 -c "$SCRIPT"', self.root,
+                   {'SCRIPT': self.unpack, 'RUNNER_TEMP': str(self.temp),
+                    'GITHUB_WORKSPACE': str(self.workspace), 'SOURCE_SHA256': expected})
+
+    def write_archive(self, entries):
+        with tarfile.open(self.archive, 'w') as stream:
+            for name, kind, data in entries:
+                info = tarfile.TarInfo(name)
+                info.type = kind
+                if kind in [tarfile.SYMTYPE, tarfile.LNKTYPE]:
+                    info.linkname = '../outside'
+                if kind == tarfile.REGTYPE:
+                    info.size = len(data)
+                    stream.addfile(info, io.BytesIO(data))
+                else:
+                    stream.addfile(info)
+
+    def test_committed_bytes_and_executable_modes_survive_export_attributes(self):
+        commit = self.freeze()
+        # Never build modified working-tree files or metadata needed only by a newer tag.
+        (self.source / 'Cargo.toml').write_text('uncommitted')
+        (self.source / 'untracked').write_text('untracked')
+        result, output = self.package(commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        self.assertIn('sha256=' + digest, output.read_text())
+        self.assertIn('cache_key=source-123-2-' + commit + '-' + digest, output.read_text())
+        result = self.restore()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.workspace / 'Cargo.toml').read_text(), '[package]\nversion = "1.2.3"\n')
+        self.assertEqual((self.workspace / 'literal').read_text(), '$Format:%H$\n')
+        self.assertEqual((self.workspace / 'script.sh').stat().st_mode & 0o777, 0o755)
+        self.assertEqual((self.workspace / 'Cargo.toml').stat().st_mode & 0o777, 0o644)
+        self.assertFalse((self.workspace / '.git').exists())
+        self.assertFalse((self.workspace / 'untracked').exists())
+
+    def test_tracked_symlinks_are_rejected_before_creating_a_receipt(self):
+        self.freeze()
+        (self.source / 'link').symlink_to('Cargo.toml')
+        self.git('add', 'link')
+        self.git('commit', '-qm', 'symlink')
+        result, output = self.package(self.git('rev-parse', 'HEAD'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(output.exists())
+
+    def test_invalid_source_identity_is_rejected(self):
+        self.freeze()
+        for value in ['main', 'v1.2.3', 'a' * 39, 'a' * 40 + '\nmain', '$(touch injected)']:
+            result, output = self.package(value)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
+        self.assertFalse((self.source / 'injected').exists())
+
+    def test_tampered_archive_and_invalid_receipts_are_rejected(self):
+        self.write_archive([('file', tarfile.REGTYPE, b'original')])
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        self.write_archive([('file', tarfile.REGTYPE, b'tampered')])
+        for expected in [digest, '', 'z' * 64, 'a' * 63, 'a' * 64 + '\nfile']:
+            self.assertNotEqual(self.restore(expected).returncode, 0)
+            self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_all_members_are_validated_before_any_files_are_written(self):
+        unsafe = [('/absolute', tarfile.REGTYPE), ('../outside', tarfile.REGTYPE),
+                  ('dir/../outside', tarfile.REGTYPE), ('dir//file', tarfile.REGTYPE),
+                  ('.git/config', tarfile.REGTYPE), ('back\\slash', tarfile.REGTYPE),
+                  ('link', tarfile.SYMTYPE), ('hardlink', tarfile.LNKTYPE),
+                  ('fifo', tarfile.FIFOTYPE), ('device', tarfile.CHRTYPE),
+                  ('valid', tarfile.REGTYPE), ('valid/child', tarfile.REGTYPE)]
+        for name, kind in unsafe:
+            with self.subTest(name=name, kind=kind):
+                self.write_archive([('valid', tarfile.REGTYPE, b'first'), (name, kind, b'bad')])
+                self.assertNotEqual(self.restore().returncode, 0)
+                self.assertEqual(list(self.workspace.iterdir()), [])
+        self.assertFalse((self.root / 'outside').exists())
+
+    def test_source_staging_rejects_extra_files_and_symlinks(self):
+        transport = self.workspace / 'release-source-transport'
+        transport.mkdir()
+        archive = transport / 'source.tar'
+        extra = transport / 'extra'
+        archive.write_bytes(b'fixture')
+        extra.write_bytes(b'extra')
+        script = shell(RELEASE, 'Stage source archive outside workspace')
+        self.assertNotEqual(run(script, self.workspace, {'RUNNER_TEMP': str(self.temp)}).returncode, 0)
+        self.assertTrue(extra.exists())
+        extra.unlink()
+        outside = self.root / 'outside.tar'
+        outside.write_bytes(b'fixture')
+        archive.symlink_to(outside)
+        self.assertNotEqual(run(script, self.workspace, {'RUNNER_TEMP': str(self.temp)}).returncode, 0)
+        self.assertEqual(outside.read_bytes(), b'fixture')
+
+    def test_archive_member_and_path_bounds_are_enforced(self):
+        self.write_archive([('x' * 1025, tarfile.REGTYPE, b'')])
+        self.assertNotEqual(self.restore().returncode, 0)
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        self.write_archive([('large', tarfile.REGTYPE, b'x' * (16 * 1024 * 1024 + 1))])
+        self.assertNotEqual(self.restore().returncode, 0)
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        self.write_archive([(str(i), tarfile.REGTYPE, b'') for i in range(10001)])
+        self.assertNotEqual(self.restore().returncode, 0)
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        with self.archive.open('wb') as output:
+            output.truncate(64 * 1024 * 1024 + 1)
+        self.assertNotEqual(self.restore('a' * 64).returncode, 0)
+        self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_symlink_archive_nonempty_workspace_and_empty_archive_are_rejected(self):
+        self.write_archive([])
+        self.assertNotEqual(self.restore().returncode, 0)
+        self.write_archive([('file', tarfile.REGTYPE, b'valid')])
+        (self.workspace / 'keep').write_text('existing')
+        self.assertNotEqual(self.restore().returncode, 0)
+        self.assertEqual((self.workspace / 'keep').read_text(), 'existing')
+        (self.workspace / 'keep').unlink()
+        actual = self.archive.with_name('actual.tar')
+        self.archive.rename(actual)
+        self.archive.symlink_to(actual)
+        self.assertNotEqual(self.restore().returncode, 0)
+        self.assertEqual(list(self.workspace.iterdir()), [])
 
 
 if __name__ == '__main__':

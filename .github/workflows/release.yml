@@ -23,12 +23,73 @@ permissions:
 env:
   RELEASE_TAG: ${{ inputs.release_tag || (github.event_name == 'push' && github.ref_name) || '' }}
 
+  # Trusted workflow code, including when rebuilding a tag that predates this transport.
+  HIBISCUS_SOURCE_UNPACK_SCRIPT: |
+    import hashlib
+    import os
+    from pathlib import Path, PurePosixPath
+    import re
+    import tarfile
+
+    archive = Path(os.environ["RUNNER_TEMP"]) / "verified-source/source.tar"
+    workspace = Path(os.environ["GITHUB_WORKSPACE"])
+    expected = os.environ["SOURCE_SHA256"]
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise SystemExit("Invalid source receipt")
+    if archive.is_symlink() or not archive.is_file() or archive.stat().st_size > 64 * 1024 * 1024:
+        raise SystemExit("Invalid source archive")
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
+        raise SystemExit("Source digest mismatch")
+    workspace.mkdir(parents=True, exist_ok=True)
+    if any(workspace.iterdir()):
+        raise SystemExit("Source destination must be empty")
+    with tarfile.open(archive, mode="r:") as stream:
+        members = []
+        paths = {}
+        total = 0
+        for member in stream:
+            name = member.name.rstrip("/") if member.isdir() else member.name
+            parts = name.split("/")
+            if (not name or len(name) > 1024 or "\\" in name
+                    or any(part in ("", ".", "..", ".git") for part in parts)
+                    or name in paths or not (member.isfile() or member.isdir())):
+                raise SystemExit("Unsafe source member")
+            if member.size < 0 or member.size > 16 * 1024 * 1024:
+                raise SystemExit("Source member too large")
+            total += member.size
+            if len(members) >= 10000 or total > 128 * 1024 * 1024:
+                raise SystemExit("Source archive too large")
+            paths[name] = member.isdir()
+            members.append((name, member))
+        if not members:
+            raise SystemExit("Empty source archive")
+        for name in paths:
+            for parent in PurePosixPath(name).parents:
+                if parent.as_posix() in paths and not paths[parent.as_posix()]:
+                    raise SystemExit("Source file conflicts with directory")
+        # Validate every member before creating anything in the workspace.
+        for name, member in members:
+            destination = workspace / name
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True, mode=0o755)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                with stream.extractfile(member) as source, destination.open("xb") as output:
+                    while True:
+                        block = source.read(1024 * 1024)
+                        if not block:
+                            break
+                        output.write(block)
+                destination.chmod(0o755 if member.mode & 0o111 else 0o644)
+
 jobs:
   verify:
     timeout-minutes: 15
     runs-on: ubuntu-latest
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
+      source_sha256: ${{ steps.snapshot.outputs.sha256 }}
+      source_cache_key: ${{ steps.snapshot.outputs.cache_key }}
     steps:
       - name: Authorize merged release source
         id: authorize
@@ -59,6 +120,84 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"
           printf 'commit=%s\n' "$AUTHORIZED_COMMIT" >> "$GITHUB_OUTPUT"
+      - name: Check release tag matches Cargo version
+        if: env.RELEASE_TAG != ''
+        run: |
+          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          version=$(awk -F ' *= *' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' Cargo.toml)
+          test "v$version" = "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
+          git show --no-patch --format='Release source: %H' HEAD
+      - name: Require an existing draft for direct uploads
+        if: inputs.direct_upload && inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test -n "$RELEASE_TAG"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+      # This job never runs repository programs. Its receipt cannot be changed by build/test code.
+      - name: Package authorized source snapshot
+        id: snapshot
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git ls-tree -r "$SOURCE_COMMIT" | awk '$1 != "100644" && $1 != "100755" { exit 1 }'
+          test ! -e release-source-transport
+          mkdir -p .git/info release-source-transport
+          # Export attributes must not omit files or substitute committed bytes.
+          printf '* -export-ignore -export-subst\n' > .git/info/attributes
+          GIT_ATTR_NOSYSTEM=1 git -c core.attributesFile=/dev/null -c tar.umask=0022 archive \
+            --format=tar --output=release-source-transport/source.tar "$SOURCE_COMMIT"
+          digest=$(shasum -a 256 release-source-transport/source.tar | cut -d ' ' -f 1)
+          printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'cache_key=source-%s-%s-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$SOURCE_COMMIT" "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-source
+          path: release-source-transport/source.tar
+          if-no-files-found: error
+          retention-days: 5
+          archive: true
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: release-source-transport/source.tar
+          key: ${{ steps.snapshot.outputs.cache_key }}
+
+  test_source:
+    needs: verify
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-source
+          path: release-source-transport
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: release-source-transport/source.tar
+          key: ${{ needs.verify.outputs.source_cache_key }}
+          fail-on-cache-miss: true
+      - name: Stage source archive outside workspace
+        shell: bash
+        run: |
+          test -d release-source-transport && test ! -L release-source-transport
+          test -f release-source-transport/source.tar && test ! -L release-source-transport/source.tar
+          mkdir -p "$RUNNER_TEMP/verified-source"
+          mv release-source-transport/source.tar "$RUNNER_TEMP/verified-source/source.tar"
+          rmdir release-source-transport
+      - name: Verify and unpack authorized source
+        shell: bash
+        env:
+          SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}
+        run: |
+          python3 -c "$HIBISCUS_SOURCE_UNPACK_SCRIPT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
@@ -78,66 +217,398 @@ jobs:
           TERM: dumb
         timeout-minutes: 5
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Check release tag matches Cargo version
-        if: env.RELEASE_TAG != ''
-        run: |
-          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          version=$(awk -F ' *= *' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' Cargo.toml)
-          test "v$version" = "$RELEASE_TAG"
-          test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{commit}")"
-          git show --no-patch --format='Release source: %H' HEAD
-      - name: Require an existing draft for direct uploads
-        if: inputs.direct_upload && inputs.release_tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          test -n "$RELEASE_TAG"
-          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
 
   linux_x64:
-    needs: verify
-    uses: ./.github/workflows/release-build.yml
+    needs: [verify, test_source]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
-    with:
-      source_ref: ${{ needs.verify.outputs.source_commit }}
-      target: x86_64-unknown-linux-musl
-      runner: ubuntu-latest
-      cache_transport: ${{ inputs.direct_upload || false }}
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+      cache_key: ${{ steps.receipt.outputs.cache_key }}
+    env:
+      TARGET: x86_64-unknown-linux-musl
+      BUILD_RUNNER: ubuntu-latest
+    steps:
+      - name: Validate frozen source
+        shell: bash
+        env:
+          SOURCE_REF: ${{ needs.verify.outputs.source_commit }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - name: Validate target and runner
+        shell: bash
+        env:
+          BUILD_RUNNER: ${{ env.BUILD_RUNNER }}
+        run: |
+          case "$TARGET:$BUILD_RUNNER" in
+            x86_64-unknown-linux-musl:ubuntu-latest | aarch64-unknown-linux-musl:ubuntu-latest | x86_64-apple-darwin:macos-15-intel | aarch64-apple-darwin:macos-15) ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-source
+          path: release-source-transport
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: release-source-transport/source.tar
+          key: ${{ needs.verify.outputs.source_cache_key }}
+          fail-on-cache-miss: true
+      - name: Stage source archive outside workspace
+        shell: bash
+        run: |
+          test -d release-source-transport && test ! -L release-source-transport
+          test -f release-source-transport/source.tar && test ! -L release-source-transport/source.tar
+          mkdir -p "$RUNNER_TEMP/verified-source"
+          mv release-source-transport/source.tar "$RUNNER_TEMP/verified-source/source.tar"
+          rmdir release-source-transport
+      - name: Verify and unpack authorized source
+        shell: bash
+        env:
+          SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}
+        run: |
+          python3 -c "$HIBISCUS_SOURCE_UNPACK_SCRIPT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: ${{ env.TARGET }}
+      - name: Build Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CROSS_TARGET_X86_64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:77db671d8356a64ae72a3e1415e63f547f26d374fbe3c4762c1cd36c7eac7b99
+          CROSS_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:702154f52b2d8091671aa2c84d5582d849f949977228c735ff8462f93cc0e1e4
+        run: |
+          cargo install cross --locked --version 0.2.5
+          cross build --locked --release --target "$TARGET"
+      - name: Build macOS binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo build --locked --release --target "$TARGET"
+          codesign --force --sign - "target/$TARGET/release/hibiscus"
+      - name: Package binary and receipt
+        id: receipt
+        shell: bash
+        run: |
+          mkdir -p dist package
+          cp "target/$TARGET/release/hibiscus" package/hibiscus
+          archive="dist/hibiscus-$TARGET.tar.gz"
+          COPYFILE_DISABLE=1 tar -C package -czf "$archive" hibiscus
+          digest=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
+          printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'cache_key=release-%s-%s-%s\n' "$GITHUB_RUN_ID" "$TARGET" "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: release-${{ env.TARGET }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 5
+          archive: true
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-${{ env.TARGET }}.tar.gz
+          key: ${{ steps.receipt.outputs.cache_key }}
 
   linux_arm64:
-    needs: verify
-    uses: ./.github/workflows/release-build.yml
+    needs: [verify, test_source]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
-    with:
-      source_ref: ${{ needs.verify.outputs.source_commit }}
-      target: aarch64-unknown-linux-musl
-      runner: ubuntu-latest
-      cache_transport: ${{ inputs.direct_upload || false }}
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+      cache_key: ${{ steps.receipt.outputs.cache_key }}
+    env:
+      TARGET: aarch64-unknown-linux-musl
+      BUILD_RUNNER: ubuntu-latest
+    steps:
+      - name: Validate frozen source
+        shell: bash
+        env:
+          SOURCE_REF: ${{ needs.verify.outputs.source_commit }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - name: Validate target and runner
+        shell: bash
+        env:
+          BUILD_RUNNER: ${{ env.BUILD_RUNNER }}
+        run: |
+          case "$TARGET:$BUILD_RUNNER" in
+            x86_64-unknown-linux-musl:ubuntu-latest | aarch64-unknown-linux-musl:ubuntu-latest | x86_64-apple-darwin:macos-15-intel | aarch64-apple-darwin:macos-15) ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-source
+          path: release-source-transport
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: release-source-transport/source.tar
+          key: ${{ needs.verify.outputs.source_cache_key }}
+          fail-on-cache-miss: true
+      - name: Stage source archive outside workspace
+        shell: bash
+        run: |
+          test -d release-source-transport && test ! -L release-source-transport
+          test -f release-source-transport/source.tar && test ! -L release-source-transport/source.tar
+          mkdir -p "$RUNNER_TEMP/verified-source"
+          mv release-source-transport/source.tar "$RUNNER_TEMP/verified-source/source.tar"
+          rmdir release-source-transport
+      - name: Verify and unpack authorized source
+        shell: bash
+        env:
+          SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}
+        run: |
+          python3 -c "$HIBISCUS_SOURCE_UNPACK_SCRIPT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: ${{ env.TARGET }}
+      - name: Build Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CROSS_TARGET_X86_64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:77db671d8356a64ae72a3e1415e63f547f26d374fbe3c4762c1cd36c7eac7b99
+          CROSS_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:702154f52b2d8091671aa2c84d5582d849f949977228c735ff8462f93cc0e1e4
+        run: |
+          cargo install cross --locked --version 0.2.5
+          cross build --locked --release --target "$TARGET"
+      - name: Build macOS binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo build --locked --release --target "$TARGET"
+          codesign --force --sign - "target/$TARGET/release/hibiscus"
+      - name: Package binary and receipt
+        id: receipt
+        shell: bash
+        run: |
+          mkdir -p dist package
+          cp "target/$TARGET/release/hibiscus" package/hibiscus
+          archive="dist/hibiscus-$TARGET.tar.gz"
+          COPYFILE_DISABLE=1 tar -C package -czf "$archive" hibiscus
+          digest=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
+          printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'cache_key=release-%s-%s-%s\n' "$GITHUB_RUN_ID" "$TARGET" "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: release-${{ env.TARGET }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 5
+          archive: true
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-${{ env.TARGET }}.tar.gz
+          key: ${{ steps.receipt.outputs.cache_key }}
 
   macos_x64:
-    needs: verify
-    uses: ./.github/workflows/release-build.yml
+    needs: [verify, test_source]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15-intel
+    timeout-minutes: 25
     permissions:
       contents: read
-    with:
-      source_ref: ${{ needs.verify.outputs.source_commit }}
-      target: x86_64-apple-darwin
-      runner: macos-15-intel
-      cache_transport: ${{ inputs.direct_upload || false }}
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+      cache_key: ${{ steps.receipt.outputs.cache_key }}
+    env:
+      TARGET: x86_64-apple-darwin
+      BUILD_RUNNER: macos-15-intel
+    steps:
+      - name: Validate frozen source
+        shell: bash
+        env:
+          SOURCE_REF: ${{ needs.verify.outputs.source_commit }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - name: Validate target and runner
+        shell: bash
+        env:
+          BUILD_RUNNER: ${{ env.BUILD_RUNNER }}
+        run: |
+          case "$TARGET:$BUILD_RUNNER" in
+            x86_64-unknown-linux-musl:ubuntu-latest | aarch64-unknown-linux-musl:ubuntu-latest | x86_64-apple-darwin:macos-15-intel | aarch64-apple-darwin:macos-15) ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-source
+          path: release-source-transport
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: release-source-transport/source.tar
+          key: ${{ needs.verify.outputs.source_cache_key }}
+          fail-on-cache-miss: true
+      - name: Stage source archive outside workspace
+        shell: bash
+        run: |
+          test -d release-source-transport && test ! -L release-source-transport
+          test -f release-source-transport/source.tar && test ! -L release-source-transport/source.tar
+          mkdir -p "$RUNNER_TEMP/verified-source"
+          mv release-source-transport/source.tar "$RUNNER_TEMP/verified-source/source.tar"
+          rmdir release-source-transport
+      - name: Verify and unpack authorized source
+        shell: bash
+        env:
+          SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}
+        run: |
+          python3 -c "$HIBISCUS_SOURCE_UNPACK_SCRIPT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: ${{ env.TARGET }}
+      - name: Build Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CROSS_TARGET_X86_64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:77db671d8356a64ae72a3e1415e63f547f26d374fbe3c4762c1cd36c7eac7b99
+          CROSS_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:702154f52b2d8091671aa2c84d5582d849f949977228c735ff8462f93cc0e1e4
+        run: |
+          cargo install cross --locked --version 0.2.5
+          cross build --locked --release --target "$TARGET"
+      - name: Build macOS binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo build --locked --release --target "$TARGET"
+          codesign --force --sign - "target/$TARGET/release/hibiscus"
+      - name: Package binary and receipt
+        id: receipt
+        shell: bash
+        run: |
+          mkdir -p dist package
+          cp "target/$TARGET/release/hibiscus" package/hibiscus
+          archive="dist/hibiscus-$TARGET.tar.gz"
+          COPYFILE_DISABLE=1 tar -C package -czf "$archive" hibiscus
+          digest=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
+          printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'cache_key=release-%s-%s-%s\n' "$GITHUB_RUN_ID" "$TARGET" "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: release-${{ env.TARGET }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 5
+          archive: true
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-${{ env.TARGET }}.tar.gz
+          key: ${{ steps.receipt.outputs.cache_key }}
 
   macos_arm64:
-    needs: verify
-    uses: ./.github/workflows/release-build.yml
+    needs: [verify, test_source]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 25
     permissions:
       contents: read
-    with:
-      source_ref: ${{ needs.verify.outputs.source_commit }}
-      target: aarch64-apple-darwin
-      runner: macos-15
-      cache_transport: ${{ inputs.direct_upload || false }}
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+      cache_key: ${{ steps.receipt.outputs.cache_key }}
+    env:
+      TARGET: aarch64-apple-darwin
+      BUILD_RUNNER: macos-15
+    steps:
+      - name: Validate frozen source
+        shell: bash
+        env:
+          SOURCE_REF: ${{ needs.verify.outputs.source_commit }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - name: Validate target and runner
+        shell: bash
+        env:
+          BUILD_RUNNER: ${{ env.BUILD_RUNNER }}
+        run: |
+          case "$TARGET:$BUILD_RUNNER" in
+            x86_64-unknown-linux-musl:ubuntu-latest | aarch64-unknown-linux-musl:ubuntu-latest | x86_64-apple-darwin:macos-15-intel | aarch64-apple-darwin:macos-15) ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: verified-source
+          path: release-source-transport
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: release-source-transport/source.tar
+          key: ${{ needs.verify.outputs.source_cache_key }}
+          fail-on-cache-miss: true
+      - name: Stage source archive outside workspace
+        shell: bash
+        run: |
+          test -d release-source-transport && test ! -L release-source-transport
+          test -f release-source-transport/source.tar && test ! -L release-source-transport/source.tar
+          mkdir -p "$RUNNER_TEMP/verified-source"
+          mv release-source-transport/source.tar "$RUNNER_TEMP/verified-source/source.tar"
+          rmdir release-source-transport
+      - name: Verify and unpack authorized source
+        shell: bash
+        env:
+          SOURCE_SHA256: ${{ needs.verify.outputs.source_sha256 }}
+        run: |
+          python3 -c "$HIBISCUS_SOURCE_UNPACK_SCRIPT"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: ${{ env.TARGET }}
+      - name: Build Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CROSS_TARGET_X86_64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:77db671d8356a64ae72a3e1415e63f547f26d374fbe3c4762c1cd36c7eac7b99
+          CROSS_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:702154f52b2d8091671aa2c84d5582d849f949977228c735ff8462f93cc0e1e4
+        run: |
+          cargo install cross --locked --version 0.2.5
+          cross build --locked --release --target "$TARGET"
+      - name: Build macOS binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo build --locked --release --target "$TARGET"
+          codesign --force --sign - "target/$TARGET/release/hibiscus"
+      - name: Package binary and receipt
+        id: receipt
+        shell: bash
+        run: |
+          mkdir -p dist package
+          cp "target/$TARGET/release/hibiscus" package/hibiscus
+          archive="dist/hibiscus-$TARGET.tar.gz"
+          COPYFILE_DISABLE=1 tar -C package -czf "$archive" hibiscus
+          digest=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
+          printf 'sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'cache_key=release-%s-%s-%s\n' "$GITHUB_RUN_ID" "$TARGET" "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !inputs.direct_upload }}
+        with:
+          name: release-${{ env.TARGET }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 5
+          archive: true
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: inputs.direct_upload
+        with:
+          path: dist/hibiscus-${{ env.TARGET }}.tar.gz
+          key: ${{ steps.receipt.outputs.cache_key }}
 
   verify_transport:
     needs: [linux_x64, linux_arm64, macos_x64, macos_arm64]

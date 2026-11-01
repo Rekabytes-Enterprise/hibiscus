@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 
-from tools.evaluation.execution import environment, process, session_evidence
+from tools.evaluation.execution import AGENT_CREDENTIAL_ENV, environment, process, session_evidence
 from tools.evaluation.fixture import Fixture
 from tools.evaluation.runner import evaluate, inspect_variant, run_case, write_report
 from tools.evaluation.spec import InvalidSpec, inventory, load_plan, load_suite
@@ -213,24 +213,45 @@ class FlowTests(unittest.TestCase):
         # Test the live branch through loopback, not a real account or network endpoint.
         from unittest.mock import patch
         task = self.suite.tasks[1]
-        with Fixture(task.offline) as fixture:
+        with Fixture(task.offline, expected_bearer="SYNTHETIC-LIVE-BRANCH") as fixture:
             provider = {**self.plan.provider, "baseUrl": fixture.base_url,
                         "apiKeyEnv": "HIBISCUS_EVAL_API_KEY"}
             plan = replace(self.plan, mode="live", provider=provider)
             with patch.dict(os.environ, {"HIBISCUS_EVAL_API_KEY": "SYNTHETIC-LIVE-BRANCH",
+                                         AGENT_CREDENTIAL_ENV: "WRONG-INHERITED-VALUE",
                                          "HIBISCUS_MODEL": "wrong/model"}):
                 result = self.case(plan=plan)
         self.assertTrue(result["solved"], result)
         self.assertEqual(len(fixture.requests), 4)
+        self.assertEqual(fixture.authenticated_requests, 4)
+        self.assertEqual(fixture.rejected_authentication, 0)
         self.assertIsNone(result["fixtureProfile"])
         self.assertNotIn("SYNTHETIC-LIVE-BRANCH", json.dumps(result))
         config_path = self.root / "run/app/config.json"
         stored = json.loads(config_path.read_text())
-        self.assertEqual(stored["providers"][0]["apiKeyEnv"], "HIBISCUS_EVAL_API_KEY")
+        self.assertEqual(stored["providers"][0]["apiKeyEnv"], AGENT_CREDENTIAL_ENV)
+        self.assertNotIn("HIBISCUS_EVAL_API_KEY", config_path.read_text())
         self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
         for path in (self.root / "run").rglob("*"):
             if path.is_file():
                 self.assertNotIn(b"SYNTHETIC-LIVE-BRANCH", path.read_bytes(), str(path))
+                self.assertNotIn(b"WRONG-INHERITED-VALUE", path.read_bytes(), str(path))
+
+    def test_wrong_credential_is_rejected_and_grader_has_no_credential(self):
+        from unittest.mock import patch
+        task = self.suite.tasks[1]
+        with Fixture(task.offline, expected_bearer="EXPECTED-SYNTHETIC") as fixture:
+            plan = replace(self.plan, mode="live", provider={**self.plan.provider,
+                           "baseUrl": fixture.base_url, "apiKeyEnv": "HIBISCUS_EVAL_API_KEY"})
+            with patch.dict(os.environ, {"HIBISCUS_EVAL_API_KEY": "WRONG-SYNTHETIC",
+                                         AGENT_CREDENTIAL_ENV: "ALSO-WRONG"}):
+                result = self.case(plan=plan)
+                grader_env = environment(self.root)
+        self.assertFalse(result["solved"])
+        self.assertEqual(fixture.authenticated_requests, 0)
+        self.assertGreater(fixture.rejected_authentication, 0)
+        self.assertNotIn("HIBISCUS_EVAL_API_KEY", grader_env)
+        self.assertNotIn(AGENT_CREDENTIAL_ENV, grader_env)
 
     def test_bounded_process_caps_output_and_completed_leader_descendants(self):
         root = self.root / "output"
