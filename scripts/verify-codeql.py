@@ -60,7 +60,7 @@ select expression, "Hibiscus extraction probe."
             '--source-root=' + str(source), '--threads=2', '--ram=2048')
         report = root / 'probe.sarif'
         run('database', 'analyze', str(database), str(query),
-            '--search-path=' + str(bundle), '--format=sarif-latest',
+            '--additional-packs=' + str(bundle), '--format=sarif-latest',
             '--output=' + str(report), '--threads=2', '--ram=2048')
         results = [item for entry in json.loads(report.read_text())['runs']
                    for item in entry.get('results', [])]

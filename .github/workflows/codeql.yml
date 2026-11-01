@@ -44,17 +44,17 @@ jobs:
           build-mode: none
           tools: linked
           queries: security-extended
+      - name: Verify Rust extraction and finding detection
+        if: matrix.language == 'rust'
+        env:
+          CODEQL: ${{ steps.init.outputs.codeql-path }}
+        run: python3 scripts/verify-codeql.py
       - name: Analyze repository
         uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:${{ matrix.language }}
           output: ${{ runner.temp }}/codeql-sarif
           wait-for-processing: true
-      - name: Verify Rust extraction and finding detection
-        if: matrix.language == 'rust'
-        env:
-          CODEQL: ${{ steps.init.outputs.codeql-path }}
-        run: python3 scripts/verify-codeql.py
       - name: Retain repository analysis
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

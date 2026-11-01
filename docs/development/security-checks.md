@@ -87,10 +87,13 @@ though GitHub's PR summary excluded them as unchanged lines. Always inspect both
 the retained report and GitHub's analysis result.
 
 The compiler helper now rejects PR events and accepts only a full frozen commit
-SHA before checkout. Its caller obtains that SHA from the exact checked source;
-tagged publication also checks the tag and Cargo version. Manual release builds
-are a maintainer operation: select only source you trust. They execute Cargo and
-its dependencies. Read-only repository permission does not make builds a sandbox.
+SHA before checkout. Before any source checkout or build, the caller resolves the
+requested tag/commit with GitHub's API and requires it to be already merged into
+`main` or `dev`. Missing ancestry evidence fails closed. Checkout must still match
+that authorized SHA, and tagged publication checks the tag and Cargo version.
+Manual release builds are a maintainer operation and cannot select an unmerged
+PR revision. They execute Cargo and its dependencies. Read-only repository
+permission does not make builds a sandbox.
 
 Cache transport is an explicit recovery mode for the release archives, separate
 from reusable dependency/build caches. It uses exact run/target/digest keys and

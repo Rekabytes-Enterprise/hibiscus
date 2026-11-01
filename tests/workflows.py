@@ -162,6 +162,9 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertIn("if: inputs.direct_upload && inputs.release_tag != ''", source)
         self.assertNotIn('contents: write', job(source, 'verify'))
         self.assertIn("inputs.release_tag || (github.ref_type == 'tag' && github.ref) || github.sha", source)
+        self.assertLess(source.index('name: Authorize merged release source'),
+                        source.index('uses: actions/checkout@'))
+        self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', source)
 
 
 class ReleaseShell(unittest.TestCase):
@@ -189,6 +192,38 @@ class ReleaseShell(unittest.TestCase):
         self.assertFalse((self.root / 'injected').exists())
         self.assertIn("if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'",
                       job(BUILD.read_text(), 'build'))
+
+    def test_release_source_requires_merged_ancestry_and_available_evidence(self):
+        directory = self.root / 'bin'
+        directory.mkdir()
+        gh = directory / 'gh'
+        gh.write_text('''#!/usr/bin/env python3
+import os,sys
+if os.environ.get('API_FAIL') == 'true': sys.exit(1)
+route = sys.argv[2]
+if '/commits/' in route: print('a' * 40)
+elif '/compare/main...' in route: print(os.environ['MAIN_STATE'])
+elif '/compare/dev...' in route: print(os.environ['DEV_STATE'])
+else: sys.exit(2)
+''')
+        gh.chmod(0o755)
+        script = shell(RELEASE, 'Authorize merged release source')
+        output = self.root / 'authorized-output'
+        env = {'PATH': str(directory) + os.pathsep + os.environ['PATH'],
+               'SOURCE_REF': 'v1.2.3', 'GH_REPO': 'fixture/repo',
+               'GITHUB_OUTPUT': str(output)}
+        for main, dev in [('identical', 'behind'), ('ahead', 'identical'),
+                          ('behind', 'diverged')]:
+            result = run(script, self.root, dict(env, MAIN_STATE=main, DEV_STATE=dev))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('commit=' + 'a' * 40, output.read_text())
+            output.unlink()
+        for extra in [{'MAIN_STATE': 'ahead', 'DEV_STATE': 'diverged'},
+                      {'MAIN_STATE': 'unknown', 'DEV_STATE': 'unknown'},
+                      {'MAIN_STATE': 'identical', 'DEV_STATE': 'identical', 'API_FAIL': 'true'},
+                      {'MAIN_STATE': 'identical', 'DEV_STATE': 'identical', 'SOURCE_REF': 'main'}]:
+            self.assertNotEqual(run(script, self.root, dict(env, **extra)).returncode, 0)
+            self.assertFalse(output.exists())
 
     def test_modified_archive_fails(self):
         next((self.root / 'dist').iterdir()).write_bytes(b'tampered')
