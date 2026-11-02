@@ -3,7 +3,7 @@ use crate::{process, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{path::Path, time::Duration};
-use tokio::{process::Command, sync::watch};
+use tokio::sync::watch;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,12 +64,11 @@ pub(super) async fn invoke(
         return Err("Extension request exceeds 128 KiB".into());
     }
     input.push(b'\n');
-    let mut command = Command::new(&extension.command[0]);
-    command
-        .args(&extension.command[1..])
-        .current_dir(cwd)
-        .env("HIBISCUS_EXTENSION_DIR", &extension.directory)
-        .env("HIBISCUS_WORKSPACE", cwd);
+    let mut command =
+        extension
+            .environment
+            .command(&extension.command[0], &extension.directory, cwd)?;
+    command.args(&extension.command[1..]).current_dir(cwd);
     let output = process::run(
         command,
         Some(input),

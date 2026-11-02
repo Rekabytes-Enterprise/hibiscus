@@ -31,6 +31,60 @@ id=${id%%\"*}
 printf '{"apiVersion":1,"id":"%s","text":"hello","data":{"count":1}}\n' "$id"
 "#;
 #[test]
+fn environment_declarations_are_bounded_names_not_values() {
+    let home = Home::new();
+    let directory = home.extension("demo", REPLY);
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(directory.join("extension.json")).unwrap()).unwrap();
+    assert!(manifest::parse(value.to_string().as_bytes()).is_ok());
+    for names in [
+        json!(null),
+        json!(true),
+        json!("TOKEN"),
+        json!({"TOKEN":"value"}),
+        json!([1]),
+        json!([""]),
+        json!(["1TOKEN"]),
+        json!(["KEY=value"]),
+        json!(["*"]),
+        json!(["A\nB"]),
+        json!(["É"]),
+        json!(["TOKEN", "TOKEN"]),
+        json!(["HIBISCUS_EXTENSION_DIR"]),
+        json!(["HIBISCUS_WORKSPACE"]),
+        json!(["A".repeat(129)]),
+        json!((0..33).map(|i| format!("TOKEN_{i}")).collect::<Vec<_>>()),
+    ] {
+        value["inheritEnv"] = names;
+        assert!(
+            manifest::parse(value.to_string().as_bytes()).is_err(),
+            "accepted {}",
+            value["inheritEnv"]
+        );
+    }
+    for names in [
+        json!([]),
+        json!(["_TOKEN", "Token_2", "token_2"]),
+        json!(["A".repeat(128)]),
+        json!((0..32).map(|i| format!("TOKEN_{i}")).collect::<Vec<_>>()),
+    ] {
+        value["inheritEnv"] = names;
+        let (parsed, _) = manifest::parse(value.to_string().as_bytes()).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed.inherit_env).unwrap(),
+            value["inheritEnv"]
+        );
+    }
+    let definition = agent_definitions()
+        .into_iter()
+        .find(|tool| tool["name"] == "create_extension")
+        .unwrap();
+    let validator = jsonschema::validator_for(&definition["parameters"]).unwrap();
+    assert!(validator.is_valid(&json!({"manifest":value})));
+    value["inheritEnv"] = json!(["HIBISCUS_WORKSPACE"]);
+    assert!(!validator.is_valid(&json!({"manifest":value})));
+}
+#[test]
 fn discovery_validates_whole_manifests_without_running_programs() {
     let home = Home::new();
     home.extension(

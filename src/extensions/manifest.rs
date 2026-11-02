@@ -10,6 +10,8 @@ pub(super) struct Manifest {
     pub id: String,
     pub description: String,
     pub command: Vec<String>,
+    #[serde(default)]
+    pub inherit_env: super::environment::Environment,
     #[serde(default = "timeout")]
     pub timeout_seconds: u64,
     #[serde(default)]

@@ -1,5 +1,6 @@
 //! User-owned executable extensions. Discovery reads metadata without running code.
 mod agent;
+mod environment;
 mod manifest;
 pub(crate) use agent::{definitions as agent_definitions, AgentTool, Catalog};
 mod process;
@@ -24,6 +25,7 @@ struct Extension {
     description: String,
     directory: PathBuf,
     command: Vec<String>,
+    environment: environment::Environment,
     timeout: u64,
     version: Option<String>,
 }
@@ -234,6 +236,7 @@ impl Registry {
             description: manifest.description,
             directory,
             command,
+            environment: manifest.inherit_env,
             timeout: manifest.timeout_seconds,
             version,
         });
@@ -316,7 +319,7 @@ impl Registry {
             .collect()
     }
     pub(crate) fn report(&self) -> Value {
-        let extensions=self.extensions.values().map(|e|json!({"id":e.id,"description":e.description,"version":e.version,"directory":e.directory,"sourceDirectory":self.root.as_ref().map(|r|r.join(&e.id)),"tools":self.tools.iter().filter(|(_,t)|t.extension.id==e.id).map(|(name,_)|name).collect::<Vec<_>>(),"commands":self.commands.iter().filter(|(_,c)|c.extension.id==e.id).map(|(name,_)|format!("/{name}")).collect::<Vec<_>>()})).collect::<Vec<_>>();
+        let extensions=self.extensions.values().map(|e|json!({"id":e.id,"description":e.description,"version":e.version,"directory":e.directory,"inheritEnv":e.environment,"sourceDirectory":self.root.as_ref().map(|r|r.join(&e.id)),"tools":self.tools.iter().filter(|(_,t)|t.extension.id==e.id).map(|(name,_)|name).collect::<Vec<_>>(),"commands":self.commands.iter().filter(|(_,c)|c.extension.id==e.id).map(|(name,_)|format!("/{name}")).collect::<Vec<_>>()})).collect::<Vec<_>>();
         json!({"directory":self.root,"extensions":extensions,"errors":self.issues})
     }
     pub(crate) async fn execute_tool(
