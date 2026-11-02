@@ -4,6 +4,18 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-11-02
+
+### Added
+
+- A 67-criterion OpenSSF Best Practices passing assessment with source and run evidence, solo-maintainer guidance, honest coverage limits, and explicit owner-only confirmations. This is an application draft, not an awarded badge.
+
+### Changed
+
+- Require automated tests for major new features in the contribution policy.
+- Update native startup/module ownership, dev/main CI guidance and documentation navigation; remove stale Pi and approval wording from developer instructions.
+- Clarify that saved tool output can contain secrets even though authentication handlers keep stored credentials and provider error bodies out of session messages.
+
 ## [0.3.16] - 2026-11-02
 
 ### Changed

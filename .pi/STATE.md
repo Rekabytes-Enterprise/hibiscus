@@ -1,5 +1,15 @@
 # Current state
 
+## OpenSSF Best Practices assessment ready for v0.3.17
+
+The owner requested a new release after completing the assessment work. Prepare a v0.3.17 documentation patch through dev/main. The underlying BadgeApp application is still an unsubmitted draft: the two owner questions remain unanswered and six owner-only criteria stay Unknown. Release authorization is not a personal-knowledge or vulnerability-history attestation and does not authorize inventing answers. No badge or improved Best Practices score is claimed.
+
+The guide maps all67current official passing IDs/strengths to57source/run evidence items,2documented policy items in this revision,6owner confirmations,1allowed N/A and1honestly unmet coverage suggestion. Solo-maintainer guidance preserves the actual review policy; no second-reviewer requirement is introduced. The contribution policy requires automated tests for major features. Source/module, dev/main CI, obsolete Pi/approval wording and session-secret documentation are corrected. The baseline runtime evidence remains explicitly v0.3.16/mainf922054; all29then-published release versions have public summary coverage. Public response history is conservatively classified and actor-checked. No private report body or real credential was read.
+
+All67IDs/strengths, remaining Unknown fields and local links were revalidated. Formatting/whitespace checks and installer/version-bump/offline npm tests pass. Runtime source and workflows are unchanged; dependency versions are unchanged; only application0.3.17references are bumped. Required hosted checks and tagged builds still must pass before a release is called verified. Root README changes only its pinned install version; its presentation, badges and actual screenshots are preserved.
+
+The feature branch starts from published mainf922054 and excludes older local release-record commits83eefff/961849f. Do not retry those separate rejected records publications. This new assessment/release has fresh explicit authorization. No assessment PR, merge, new tag or release has occurred yet. No BadgeApp account/entry/submission or registry publication is included.
+
 ## Extension environment hardening prepared for v0.3.16
 
 The owner authorized implementing the minimal extension environment and publishing a new patch through dev/main. Tools and slash commands now share an extension-only command factory with exec validation checks. It clears inherited variables, copies PATH/HOME/TMPDIR/LANG/LC_ALL/LC_CTYPE/TZ/TERM when set, resolves only manifest inheritEnv names, and supplies authoritative Hibiscus context paths. Missing declared variables fail before startup. Native shell behavior is unchanged. The validated names stay with each immutable manifest/registry version; no resolved values are added to catalogs or version records. Existing manifests remain valid; extensions that need other variables must declare them. This reduces accidental inheritance and is not a filesystem or execution sandbox.
