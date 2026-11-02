@@ -187,6 +187,45 @@ process.stdout.write(JSON.stringify({
 
 For that file, use `"command": ["node", "{extensionDir}/main.mjs"]`. Compiled executables can use `"command": ["{extensionDir}/my-program"]`. A complete optional Python example is in [examples/extensions/hello](../examples/extensions/hello/).
 
-Extensions execute with the user's filesystem, network and inherited environment access. They are trusted local code and are not sandboxed. This API preserves direct execution without approval prompts.
+## Environment variables
+
+From v0.3.16, extension tools, slash commands and all configured validation checks
+start with a minimal environment. Hibiscus copies only `PATH`, `HOME`, `TMPDIR`,
+`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ` and `TERM` when present, then supplies
+`HIBISCUS_EXTENSION_DIR` and `HIBISCUS_WORKSPACE` for the current invocation.
+`PATH` preserves installed interpreter lookup, and `HOME` preserves programs'
+ordinary user configuration. Other variables, including provider keys, cloud
+credentials, SSH agent sockets, proxies and interpreter startup settings, are
+absent unless explicitly declared.
+
+Add the names an extension needs to its versioned `extension.json`:
+
+```json
+"inheritEnv": ["GITHUB_TOKEN", "MY_SERVICE_URL"]
+```
+
+Use variable names, never secret values. Values come from the process that starts
+Hibiscus at invocation time. They are not resolved into manifests, catalogs or
+version records. A missing declared variable fails that invocation or validation
+check before starting the program, naming only the variable. An empty value is
+still a set variable. There is no wildcard or unrestricted inheritance option.
+
+The list allows at most 32 unique names, each 1–128 ASCII letters, digits or
+underscores, starting with a letter or underscore. The two Hibiscus context
+names are reserved. `list_extensions` reports the declared names. Managed
+updates, checks, running registry snapshots and rollback use their own retained
+manifest's declarations. An update without a replacement manifest preserves
+the existing declaration.
+
+Existing manifests load without changes and receive the minimal environment.
+If an older extension relied on an extra variable, add its name through a
+managed manifest update, or edit its source manifest and import that change.
+Exports in your shell must be present before starting Hibiscus. Extensions that
+print a declared secret can still expose it in their output or saved history.
+
+Extensions execute with the user's filesystem and network access. `HOME` and
+ordinary OS access can still let programs read credential files. The environment
+policy reduces accidental inheritance; extensions remain trusted local code
+and are not sandboxed. This API preserves direct execution without approval prompts.
 
 Version 1 exposes tools and local commands. It does not expose provider replacement, lifecycle hooks, arbitrary frontend widgets or a package download/update manager. No persistent extension process runs between invocations.

@@ -30,6 +30,13 @@ Hibiscus is a local coding agent. Native tools, shell commands, extension progra
 
 Configured providers receive prompts and conversation context sent to them, including file contents returned by tools and attached images. Provider access, retention, and billing follow that provider's policies. Local credentials, sessions, checkpoints, and extension history can contain sensitive information. Keep the Hibiscus data directory private and remove secrets before sharing diagnostics.
 
+Extension processes and their validation checks receive a minimal environment
+plus explicitly declared parent variables, described in [extension environment
+configuration](docs/extensions.md#environment-variables). This reduces accidental
+credential inheritance. It does not prevent programs from reading credential
+files, using the network, or printing explicitly supplied secrets. Native shell
+tools retain their normal environment.
+
 [Workspace checkpoints](docs/checkpoints.md) cover supported native `write` and `edit` operations on regular workspace files. They do not automatically capture shell or extension side effects, network actions, or every filesystem location. Restore can refuse files changed after the recorded edit. [Extension version history](docs/extensions.md) records managed extension source versions, not every effect of running an extension. Neither feature is a sandbox or a substitute for backups.
 
 Expected execution of a requested command or trusted extension with the user's permissions is part of this design. Reports about validation failures, credential exposure, unintended execution, or other violations of the documented boundaries are welcome. Explain how the observed behavior differs from the documented behavior.

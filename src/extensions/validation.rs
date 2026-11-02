@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use tokio::{process::Command, sync::watch};
+use tokio::sync::watch;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -157,16 +157,18 @@ pub(super) async fn run(
                     command,
                     timeout_seconds,
                 } => {
-                    let mut process = Command::new(executable_path(&command[0], &copy)?);
+                    let mut process = manifest.inherit_env.command(
+                        executable_path(&command[0], &copy)?,
+                        &copy,
+                        context.0,
+                    )?;
                     process
                         .args(
                             command[1..]
                                 .iter()
                                 .map(|s| s.replace("{extensionDir}", &copy.to_string_lossy())),
                         )
-                        .current_dir(&copy)
-                        .env("HIBISCUS_EXTENSION_DIR", &copy)
-                        .env("HIBISCUS_WORKSPACE", context.0);
+                        .current_dir(&copy);
                     let output = crate::process::run(
                         process,
                         None,
