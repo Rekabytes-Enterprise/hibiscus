@@ -154,7 +154,7 @@ jobs:
           if-no-files-found: error
           retention-days: 5
           archive: true
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: release-source-transport/source.tar
@@ -302,7 +302,7 @@ jobs:
           if-no-files-found: error
           retention-days: 5
           archive: true
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-${{ env.TARGET }}.tar.gz
@@ -400,7 +400,7 @@ jobs:
           if-no-files-found: error
           retention-days: 5
           archive: true
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-${{ env.TARGET }}.tar.gz
@@ -498,7 +498,7 @@ jobs:
           if-no-files-found: error
           retention-days: 5
           archive: true
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-${{ env.TARGET }}.tar.gz
@@ -596,7 +596,7 @@ jobs:
           if-no-files-found: error
           retention-days: 5
           archive: true
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-${{ env.TARGET }}.tar.gz
@@ -788,7 +788,7 @@ jobs:
           if-no-files-found: error
           retention-days: 5
           archive: true
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: provenance/hibiscus-provenance.sigstore.json
