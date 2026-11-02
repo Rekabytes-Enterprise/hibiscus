@@ -57,6 +57,8 @@ jobs:
         run: python3 tests/dependency_audit.py
       - name: Test workflow trust boundaries
         run: python3 tests/workflows.py
+      - name: Test coverage evidence handling
+        run: python3 tests/coverage.py
       - name: Test release provenance policy
         run: python3 tests/release_provenance.py
       - name: Test real provenance verification

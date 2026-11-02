@@ -4,6 +4,19 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-11-02
+
+### Added
+
+- A pinned local Rust source/branch coverage runner, annotated HTML and JSON reports, failure checks and a read-only CI workflow with checksum-verified tooling. Reports include native subprocess execution and explicit measurement limits.
+- Regression tests for rejected API-key stores and blank login input, plus beginner secure-development exercises tied to Hibiscus code and tests.
+
+### Changed
+
+- Route evaluation profiling output through the test harness so instrumentation does not alter graded workspaces; production environment policies and graders are unchanged.
+- Update the Best Practices draft from maintainer answers. No received vulnerability reports makes response timing N/A; the two security-knowledge criteria remain Unmet pending learning, and three owner checks remain Unknown. No badge is submitted or awarded.
+
+
 ## [0.3.17] - 2026-11-02
 
 ### Added

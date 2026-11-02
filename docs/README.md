@@ -11,6 +11,8 @@ Start with [Native runtime migration](native-runtime.md). Performance/profiling 
 - [Security policy](../SECURITY.md) — private vulnerability reporting, supported versions, and execution limits.
 - [Security checks](development/security-checks.md) — protected branches, dependency audits, CodeQL, and the single-maintainer review policy.
 - [Native fuzzing](development/fuzzing.md) — sanitized parser campaigns, curated regressions, and coverage limits.
+- [Rust coverage](development/coverage.md) — repeatable local source/branch measurements and report limits.
+- [Secure-development learning](development/security-learning.md) — beginner concepts and exercises in Hibiscus.
 - [OpenSSF Best Practices assessment](development/openssf-best-practices.md) — draft passing-criteria evidence and outstanding maintainer confirmations.
 - [Performance review](performance-review.md) — measured bottlenecks, implemented optimizations, repeatable benchmarks, and remaining work.
 - [Memory profiling](memory-profiling.md) — synthetic Linux RSS/heap measurements, isolated test helper, and evidence-based next steps.
