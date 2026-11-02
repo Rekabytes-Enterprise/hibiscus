@@ -170,7 +170,7 @@ jobs:
         with:
           name: verified-source
           path: release-source-transport
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: release-source-transport/source.tar
@@ -244,7 +244,7 @@ jobs:
         with:
           name: verified-source
           path: release-source-transport
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: release-source-transport/source.tar
@@ -342,7 +342,7 @@ jobs:
         with:
           name: verified-source
           path: release-source-transport
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: release-source-transport/source.tar
@@ -440,7 +440,7 @@ jobs:
         with:
           name: verified-source
           path: release-source-transport
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: release-source-transport/source.tar
@@ -538,7 +538,7 @@ jobs:
         with:
           name: verified-source
           path: release-source-transport
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: release-source-transport/source.tar
@@ -615,25 +615,25 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-x86_64-unknown-linux-musl.tar.gz
           key: ${{ needs.linux_x64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-aarch64-unknown-linux-musl.tar.gz
           key: ${{ needs.linux_arm64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-x86_64-apple-darwin.tar.gz
           key: ${{ needs.macos_x64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-aarch64-apple-darwin.tar.gz
@@ -696,25 +696,25 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-x86_64-unknown-linux-musl.tar.gz
           key: ${{ needs.linux_x64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-aarch64-unknown-linux-musl.tar.gz
           key: ${{ needs.linux_arm64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-x86_64-apple-darwin.tar.gz
           key: ${{ needs.macos_x64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-aarch64-apple-darwin.tar.gz
@@ -808,25 +808,25 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-x86_64-unknown-linux-musl.tar.gz
           key: ${{ needs.linux_x64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-aarch64-unknown-linux-musl.tar.gz
           key: ${{ needs.linux_arm64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-x86_64-apple-darwin.tar.gz
           key: ${{ needs.macos_x64.outputs.cache_key }}
           fail-on-cache-miss: true
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: dist/hibiscus-aarch64-apple-darwin.tar.gz
@@ -861,7 +861,7 @@ jobs:
         with:
           name: verified-provenance
           path: provenance
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.direct_upload
         with:
           path: provenance/hibiscus-provenance.sigstore.json
