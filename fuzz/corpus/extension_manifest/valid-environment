@@ -1,0 +1,1 @@
+{"apiVersion":1,"id":"sample","description":"Local example","command":["never-execute-this"],"tools":[{"name":"hello","description":"Example tool","parameters":{"type":"object","properties":{"name":{"type":"string","pattern":"^a+$"}}}}],"inheritEnv":["SERVICE_TOKEN","_example_2"]}

@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-11-02
+
+### Changed
+
+- Start extension tools, slash commands and validation checks with a minimal environment. Additional parent variables must be named in the manifest's `inheritEnv` list; missing declared variables fail before execution. Native shell tools keep their normal environment.
+- Keep environment declarations with managed extension versions, expose names in the extension catalog, and document migration for extensions that previously relied on implicit credentials or other variables.
+
 ## [0.3.15] - 2026-11-02
 
 ### Added
