@@ -33,6 +33,7 @@ fn invalid_api_key_stores_fail_without_contacting_a_provider_or_changing_the_sto
             }
             "symlink" => {
                 fs::write(&target, secret).unwrap();
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
                 symlink(&target, &auth).unwrap();
             }
             "public" | "malformed" | "wrong_shape" | "oversized" => {

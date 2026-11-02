@@ -80,6 +80,7 @@ fn path_replacement_after_open_does_not_redirect_or_change_the_checked_file() {
     fs::rename(temp.path(), &original).unwrap();
     let replacement = temp.0.join("replacement");
     fs::write(&replacement, br#"{"test":"SYNTHETIC-REPLACEMENT"}"#).unwrap();
+    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600)).unwrap();
     symlink(&replacement, temp.path()).unwrap();
     assert_eq!(read_keys(file).unwrap()["test"], "SYNTHETIC-ORIGINAL");
     assert!(keys_at(&temp.path()).is_err());
