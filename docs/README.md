@@ -3,11 +3,15 @@
 Start with [Native runtime migration](native-runtime.md). Performance/profiling reviews describe earlier Pi-backed builds and do not establish native-runtime measurements.
 
 - [Installation and releases](installation.md) — prebuilt installer, supported platforms, source builds, and publishing.
-- [Architecture](architecture.md) — code layout, Pi RPC boundary, sessions, and lifecycle.
+- [Architecture](architecture.md) — native runtime, CLI/TUI ownership, sessions, and lifecycle.
 - [Terminal UI](terminal.md) — shortcuts, scrolling, pickers, progress, and fallbacks.
-- [Error handling and recovery](error-handling.md) — failure categories, Pi retry lifecycle, restoring prompts, and reconnecting.
+- [Error handling and recovery](error-handling.md) — native failures, draft restoration, cancellation, and reconnecting without automatic replay.
 - [RPC transport](rpc-transport.md) — queue budgets, overload recovery, blocked writes, cancellation, and pressure tests.
 - [Development](development.md) — build, tests, manual checks, and project records.
+- [Security policy](../SECURITY.md) — private vulnerability reporting, supported versions, and execution limits.
+- [Security checks](development/security-checks.md) — protected branches, dependency audits, CodeQL, and the single-maintainer review policy.
+- [Native fuzzing](development/fuzzing.md) — sanitized parser campaigns, curated regressions, and coverage limits.
+- [OpenSSF Best Practices assessment](development/openssf-best-practices.md) — draft passing-criteria evidence and outstanding maintainer confirmations.
 - [Performance review](performance-review.md) — measured bottlenecks, implemented optimizations, repeatable benchmarks, and remaining work.
 - [Memory profiling](memory-profiling.md) — synthetic Linux RSS/heap measurements, isolated test helper, and evidence-based next steps.
 - [Input wake profiling](wake-profiling.md) — quiet-run key-to-output measurements and notification design.
