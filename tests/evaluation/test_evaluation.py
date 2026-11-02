@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tools.evaluation.execution import AGENT_CREDENTIAL_ENV, environment, process, session_evidence
 from tools.evaluation.fixture import Fixture
@@ -31,6 +32,14 @@ class SpecTests(unittest.TestCase):
         data = json.loads(self.path.read_text())
         data[field] = value
         self.path.write_text(json.dumps(data))
+
+    def test_evaluation_environment_does_not_inherit_profiling_or_credentials(self):
+        with patch.dict(os.environ, {"LLVM_PROFILE_FILE": "/private/profiles/%p.profraw",
+                                     "OPENAI_API_KEY": "SYNTHETIC-UNUSED"}):
+            values = environment(self.root)
+        self.assertNotIn("LLVM_PROFILE_FILE", values)
+        self.assertNotIn("OPENAI_API_KEY", values)
+        self.assertNotIn(AGENT_CREDENTIAL_ENV, values)
 
     def test_live_requires_matching_explicit_flag_and_key_name(self):
         with self.assertRaises(InvalidSpec):
@@ -101,6 +110,20 @@ class FlowTests(unittest.TestCase):
             raise RuntimeError("Build Hibiscus or set HIBISCUS_EVAL_BINARY before evaluation tests")
         cls.plan = load_plan(ROOT / "evals/offline.json")
         cls.suite = load_suite(cls.plan.suite)
+        profile = os.environ.get("LLVM_PROFILE_FILE")
+        if profile:
+            if not Path(profile).is_absolute():
+                raise RuntimeError("Coverage profiles must stay outside evaluation workspaces")
+
+            def instrumented_environment(root, provider_key=None):
+                values = environment(root, provider_key)
+                values["LLVM_PROFILE_FILE"] = profile
+                return values
+
+            # Test-only injection preserves the production evaluation allowlist.
+            instrument = patch("tools.evaluation.runner.environment", instrumented_environment)
+            instrument.start()
+            cls.addClassCleanup(instrument.stop)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hibiscus-eval-test-")

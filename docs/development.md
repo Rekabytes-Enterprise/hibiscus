@@ -30,3 +30,6 @@ Extension tests cover metadata-only loading, malformed manifests/schemas/replies
 
 The [OpenSSF Best Practices assessment](development/openssf-best-practices.md)
 contains the passing-criteria evidence checklist and maintainer follow-ups.
+Use the [coverage runner](development/coverage.md) to measure source/branch gaps
+and the [secure-development learning guide](development/security-learning.md)
+to work through the maintainer knowledge requirements.

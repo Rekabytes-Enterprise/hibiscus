@@ -48,6 +48,19 @@ def run(script, directory, env=None):
 
 
 class WorkflowPolicy(unittest.TestCase):
+    def test_coverage_is_pinned_readonly_and_never_uploads_a_failed_measurement(self):
+        text = (ROOT / '.github/workflows/coverage.yml').read_text()
+        for forbidden in ['pull_request_target:', ': write', 'secrets.', 'continue-on-error:', 'if: always()']:
+            self.assertNotIn(forbidden, text)
+        self.assertEqual(text.count('branches: [dev, main]'), 2)
+        self.assertIn('toolchain: nightly-2026-10-01', text)
+        self.assertIn('components: llvm-tools-preview', text)
+        self.assertIn('/v0.9.1/', text)
+        self.assertIn('3fca950394a3c49457657c158b1619cec8dfd2647ae5b48746734c0ab969a522', text)
+        self.assertLess(text.index('sha256sum --check'), text.index('tar -xzf'))
+        self.assertLess(text.index('python3 scripts/coverage.py'), text.index('actions/upload-artifact@'))
+        self.assertIn('if-no-files-found: error', text)
+
     def test_required_checks_cover_both_branches_without_secret_pr_execution(self):
         paths = ['ci.yml', 'dependency-security.yml', 'codeql.yml']
         for name in paths:

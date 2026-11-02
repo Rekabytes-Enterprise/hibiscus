@@ -219,6 +219,8 @@ fn good(output: &std::process::Output) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+#[path = "native_runtime/auth.rs"]
+mod auth;
 #[path = "native_runtime/checkpoints.rs"]
 mod checkpoints;
 #[path = "native_runtime/cli.rs"]

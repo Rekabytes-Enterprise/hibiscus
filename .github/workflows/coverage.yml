@@ -1,0 +1,50 @@
+name: Rust coverage
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Rust source and branch coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: nightly-2026-10-01
+          components: llvm-tools-preview
+      - name: Install checksum-pinned coverage tool
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/coverage-tools"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
+            --output "$RUNNER_TEMP/coverage-tool.tar.gz"
+          printf '%s  %s\n' 3fca950394a3c49457657c158b1619cec8dfd2647ae5b48746734c0ab969a522 "$RUNNER_TEMP/coverage-tool.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/coverage-tool.tar.gz" -C "$RUNNER_TEMP/coverage-tools" cargo-llvm-cov
+      - name: Test coverage evidence handling
+        run: python3 tests/coverage.py
+      - name: Measure the complete Rust test suite
+        shell: bash
+        run: PATH="$RUNNER_TEMP/coverage-tools:$PATH" python3 scripts/coverage.py --output target/coverage/ci
+      - name: Retain successful local reports
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-source-coverage
+          path: target/coverage/ci
+          if-no-files-found: error
+          retention-days: 5
