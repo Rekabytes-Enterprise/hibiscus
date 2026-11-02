@@ -18,11 +18,12 @@ The owner confirmed that Hibiscus currently has one maintainer. The passing crit
 | --- | ---: | --- |
 | Evidence | 57 | A proposed Met answer has inspected source, public metadata or actual run evidence. The maintainer still owns the attestation. |
 | Documented policy | 2 | The contribution policy in this revision explicitly requires tests for major new features. Cite the approved public revision when submitting. |
-| Owner check | 6 | A fact about the maintainer or private report history cannot be inferred from automated checks. |
-| N/A | 1 | The official details permit this scoped exception. |
+| Owner check | 3 | Release identifier history and unresolved known-issue status still need explicit confirmation. |
+| Learning needed | 2 | The maintainer requested beginner guidance; both mandatory knowledge criteria remain Unmet. |
+| N/A | 2 | The official details permit these scoped exceptions, including no vulnerability reports received. |
 | Unmet suggestion | 1 | Considered and honestly left Unmet; no fabricated coverage percentage. |
 
-The remaining work is to confirm the primary developer's security knowledge, review the documented report classification, confirm vulnerability-report history and known-issue status, and cite an approved public revision of the documented policies. No paid service, second maintainer or new runtime dependency is needed for this assessment. The unmeasured coverage suggestion is not a mandatory blocker.
+On 2026-11-02 the owner confirmed no vulnerability reports have been received and requested beginner security guidance. The response-timing criterion can therefore be N/A; the two knowledge requirements remain Unmet until learning and reassessment. The remaining owner checks concern release identifiers and known unresolved issues, which a statement about received reports alone does not establish. Review the documented report classification and cite an approved public revision of the policies before submission. No paid service, second maintainer or new runtime dependency is needed. The coverage suggestion is not a mandatory blocker.
 
 ## Criteria checklist
 
@@ -59,13 +60,13 @@ The remaining work is to confirm the primary developer's security knowledge, rev
 | `report_archive` · MUST | Evidence / Met | E01 E03: Public GitHub issues provide intake, searchable discussion and archived resolution; the security policy redirects sensitive reports to private intake. |
 | `vulnerability_report_process` · MUST | Evidence / Met | E09: SECURITY.md describes the private GitHub reporting form, fallback and coordinated handling; private reporting read back enabled. No private report content was read. |
 | `vulnerability_report_private` · MUST | Evidence / Met | E09: SECURITY.md describes the private GitHub reporting form, fallback and coordinated handling; private reporting read back enabled. No private report content was read. |
-| `vulnerability_report_response` · MUST | Owner check / Unknown | E09: Confirm acknowledgement timing for reports received during the last six months. If none were received, the criterion explicitly permits N/A. A new response-time guarantee is not required by this historical check. |
+| `vulnerability_report_response` · MUST | N/A | E09: The owner confirmed on 2026-11-02 that no vulnerability reports, including private reports, have been received. The criterion explicitly permits N/A when none were received during the last six months. This is not a measured response time or a future SLA. |
 | `build` · MUST | Evidence / Met | E05: Cargo/LLVM and a C linker build the native source. The Linux musl build provides a FLOSS-tool build path; macOS SDK use does not make Linux builds depend on Apple tools. |
 | `build_common_tools` · SUGGESTED | Evidence / Met | E05: Cargo/LLVM and a C linker build the native source. The Linux musl build provides a FLOSS-tool build path; macOS SDK use does not make Linux builds depend on Apple tools. |
 | `build_floss_tools` · SHOULD | Evidence / Met | E05: Cargo/LLVM and a C linker build the native source. The Linux musl build provides a FLOSS-tool build path; macOS SDK use does not make Linux builds depend on Apple tools. |
 | `test` · MUST | Evidence / Met | E05 E06: The MIT-licensed suite runs with cargo test --locked; development docs list additional installer, npm and Python prerequisites and checks. |
 | `test_invocation` · SHOULD | Evidence / Met | E05 E06: The MIT-licensed suite runs with cargo test --locked; development docs list additional installer, npm and Python prerequisites and checks. |
-| `test_most` · SUGGESTED | Unmet suggestion / Unmet | E06: No whole-project branch/field coverage measurement was found. Test counts and targeted fuzz coverage do not establish that most branches are covered. This SUGGESTED item can remain honestly Unmet for passing. |
+| `test_most` · SUGGESTED | Unmet suggestion / Unmet | E06: Local Rust source/branch coverage is now measured separately, with inline test code and platform limitations documented. The initial 66.19% source branch figure is below the criterion's 80% guidance and is not a whole-project production-only measurement. Keep Unmet. |
 | `test_continuous_integration` · SUGGESTED | Evidence / Met | E05: GitHub Actions runs checks for PRs and pushes to dev/main, including Linux and macOS tests. |
 | `test_policy` · MUST | Documented policy / Met | E01 E06: CONTRIBUTING.md in this revision explicitly requires automated tests for every major new feature; other bug/behavior changes retain a documented testing-gap explanation. |
 | `tests_are_added` · MUST | Evidence / Met | E06: Recent extension environment, parser fuzzing and checkpoint changes include ordinary regressions and actual binary integration tests. |
@@ -73,8 +74,8 @@ The remaining work is to confirm the primary developer's security knowledge, rev
 | `warnings` · MUST | Evidence / Met | E05: CI runs Clippy with -D warnings across all targets and the fuzzing feature; latest lint passed. This does not claim every historical warning was a vulnerability. |
 | `warnings_fixed` · MUST | Evidence / Met | E05: CI runs Clippy with -D warnings across all targets and the fuzzing feature; latest lint passed. This does not claim every historical warning was a vulnerability. |
 | `warnings_strict` · SUGGESTED | Evidence / Met | E05: CI runs Clippy with -D warnings across all targets and the fuzzing feature; latest lint passed. This does not claim every historical warning was a vulnerability. |
-| `know_secure_design` · MUST | Owner check / Unknown | E10: The sole primary developer must confirm understanding. Repository controls and AI assistance are supporting material, not proof of personal knowledge. Review the maintainer notes below; no paid certificate is required. |
-| `know_common_errors` · MUST | Owner check / Unknown | E10: The sole primary developer must confirm understanding. Repository controls and AI assistance are supporting material, not proof of personal knowledge. Review the maintainer notes below; no paid certificate is required. |
+| `know_secure_design` · MUST | Learning needed / Unmet | E10: The owner requested beginner guidance on 2026-11-02. Complete learning and practical review before reassessing personal understanding. Repository controls and AI assistance cannot supply this attestation. |
+| `know_common_errors` · MUST | Learning needed / Unmet | E10: The owner requested beginner guidance on 2026-11-02. Work through common failure types and the corresponding Hibiscus tests before reassessment. No paid certificate is required. |
 | `crypto_published` · MUST | Evidence / Met | E08: The native client uses reqwest/rustls/ring, SHA-256, base64 and OS randomness instead of implementing cryptographic primitives. These implementations are FLOSS. |
 | `crypto_call` · SHOULD | Evidence / Met | E08: The native client uses reqwest/rustls/ring, SHA-256, base64 and OS randomness instead of implementing cryptographic primitives. These implementations are FLOSS. |
 | `crypto_floss` · MUST | Evidence / Met | E08: The native client uses reqwest/rustls/ring, SHA-256, base64 and OS randomness instead of implementing cryptographic primitives. These implementations are FLOSS. |
@@ -126,6 +127,8 @@ The [v0.3.16 release run](https://github.com/Rekabytes-Enterprise/hibiscus/actio
 
 [Native integration tests](../../tests/native_runtime.rs), [extension environment regressions](../../tests/native_runtime/extension_environment.rs), [checkpoint tests](../../tests/native_runtime/checkpoints.rs), [fuzz adapters](../../fuzz/fuzz_targets), [fuzzing guide](fuzzing.md), [assertion-enabled build](../../.clusterfuzzlite/build.sh) and [workflow](../../.github/workflows/fuzzing.yml). Release-source validation passed 200 unit tests, 66 native integrations, the evaluation launcher with 20 Python checks, and curated fuzz replay. Actual hosted campaign [41376702988](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/41376702988) ran 2,437,155 inputs across six targets; [released-main fuzzing](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/41378118594) also passed. Earlier reduced SSE/Anthropic failures were fixed and released in v0.3.15. Parser campaigns do not establish whole-project branch coverage, all terminal/FFI coverage or all filesystem-race coverage.
 
+The subsequent local [coverage measurement](coverage.md) uses a dated nightly and pinned tooling. On macOS ARM64 the final source-file report measured 84.96% lines and 66.31% branches after two new credential rejection integrations. All 200 unit tests, 68 native integrations, the evaluation launcher with 21 Python checks and curated replay passed. Inline unit-test code remains in the denominator; Python, shell, dependencies and other platforms are excluded. This local evidence is separate from the released v0.3.16 baseline and is not a production-only 80% branch-coverage claim.
+
 ### E07. Static analysis and secret detection
 
 [CodeQL workflow](../../.github/workflows/codeql.yml), [real Rust detection probe](../../scripts/verify-codeql.py), [secret detector](../../scripts/secret-scanning.py), [native credential rules](../../.gitleaks.toml) and [detector controls](../../tests/secret_scanning.py). Released-main [CodeQL](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/41378118569) passed; all four processed reports have zero findings/errors/warnings and no code-scanning alert was open at assessment. [RustSec audit](https://github.com/Rekabytes-Enterprise/hibiscus/actions/runs/41378118520) passed. Pinned Gitleaks history/current-tree scans and synthetic positive controls passed during release validation. An empty scanner result is not a universal proof about every credential or vulnerability.
@@ -138,11 +141,11 @@ OAuth state and verifier each use 32 bytes from checked OS randomness; PKCE uses
 
 ### E09. Vulnerability handling
 
-[Security policy](../../SECURITY.md) and [private reporting form](https://github.com/Rekabytes-Enterprise/hibiscus/security/advisories/new). The reporting API read back enabled. Public repository advisories returned an empty list; open code-scanning alerts also returned an empty list. Neither reveals all reports known to the maintainer, outside reports, severity/age, or first-response timing. The pending owner question requests status only. Keep private report details out of this document. Do not turn a historical 14-day acknowledgement criterion into an invented SLA or weaken private reporting.
+[Security policy](../../SECURITY.md) and [private reporting form](https://github.com/Rekabytes-Enterprise/hibiscus/security/advisories/new). The reporting API read back enabled. Public repository advisories returned an empty list; open code-scanning alerts also returned an empty list. On 2026-11-02 the owner separately confirmed that no vulnerability reports, including private reports, have been received. That supports response-timing N/A; it does not establish historical public identifiers or the status of every internally discovered issue. Keep those three answers Unknown pending confirmation. Keep private report details out of this document. Do not turn the historical 14-day acknowledgement criterion into an invented SLA or weaken private reporting.
 
 ### E10. Maintainer knowledge
 
-The [official detailed criteria](https://www.bestpractices.dev/en/criteria/0?details=true&rationale=true#0.know_secure_design) recognize the sole developer as the primary developer. They require knowledge, not a second person, a certificate, or an AI attestation. Confirm both knowledge items only when they are true. If needed, use the free [OpenSSF secure-development course information](https://openssf.org/training/) and the concrete review notes below as learning material.
+The [official detailed criteria](https://www.bestpractices.dev/en/criteria/0?details=true&rationale=true#0.know_secure_design) recognize the sole developer as the primary developer. They require knowledge, not a second person, a certificate, or an AI attestation. The owner requested beginner guidance on 2026-11-02, so both mandatory knowledge answers are Unmet. The [learning guide](security-learning.md) pairs the free OpenSSF course with concrete Hibiscus code and exercises. Reassess only after learning and practice; generating this guide does not complete the requirements.
 
 ## Maintainer review notes
 
@@ -163,8 +166,8 @@ For common failures, be able to explain the mitigation and its limit: untrusted 
 
 ## Submission handoff
 
-1. Resolve all Unknown answers and review every proposed Met/N/A with the actual maintainer. Record response-rate denominators and the time window; never infer private response history from empty public alerts.
-2. Keep `test_most` honestly Unmet unless coverage evidence is obtained. Do not claim 80% branch coverage from test counts; the dynamic-analysis evidence here comes from actual fuzzing.
+1. Complete learning and reassess both Unmet mandatory knowledge answers. Resolve the three remaining Unknown answers and review every proposed Met/N/A with the actual maintainer. Record response-rate denominators and the time window; never infer private response history from empty public alerts.
+2. Keep `test_most` honestly Unmet. The local source branch measurement is below 80% and includes inline test code; test counts, line coverage and targeted fuzzing cannot establish the broader criterion.
 3. Use public source URLs from the approved documentation revision. A working-tree draft alone is not published evidence.
 4. With explicit submission authorization, find or create the BadgeApp entry for `https://github.com/Rekabytes-Enterprise/hibiscus`. Use the same URL as the project homepage, MIT as the license, and Rust as the primary implementation language. Do not create a second entry for another repository spelling.
 5. Enter reviewed answers and evidence URLs. Inspect the actual resulting BadgeApp status. Add a Best Practices README badge only after its real project ID and status are verified. No account login, submission or README badge change has been performed here.
