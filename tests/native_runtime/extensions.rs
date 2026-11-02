@@ -1,6 +1,8 @@
 use super::*;
 #[path = "extension_environment.rs"]
 mod environment;
+#[path = "extension_outputs.rs"]
+mod output_schemas;
 fn extension(f: &Fixture, script: &str) -> PathBuf {
     let directory = f.root.join("app/extensions/demo");
     fs::create_dir_all(&directory).unwrap();

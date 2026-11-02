@@ -27,6 +27,18 @@ pub(super) struct Tool {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    #[serde(default, rename = "outputSchema", deserialize_with = "present_schema")]
+    pub output_schema: Option<Value>,
+}
+// Preserve explicit null so it fails schema compilation instead of disabling validation.
+fn present_schema<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+pub(super) struct ToolSchemas {
+    pub input: Arc<jsonschema::Validator>,
+    pub output: Option<Arc<jsonschema::Validator>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,7 +62,7 @@ pub(super) fn identifier(value: &str) -> bool {
 fn label(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 1000 && !value.chars().any(char::is_control)
 }
-pub(super) fn read(directory: &Path) -> Result<(Manifest, Vec<Arc<jsonschema::Validator>>)> {
+pub(super) fn read(directory: &Path) -> Result<(Manifest, Vec<ToolSchemas>)> {
     let path = directory.join("extension.json");
     if !std::fs::metadata(&path)?.is_file() {
         return Err("extension.json must be a regular file".into());
@@ -61,7 +73,7 @@ pub(super) fn read(directory: &Path) -> Result<(Manifest, Vec<Arc<jsonschema::Va
         .read_to_end(&mut bytes)?;
     parse(&bytes)
 }
-pub(super) fn parse(bytes: &[u8]) -> Result<(Manifest, Vec<Arc<jsonschema::Validator>>)> {
+pub(super) fn parse(bytes: &[u8]) -> Result<(Manifest, Vec<ToolSchemas>)> {
     if bytes.len() > 65536 {
         return Err("extension.json exceeds 64 KiB".into());
     }
@@ -107,11 +119,11 @@ pub(super) fn parse(bytes: &[u8]) -> Result<(Manifest, Vec<Arc<jsonschema::Valid
         }
         // Schemas are compiled once. Network/file resolver features are disabled;
         // use the linear-time regex engine for user-supplied patterns.
-        let validator = jsonschema::draft7::options()
-            .with_pattern_options(jsonschema::PatternOptions::regex())
-            .build(&tool.parameters)
+        let input = compile_schema(&tool.parameters)
             .map_err(|_| "Invalid tool parameters schema; external references are unavailable")?;
-        validators.push(Arc::new(validator));
+        let output = tool.output_schema.as_ref().map(compile_schema).transpose()
+            .map_err(|_| "Invalid tool outputSchema; expected a self-contained Draft 7 object or boolean schema")?;
+        validators.push(ToolSchemas { input, output });
     }
     names.clear();
     for command in &manifest.commands {
@@ -131,6 +143,15 @@ pub(super) fn parse(bytes: &[u8]) -> Result<(Manifest, Vec<Arc<jsonschema::Valid
     }
     super::validation::declarations(&manifest.checks)?;
     Ok((manifest, validators))
+}
+
+fn compile_schema(schema: &Value) -> Result<Arc<jsonschema::Validator>> {
+    Ok(Arc::new(
+        jsonschema::draft7::options()
+            .with_pattern_options(jsonschema::PatternOptions::regex())
+            .build(schema)
+            .map_err(|_| "Invalid extension schema")?,
+    ))
 }
 
 pub(super) fn slash_name(name: &str) -> bool {
