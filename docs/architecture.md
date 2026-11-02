@@ -4,7 +4,8 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 
 | Module | Responsibility |
 | --- | --- |
-| `src/main.rs` | CLI modes and startup |
+| `src/main.rs` | Binary entry point and top-level error reporting |
+| `src/lib.rs` | Private module graph, CLI modes and shared startup |
 | `src/runtime/config.rs` | Validate provider/model configuration, private atomic storage |
 | `src/runtime/provider.rs` | HTTPS/SSE adapters for Responses, Chat Completions and Anthropic |
 | `src/runtime/session.rs` | Typed messages, versioned sessions, resume and interrupted-call recovery |
@@ -30,7 +31,7 @@ A provider response is not executable until its authoritative completion event a
 
 The worker and both terminal views live in the same process. A private Unix socket carries bounded presentation/control records so the existing event-driven terminal behavior can be retained. No Pi or other agent process is started. Provider wire formats are confined to the provider adapter; session/tool data use native Rust enums.
 
-Sessions have one runtime writer. Atomic replacement protects committed snapshots. On resume, any call without a recorded result is marked as interrupted with an unknown outcome; no tool is automatically retried. Compaction archives original history before replacing active context. Credentials are never written into sessions or provider error records.
+Sessions have one runtime writer. Atomic replacement protects committed snapshots. On resume, any call without a recorded result is marked as interrupted with an unknown outcome; no tool is automatically retried. Compaction archives original history before replacing active context. Authentication handlers keep stored credential values and raw provider error bodies out of session messages. Tool output and files can still contain secrets and enter saved conversations, so keep sessions private and review them before sharing.
 
 Native tools execute directly after argument validation and authoritative provider completion. Shell commands do not wait for a confirmation in either interactive or piped mode. Tools are not sandboxed. Project instructions and plain-writing guidance enter the native system prompt.
 
