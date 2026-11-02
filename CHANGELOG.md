@@ -4,6 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-11-03
+
+### Added
+
+- Optional offline Draft 7 output schemas for extension tool data, including agent authoring and versioned update checks.
+- Regressions for provider recovery, rejected-output removal, schema compilation, omitted data, logical errors, slash commands and retained version contracts.
+
+### Fixed
+
+- Treat invalid extension success data as a correlated tool error while preserving the actual zero exit status and existing timing flow. Rejected data and success text stay out of session results and subsequent model requests.
+
 ## [0.3.19] - 2026-11-02
 
 ### Fixed
