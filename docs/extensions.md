@@ -131,6 +131,31 @@ IDs and local tool/command names start with a lowercase ASCII letter and contain
 
 Tools require an object parameters schema. Hibiscus compiles Draft 7 JSON Schemas once and validates arguments before starting the program. Schemas must be self-contained; network and filesystem reference resolution are disabled. Patterns use Rust regex syntax. The [Rust JSON Schema validator](https://docs.rs/jsonschema/0.60.2/jsonschema/) supplies validation. Invalid schemas produce a load error. Tool arguments and command input are limited to 64 KiB.
 
+A tool may also declare `outputSchema`, a self-contained Draft 7 object or boolean
+schema for successful reply `data`. It uses the same offline compiler and regex
+policy as parameters. Omit the field to keep existing behavior; explicit null is
+an invalid schema. For example:
+
+```json
+"outputSchema": {
+  "type": "object",
+  "properties": {"workspace": {"type": "string"}},
+  "required": ["workspace"],
+  "additionalProperties": false
+}
+```
+
+Successful replies must match this contract. Omitted `data` is null and must be
+allowed by the schema; `true` accepts any data and `false` rejects every success.
+On mismatch, Hibiscus records a correlated tool error with exit code zero, drops
+the rejected data and success text, and lets the agent continue. Diagnostics do
+not print rejected values. Replies with `isError: true` keep their existing error
+text and optional data without success-schema validation. Slash commands do not
+use tool output schemas. The contract is local and is not added to provider tool
+schemas. Managed tool checks validate it before activating a candidate; reload,
+updates and rollback keep schemas with the corresponding version snapshot.
+See the [design notes](development/extension-output-schemas.md).
+
 `timeoutSeconds` defaults to 120 and accepts 1–600. A manifest must have at least one tool or command. Unknown manifest fields are errors, which helps catch misspellings.
 
 ## Request and reply

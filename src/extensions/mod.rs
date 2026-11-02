@@ -33,7 +33,7 @@ struct Tool {
     extension: Arc<Extension>,
     name: String,
     definition: Value,
-    validator: Arc<jsonschema::Validator>,
+    schemas: manifest::ToolSchemas,
 }
 struct Command {
     extension: Arc<Extension>,
@@ -241,9 +241,8 @@ impl Registry {
             version,
         });
         // Publish registrations only after the entire manifest and namespace pass.
-        for ((tool, name), validator) in manifest.tools.into_iter().zip(tool_names).zip(validators)
-        {
-            self.tools.insert(name.clone(),Tool {extension:extension.clone(),name:tool.name,definition:json!({"name":name,"description":tool.description,"parameters":tool.parameters}),validator});
+        for ((tool, name), schemas) in manifest.tools.into_iter().zip(tool_names).zip(validators) {
+            self.tools.insert(name.clone(),Tool {extension:extension.clone(),name:tool.name,definition:json!({"name":name,"description":tool.description,"parameters":tool.parameters}),schemas});
         }
         for command in manifest.commands {
             self.commands.insert(
@@ -331,7 +330,7 @@ impl Registry {
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<Value> {
         let tool = self.tools.get(name).ok_or("Unknown extension tool")?;
-        if args.to_string().len() > 65536 || !tool.validator.is_valid(args) {
+        if args.to_string().len() > 65536 || !tool.schemas.input.is_valid(args) {
             return Err(
                 "Extension tool arguments do not match its parameters schema or exceed 64 KiB"
                     .into(),
@@ -347,6 +346,19 @@ impl Registry {
             cancel,
         )
         .await?;
+        if !reply.is_error
+            && tool
+                .schemas
+                .output
+                .as_ref()
+                .is_some_and(|schema| !schema.is_valid(&reply.data))
+        {
+            // The subprocess exited zero. Preserve that status and let the engine
+            // retain call ID/timing, without persisting rejected data or success text.
+            return Ok(
+                json!({"content":[{"type":"text","text":"Extension tool result data does not match its outputSchema"}],"isError":true,"details":{"extension":tool.extension.id,"exitCode":0,"outputSchemaError":true}}),
+            );
+        }
         Ok(
             json!({"content":[{"type":"text","text":reply.text}],"isError":reply.is_error,"details":{"extension":tool.extension.id,"exitCode":0,"data":reply.data}}),
         )

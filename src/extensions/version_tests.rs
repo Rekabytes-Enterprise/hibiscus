@@ -34,6 +34,87 @@ fn manifest_at(dir: &Path) -> Value {
 }
 
 #[tokio::test]
+async fn output_schema_checks_reject_candidates_and_snapshots_retain_their_contract() {
+    let home = Home::new();
+    let source = home.extension("demo", REPLY);
+    let catalog = catalog(&home);
+    let original = active(&catalog, "demo");
+    let old_registry = catalog.snapshot();
+    let mut manifest = manifest_at(&source);
+    manifest["tools"][0]["outputSchema"] = json!(false);
+    manifest["checks"] = json!([{"kind":"tool","name":"greet","arguments":{"name":"test"}}]);
+    let update = json!({"id":"demo","expectedVersion":original,"manifest":manifest});
+    let error = execute(&catalog, &home, AgentTool::Update, update)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("outputSchema"));
+    assert_eq!(active(&catalog, "demo"), original);
+    // With no executable checks the new contract may activate, but old snapshots
+    // and a later rollback must still use the contract of their own version.
+    manifest["checks"] = json!([]);
+    execute(
+        &catalog,
+        &home,
+        AgentTool::Update,
+        json!({"id":"demo","expectedVersion":original,"manifest":manifest}),
+    )
+    .await
+    .unwrap();
+    let next = active(&catalog, "demo");
+    let (_sender, mut cancel) = watch::channel(false);
+    let args = json!({"name":"test"});
+    assert_eq!(
+        old_registry
+            .execute_tool(
+                "old",
+                "demo__greet",
+                &args,
+                (&home.0, "session"),
+                &mut cancel
+            )
+            .await
+            .unwrap()["isError"],
+        false
+    );
+    assert_eq!(
+        catalog
+            .snapshot()
+            .execute_tool(
+                "new",
+                "demo__greet",
+                &args,
+                (&home.0, "session"),
+                &mut cancel
+            )
+            .await
+            .unwrap()["isError"],
+        true
+    );
+    execute(
+        &catalog,
+        &home,
+        AgentTool::Rollback,
+        json!({"id":"demo","expectedVersion":next,"version":original}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        catalog
+            .snapshot()
+            .execute_tool(
+                "restored",
+                "demo__greet",
+                &args,
+                (&home.0, "session"),
+                &mut cancel
+            )
+            .await
+            .unwrap()["isError"],
+        false
+    );
+}
+
+#[tokio::test]
 async fn migration_updates_and_rollback_keep_implementations_and_metadata_together() {
     let home = Home::new();
     let source = home.extension("demo", REPLY);

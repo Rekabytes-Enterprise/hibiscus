@@ -4,9 +4,12 @@ pub(crate) fn manifest(bytes: &[u8]) {
     if let Ok((manifest, validators)) = manifest::parse(bytes) {
         assert_eq!(manifest.api_version, 1);
         assert_eq!(manifest.tools.len(), validators.len());
-        for validator in validators {
+        for schemas in validators {
             // Exercise the compiled schema without running its tool.
-            let _ = validator.is_valid(&serde_json::json!({}));
+            let _ = schemas.input.is_valid(&serde_json::json!({}));
+            if let Some(output) = schemas.output {
+                let _ = output.is_valid(&serde_json::json!({}));
+            }
         }
     }
 }
