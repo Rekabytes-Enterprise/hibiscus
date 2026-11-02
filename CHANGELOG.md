@@ -4,6 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-11-02
+
+### Fixed
+
+- Open API-key credential files once with symlink refusal and nonblocking flags, validate the opened file, and cap reads at 128 KiB even if the file grows after its metadata check.
+- Keep credential values and private paths out of malformed-store errors. Preserve rejected files and reject oversized saves before atomic replacement.
+
+### Added
+
+- Regressions for exact-limit stores, file growth, path replacement, rejected-save preservation, FIFO rejection and redacted CLI/TUI errors. Existing credential JSON and normal login behavior are preserved.
+
 ## [0.3.18] - 2026-11-02
 
 ### Added

@@ -53,6 +53,21 @@ The built-in `openai-codex` provider uses `authentication: "codex"`, `api: "resp
 
 API Key → provider masks key entry. Keys are stored in Hibiscus's own `auth.json`, mode 0600, using atomic replacement. A configured key environment variable takes precedence for API-key providers. Stored keys are not validated until a provider request. `/logout` requires selection and confirmation, removes the selected local key or Codex token file and reloads runtime state. It does not revoke the remote grant or unset environment variables.
 
+From v0.3.19, API-key credential files are limited to 128 KiB. The reader opens
+the final path component without following a symlink and without waiting for a
+FIFO writer, validates the opened file's regular-file type and private permissions,
+then reads from that same handle with a second byte limit. Replacing the path
+after opening does not redirect that read. Parse/read failures use fixed messages
+that do not include credential values or private paths. Saves enforce the same
+size cap before atomic replacement; rejected files and writes remain unchanged.
+
+The JSON format and normal login flow are unchanged. If an existing store is
+oversized or malformed, keep any backup private and restore a valid, smaller
+credential file before retrying `/login`; Hibiscus does not truncate or overwrite
+the rejected store. A missing file still means no saved keys. These checks do not
+freeze an opened file against another process that can modify its contents, nor
+prevent programs running as the same user from reading accessible credentials.
+
 Keys/tokens in `.pi`, Codex or Claude stores are never read. Claude browser login is not implemented. Anthropic directs third-party applications to API keys or a supported cloud provider: [authentication guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account).
 
 ## Existing data
