@@ -591,6 +591,20 @@ async fn run_turns(
             let registry = extensions.snapshot();
             let mut definitions = tools::definitions();
             definitions.extend(registry.definitions().cloned());
+            if p.authentication == config::Authentication::Rooxcode
+                && super::context::pressure(p, m, &snapshot, &instructions, Some(&definitions))?
+            {
+                emit(out, json!({"type":"compaction_start"})).await?;
+                let result = compact(session.clone(), config.clone(), out, None, cancel).await?;
+                emit(out, json!({"type":"compaction_end","result":result})).await?;
+            }
+            let snapshot = session.lock().unwrap().clone();
+            let (p, m) = snapshot.selected(&config)?;
+            if p.authentication == config::Authentication::Rooxcode
+                && super::context::pressure(p, m, &snapshot, &instructions, Some(&definitions))?
+            {
+                return Err("Rooxcode instructions, tools or recent conversation exceed the request budget after compaction. Reduce their size before continuing.".into());
+            }
             let call = provider::request(
                 p,
                 m,
@@ -759,7 +773,14 @@ async fn compact(
         snapshot.save()?;
     }
     let prompt=format!("Summarize this conversation for continuation. Preserve user requirements, decisions, changed files, verified results, unresolved work and tool outcomes. Do not execute tools. {}",instructions.unwrap_or(""));
-    let reply = tokio::select! {r=provider::request(p,m,&snapshot,&prompt,"off",None,out)=>r?,_=cancel.changed()=>return Err("Cancelled compact".into())};
+    let (reply, tail) = if p.authentication == config::Authentication::Rooxcode {
+        super::context::summarize(p, m, &snapshot, &prompt, out, cancel).await?
+    } else {
+        (
+            tokio::select! {r=provider::request(p,m,&snapshot,&prompt,"off",None,out)=>r?,_=cancel.changed()=>return Err("Cancelled compact".into())},
+            vec![],
+        )
+    };
     let summary = reply.message.text();
     if summary.trim().is_empty() {
         return Err("Empty compaction summary; history unchanged".into());
@@ -778,6 +799,7 @@ async fn compact(
             text: format!("Previous conversation summary:\n{summary}"),
         }],
     }];
+    s.messages.extend(tail);
     record_usage(&mut s, reply.input, reply.output, reply.cache);
     s.context = None;
     s.save()?;
@@ -803,6 +825,7 @@ async fn maybe_compact(
         let s = session.lock().unwrap();
         s.selected(config)
             .ok()
+            .filter(|(p, _)| p.authentication != config::Authentication::Rooxcode)
             .and_then(|(_, m)| m.context_window)
             .zip(s.context)
             .is_some_and(|(window, used)| used > window.saturating_mul(4) / 5)

@@ -95,6 +95,28 @@ credential isolation. Other provider requests retain their key and carry no
 Rooxcode headers. The fixture URL is configured on loopback; a unit check binds
 the production default URL and verifies that it needs neither keys nor IDs.
 No live production inference or deployed-gateway compatibility is claimed.
-The ID-only catalog cannot describe context/image/reasoning capabilities, so
-Hibiscus leaves them unknown or disabled and uses the gateway's output default.
+An ID-only catalog leaves context unknown; optional verified context metadata
+can supply a limit. Image/reasoning capabilities remain disabled. Hibiscus uses
+the gateway's output default while reserving output space during budgeting.
 Gateway quotas and context/tool limits remain authoritative.
+
+
+## Request budgeting and compaction
+
+Model discovery accepts optional context_window, max_request_bytes and max_messages.
+Missing context stays unknown. Missing byte/message metadata uses the Rooxcode
+10 MiB/256-message compatibility defaults, not a guessed model context window.
+Hibiscus measures the exact Chat Completions body including system instructions
+and extension tools before every Rooxcode generation, after steering inputs.
+It compacts at 80 percent of either byte/message capacity or the configured
+context window after reserving output. Without a tokenizer, serialized UTF-8
+bytes are a conservative token estimate, so compaction can happen earlier than
+an exact token count would require. Other providers retain their existing policy.
+
+Compaction summarizes canonical history in bounded text chunks, carrying each
+summary into the next request. The recent tail retains complete assistant/tool
+result groups when it fits. Intermediate summaries never replace active history.
+Only a successful final summary archives and replaces it; failure or cancellation
+keeps the original conversation. Completed tools are never replayed. Oversized
+fixed instructions/tools still fail clearly instead of looping or switching models.
+Gateway request_too_large errors receive a fixed, sanitized diagnostic.

@@ -28,6 +28,10 @@ pub struct Model {
     pub id: String,
     #[serde(default)]
     pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_request_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_messages: Option<u64>,
     #[serde(default = "default_output")]
     pub max_tokens: u64,
     #[serde(default)]
@@ -68,6 +72,8 @@ fn model(id: &str) -> Model {
     Model {
         id: id.into(),
         context_window: None,
+        max_request_bytes: None,
+        max_messages: None,
         max_tokens: 4096,
         reasoning: false,
         images: true,
@@ -155,6 +161,9 @@ pub fn load() -> Result<Config> {
         if p.models.iter().any(|m| {
             m.id.is_empty()
                 || !models.insert(&m.id)
+                || m.max_request_bytes
+                    .is_some_and(|n| !(1024..=104_857_600).contains(&n))
+                || m.max_messages.is_some_and(|n| !(4..=10000).contains(&n))
                 || m.max_tokens == 0
                 || m.context_window.is_some_and(|n| n <= m.max_tokens)
         }) {

@@ -20,8 +20,9 @@ These copyable headers are client metadata, not authentication or separate quota
 buckets. No provider key, Codex token or shared product secret is attached.
 Rooxcode does not appear in the API-key login choices.
 
-The catalog contains IDs only. Context limits stay unknown; image and reasoning
-capabilities are not inferred. Rooxcode applies its own default output limit.
+The catalog supplies IDs and may advertise verified context, request-byte and
+message limits. Missing context stays unknown; image and reasoning capabilities
+are not inferred. Rooxcode applies its own default output limit.
 Discovery has a five-second timeout, a 1 MiB response bound and at most 1,000
 unique model IDs. Catalog failures and empty catalogs are reported, and `/models`
 can refresh them. A removed selected model requires an explicit new selection.
@@ -44,6 +45,14 @@ The Rooxcode HTTP deadline remains bounded at 600 seconds for queueing plus
 generation. This covers the server's configurable maximum queue wait of 300
 seconds and current generation deadline of 120 seconds. Keepalives do not extend
 the deadline. Other providers retain their existing timeouts.
+
+Before each Rooxcode generation, Hibiscus measures the full encoded request,
+including instructions and tool schemas. It compacts at 80% of the applicable
+byte, message or context budget, reserving output space. Large histories are
+summarized in bounded chunks; recent complete tool groups are retained when
+they fit. Failed or cancelled summaries preserve the original history. Without
+an exact tokenizer, the estimate is conservative and may compact early. Other
+providers keep their existing compaction policy.
 
 For other providers, optionally create `~/.hibiscus/config.json`, or the equivalent file under `HIBISCUS_HOME`:
 
