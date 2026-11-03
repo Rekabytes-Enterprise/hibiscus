@@ -1,4 +1,6 @@
 use super::*;
+#[path = "rooxcode/queue.rs"]
+mod queue;
 
 fn done(text: &str) -> (u16, String) {
     (

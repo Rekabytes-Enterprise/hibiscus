@@ -127,9 +127,12 @@ impl Fixture {
                         if status == 299 && socket.write_all(header.as_bytes()).is_ok() {
                             let _ = socket.write_all(body.as_bytes());
                             for _ in 0..100 {
-                                if stopped.load(Ordering::Relaxed)
-                                    || socket.write_all(b": waiting\n\n").is_err()
-                                {
+                                if stopped.load(Ordering::Relaxed) {
+                                    break;
+                                }
+                                if socket.write_all(b": waiting\n\n").is_err() {
+                                    fs::write(server_root.join("stream-disconnected"), "yes")
+                                        .unwrap();
                                     break;
                                 }
                                 thread::sleep(Duration::from_millis(50));

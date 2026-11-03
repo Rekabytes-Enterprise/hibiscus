@@ -211,7 +211,11 @@ impl ScrollDisplay for Screen {
         Ok(true)
     }
     fn split_timeline(&mut self) -> io::Result<()> {
+        let had_tools = self.current_timeline.is_some();
         self.freeze_timeline();
+        if self.full && had_tools && !self.transcript.ends_with(b"\n\n") {
+            self.transcript.push(b'\n');
+        }
         Ok(())
     }
     fn live_input(&self) -> bool {

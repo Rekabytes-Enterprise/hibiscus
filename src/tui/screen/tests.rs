@@ -2,6 +2,44 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn saved_tool_only_replies_hide_empty_labels_and_status_badges_do_not_tint_details() {
+    let mut screen = Screen::new(false).unwrap();
+    screen.color = true;
+    let text = "you › Check the project\nhibi › \n\n  · ✓ Bash · 4 commands\nhibi › \n  \n  · ✗ bash · command hidden\nhibi › Checks complete.";
+    let rows = markdown::format(text, 80);
+    let plain: Vec<String> = rows
+        .iter()
+        .map(|row| row.cells.iter().map(|c| c.ch).collect())
+        .collect();
+    assert_eq!(
+        plain.iter().filter(|line| line.as_str() == "hibi").count(),
+        1
+    );
+    let success = rows
+        .iter()
+        .find(|row| row.cells.iter().any(|c| c.tone == Tone::ToolSuccess))
+        .unwrap();
+    let failure = rows
+        .iter()
+        .find(|row| row.cells.iter().any(|c| c.tone == Tone::ToolError))
+        .unwrap();
+    assert!(screen.styled_line(success, 80).contains("48;2;24;57;37"));
+    assert!(screen.styled_line(failure, 80).contains("48;2;72;28;34"));
+    assert!(success
+        .cells
+        .iter()
+        .filter(|c| c.ch.is_ascii_digit())
+        .all(|c| c.tone == Tone::Muted));
+    for width in [8, 26, 80] {
+        assert!(markdown::format(text, width)
+            .iter()
+            .all(|row| row.cells.len() <= width));
+    }
+    screen.color = false;
+    assert!(!screen.styled_line(success, 80).contains('\x1b'));
+}
+
+#[test]
 fn connected_command_picker_hides_login_without_an_empty_panel() {
     let mut screen = Screen::new(false).unwrap();
     screen

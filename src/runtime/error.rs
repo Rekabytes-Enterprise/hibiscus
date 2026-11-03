@@ -71,6 +71,13 @@ impl ChatError {
         if self.source == ErrorSource::Extension && self.category != ErrorCategory::Cancelled {
             return "Ask Hibi to inspect the extension code. You can keep chatting.";
         }
+        if self.message.starts_with("Rooxcode ") {
+            match self.category {
+                ErrorCategory::Billing => return "This free-service allowance is exhausted. Retry manually after its reset; nothing is resent automatically.",
+                ErrorCategory::RateLimit | ErrorCategory::Unavailable => return "The Rooxcode request has stopped. Retry manually when capacity is available; nothing is resent automatically.",
+                _ => {}
+            }
+        }
         match self.category {
             ErrorCategory::Authentication => "Use /login or check your Runtime credentials.",
             ErrorCategory::Access => "Check model access or choose another model with /models.",
@@ -132,7 +139,13 @@ fn classify(message: &str) -> ErrorCategory {
         "weekly quota",
         "gousagelimiterror",
         "freeusagelimiterror",
-    ]) {
+    ]) || (text.starts_with("rooxcode ")
+        && has(&[
+            "daily quota",
+            "daily work budget",
+            "upstream free request quota",
+        ]))
+    {
         ErrorCategory::Billing
     } else if has(&[
         "context window",

@@ -20,6 +20,8 @@ The runtime adapter decodes tool events into display data. The inline renderer o
 
 Before the first response, CLI prints one static `Waiting for response · Esc to stop` row. Color mode clears it when text, a tool or an error arrives; `NO_COLOR` prints it as an ordinary line. Esc cancels and clears the waiting state. Long shell commands keep a short status row with right-aligned metadata and wrap beneath it. The preview shows at most eight command lines; saved-output inspection shows the complete stored command.
 
+While Rooxcode queues a request, the work status reads `Rooxcode is busy. Waiting…`. In TUI it replaces the working status below the composer and keeps the existing flower animation and elapsed timer running. The conversation stays active until output, cancellation or an error. TUI and color CLI clear the waiting status when model output starts; plain `NO_COLOR` CLI keeps the status as a scrollback line, like its ordinary waiting messages. Esc cancels the queued connection without resending it. Queue errors and exhausted daily allowances include manual recovery guidance; `/restore` restores the failed draft without submitting it.
+
 ## Extensions
 
 Ask Hibi to create extensions through its native `create_extension` tool; it writes the chosen implementation under `~/.hibiscus/extensions/` and registers its tools and slash commands immediately. `list_extensions` and `reload_extensions` let the agent inspect and update installed extensions. Custom commands such as `/review [input]`, or the default `/<id>:<command>`, run locally in either view; TUI includes them in slash suggestions. Esc cancels execution without submitting a model prompt. Model-callable extension tools use the normal tool rows and saved-output/session flow. See [extension authoring](extensions.md) for the executable API.
@@ -67,6 +69,8 @@ Login/logout and selection dialogs use the shared docked modal and preserve the 
 `/login` offers Browser Login → Codex or API Key → configured provider. Credentials and manual redirect URLs are masked. Codex browser login uses a native loopback callback and supports Ctrl+Y to copy the link; Esc cancels. `/logout` selects a stored credential and requires confirmation. These dialogs require fullscreen input, including when opened temporarily from CLI. Credentials live only in Hibiscus's private stores; environment keys take precedence for API-key providers and survive logout. Saving credentials does not prove model access. External-agent credential stores are not read. See [native authentication](native-runtime.md#authentication).
 
 ## Progress, usage and recovery
+
+TUI keeps consecutive tool-only steps in one compact activity group. Empty replies do not add a `hibi` label or blank reply block. Completed tools have a green status badge; failures have a red badge, with neutral details beside them. The actual assistant reply starts below the activity group. Saved conversations receive the same display cleanup without rewriting their contents.
 
 Tool activity uses call IDs. A successful edit displays the recorded diff; failed edits do not claim a successful change. Goal progress comes only from an explicit checklist, not tool-call counts. Plain assistant text and Markdown are visible; private model reasoning is not displayed.
 

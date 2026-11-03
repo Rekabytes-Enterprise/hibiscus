@@ -15,6 +15,7 @@ pub(crate) struct Screen {
     tools: tools::Tools,
     speaker: bool,
     waiting: Option<bool>,
+    capacity_waiting: bool,
     workspace: String,
     model: String,
     has_credentials: bool,
@@ -32,6 +33,7 @@ impl Screen {
             tools: tools::Tools::default(),
             speaker: false,
             waiting: None,
+            capacity_waiting: false,
             workspace: std::env::current_dir()
                 .ok()
                 .and_then(|p| p.file_name().map(|s| clean(&s.to_string_lossy())))
@@ -104,6 +106,7 @@ impl Screen {
         Ok(())
     }
     fn end_wait(&mut self) -> io::Result<bool> {
+        self.capacity_waiting = false;
         match self.waiting.take() {
             Some(rewrite) => {
                 if rewrite {
@@ -116,6 +119,19 @@ impl Screen {
     }
 }
 impl ScrollDisplay for Screen {
+    fn set_work(&mut self, phase: &str) -> io::Result<()> {
+        if phase == crate::ui::display::ROOXCODE_WAITING && self.terminal {
+            if !self.capacity_waiting {
+                self.end_wait()?;
+                self.start_command(phase)?;
+                self.capacity_waiting = true;
+            }
+        } else if self.capacity_waiting {
+            self.end_wait()?;
+            self.flush()?;
+        }
+        Ok(())
+    }
     fn assistant_start(&mut self) -> io::Result<bool> {
         if !self.terminal {
             return Ok(false);

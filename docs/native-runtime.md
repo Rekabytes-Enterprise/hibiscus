@@ -31,6 +31,20 @@ fixed diagnostics without echoing private upstream bodies. Esc cancels the activ
 request; partially streamed tools never execute. Existing gateway request,
 context, tool-count and shared-capacity limits still apply.
 
+Rooxcode v0.1.9 queues temporary rate/concurrency limits on the server. Its
+`: rooxcode waiting` SSE comments show `Rooxcode is busy. Waiting…` through
+the existing work status, without adding chat text or completing the turn. Model
+text, reasoning or tool-call output clears that status. Esc cancels the waiting
+connection. Queue-full, per-network queue-full, queue-timeout and queue-disabled
+errors are distinct from exhausted daily quotas and input/output work budgets.
+HTTP200 SSE errors use their validated embedded status and optional numeric
+retry delay. `/restore` recovers a failed draft for review; it sends nothing.
+
+The Rooxcode HTTP deadline remains bounded at 600 seconds for queueing plus
+generation. This covers the server's configurable maximum queue wait of 300
+seconds and current generation deadline of 120 seconds. Keepalives do not extend
+the deadline. Other providers retain their existing timeouts.
+
 For other providers, optionally create `~/.hibiscus/config.json`, or the equivalent file under `HIBISCUS_HOME`:
 
 ```json

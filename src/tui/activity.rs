@@ -131,8 +131,8 @@ impl Timeline {
             Call::Bash => {
                 if failed {
                     self.entries.push(Entry::Failure {
-                        name: "bash".into(),
-                        path: "command hidden".into(),
+                        name: "Bash".into(),
+                        path: "1 failed command".into(),
                     });
                 } else {
                     self.commands += 1;
@@ -372,7 +372,7 @@ mod tests {
         ));
         assert_eq!(text.matches("diff ·").count(), 3);
         assert!(text.contains("✗ read · missing.txt"));
-        assert!(text.contains("✗ bash · command hidden"));
+        assert!(text.contains("✗ Bash · 1 failed command"));
         assert!(text.contains("✗ edit · failed.rs"));
         assert!(!text.contains("private command"));
         assert!(!text.contains("thinking") && !text.contains("must-not-show"));

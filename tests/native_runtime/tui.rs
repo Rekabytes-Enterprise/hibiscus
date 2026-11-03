@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn empty_assistant_tool_steps_stay_in_one_activity_group_without_orphan_labels() {
+    let mut replies = Vec::new();
+    for (index, text) in ["", "\n ", "", "\t", ""].iter().enumerate() {
+        replies.push((200, format!("{}{}", sse(json!({"type":"response.output_text.delta","delta":text})), sse(json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]},{"type":"function_call","call_id":format!("check-{index}"),"name":"bash","arguments":json!({"command":if index == 2 {"exit 1"} else {"printf checked"}}).to_string()}]}})))));
+    }
+    replies.push((200, sse(json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Checks complete."}]}]}}))));
+    let f = Fixture::new("responses", replies);
+    let mut tty = Pty::spawn_with_color(&mut f.command(), true);
+    tty.wait_text("Enter send");
+    tty.send(b"Check the project\r");
+    tty.wait_text("Checks complete.");
+    tty.send(b"/quit\r");
+    let shown = tty.finish();
+    let views = support::screen::snapshots(&shown);
+    let view = views
+        .iter()
+        .rev()
+        .find(|v| v.contains("Checks complete."))
+        .unwrap();
+    assert_eq!(
+        view.lines()
+            .filter(|line| line.trim().trim_start_matches('│').trim() == "hibi")
+            .count(),
+        1,
+        "{view}"
+    );
+    assert_eq!(view.matches("✓ Bash").count(), 1, "{view}");
+    assert!(
+        view.contains("4 commands") && view.contains("✗ Bash"),
+        "{view}"
+    );
+    assert!(shown.contains("48;2;24;57;37") && shown.contains("48;2;72;28;34"));
+    assert_eq!(f.captured().len(), 6);
+}
+
+#[test]
 fn native_api_key_login_and_logout_are_masked_and_local() {
     let f = Fixture::new("responses", vec![]);
     let mut command = f.command();
