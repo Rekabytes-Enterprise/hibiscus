@@ -7,6 +7,7 @@ mod engine;
 pub(crate) mod error;
 pub(crate) mod logout;
 mod provider;
+mod rooxcode;
 mod run;
 mod session;
 pub(crate) mod tool_output;

@@ -4,7 +4,34 @@ Version 0.3.5 replaces Pi's SDK and subprocess runtime with Hibiscus-owned Rust 
 
 ## Provider configuration
 
-Create `~/.hibiscus/config.json`, or the equivalent file under `HIBISCUS_HOME`:
+Rooxcode is built in at `https://api-rooxcode.reka-bytes.my/v1`. No account,
+login, key or config entry is needed. Hibiscus fetches `GET /models` when needed
+at startup and when opening `/models`, then uses the existing streaming Chat
+Completions adapter. With no explicit model, the first discovered Rooxcode model starts a new
+conversation, even if another provider key exists in the environment. Explicit selections
+and existing providers remain unchanged; failures never select another provider.
+
+Rooxcode chat requests contain `x-rooxcode-client: hibiscus`, the actual app
+version in `x-rooxcode-version`, and a non-nil conversation UUID in
+`x-rooxcode-session`. This UUID is stored as `rooxcodeSession` in the existing
+session header, survives resume and compaction, and changes for a new session.
+Older sessions receive a UUID when loaded and persist it before generation.
+These copyable headers are client metadata, not authentication or separate quota
+buckets. No provider key, Codex token or shared product secret is attached.
+Rooxcode does not appear in the API-key login choices.
+
+The catalog contains IDs only. Context limits stay unknown; image and reasoning
+capabilities are not inferred. Rooxcode applies its own default output limit.
+Discovery has a five-second timeout, a 1 MiB response bound and at most 1,000
+unique model IDs. Catalog failures and empty catalogs are reported, and `/models`
+can refresh them. A removed selected model requires an explicit new selection.
+Generation has no automatic retries or fallback; HTTP403 metadata rejection,
+HTTP429 with numeric `Retry-After`, disabled inference and upstream errors use
+fixed diagnostics without echoing private upstream bodies. Esc cancels the active
+request; partially streamed tools never execute. Existing gateway request,
+context, tool-count and shared-capacity limits still apply.
+
+For other providers, optionally create `~/.hibiscus/config.json`, or the equivalent file under `HIBISCUS_HOME`:
 
 ```json
 {
@@ -33,15 +60,15 @@ Create `~/.hibiscus/config.json`, or the equivalent file under `HIBISCUS_HOME`:
 }
 ```
 
-Supported `api` values are `responses`, `chat_completions` and `anthropic`. A custom OpenAI-compatible provider uses its own ID, base URL, key environment variable and model IDs. The catalog is explicit configuration, not discovery through another agent. Only configure endpoints you trust to receive your prompts and credential. HTTPS is required except on loopback for local providers and tests. Redirects are disabled.
+Supported `api` values are `responses`, `chat_completions` and `anthropic`. A custom OpenAI-compatible provider uses its own ID, base URL, key environment variable and model IDs. These providers use explicit configuration; Rooxcode alone discovers its public catalog directly. Only configure endpoints you trust to receive your prompts and credential. HTTPS is required except on loopback for local providers and tests. Redirects are disabled.
 
-`model` is `provider/model-id`; `HIBISCUS_MODEL` can override it at launch. Without an explicit preference, a new session selects the first configured model whose provider has a stored credential or configured environment key. The header shows no active model when that credential is absent. Credential presence does not prove remote model access. Model IDs may contain slashes. `maxSteps` bounds provider/tool iterations per user turn, from 1 to 1024. `maxTokens` is the output limit. Optional `contextWindow` must exceed `maxTokens` and should match the provider's actual capability. Unknown context limits stay unknown. `reasoning: true` enables off/low/medium/high for the Responses adapter; it is not inferred from a model name. Only mark `images: true` when the model supports them.
+`model` is `provider/model-id`; `HIBISCUS_MODEL` can override it at launch. Explicit model preferences and resumed-session selections are preserved. Otherwise a new session discovers and selects an available Rooxcode model, with no paid-provider fallback. The header shows no active model when neither provider credentials nor an available Rooxcode catalog provide access. Credential presence does not prove remote model access. Model IDs may contain slashes. `maxSteps` bounds provider/tool iterations per user turn, from 1 to 1024. `maxTokens` is the output limit. Optional `contextWindow` must exceed `maxTokens` and should match the provider's actual capability. Unknown context limits stay unknown. `reasoning: true` enables off/low/medium/high for the Responses adapter; it is not inferred from a model name. Only mark `images: true` when the model supports them.
 
 Usage comes from provider receipts. Missing usage and unconfigured pricing remain unknown; Hibiscus does not invent context counts or dollar costs. Automatic compaction starts when confirmed usage exceeds 80% of a configured context window. This is a scheduling threshold, not an exact tokenizer or a guarantee against provider context errors. `/compact` is available explicitly.
 
 ## Authentication
 
-Welcome tips and TUI slash suggestions hide `/login` when any configured provider has a native credential or configured environment key. The command remains available to type for another provider. This checks local credential presence, not successful provider access. CLI opens login/logout in the native fullscreen dialogs and returns to inline chat afterward.
+Welcome tips and TUI slash suggestions hide `/login` when a configured provider has credentials or an available Rooxcode model provides anonymous access. The command remains available to type for another provider. This distinguishes anonymous model access from credential presence; neither guarantees that a generation request will succeed. CLI opens login/logout in the native fullscreen dialogs and returns to inline chat afterward.
 
 `/login` offers **Browser Login** and **API Key**. Browser Login → Codex opens OpenAI's browser authorization page. No personal OAuth client ID is needed. Hibiscus implements the Codex public-client authorization-code flow with S256 PKCE and a fresh random state. It listens on `127.0.0.1:1455` for `http://localhost:1455/auth/callback`. If that port is busy, login reports a recoverable error. If the browser cannot return automatically, paste the complete redirect URL into the masked dialog. The target and state must match the pending attempt. Ctrl+Y copies the sign-in link; Esc cancels without replacing a stored credential.
 

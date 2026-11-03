@@ -437,8 +437,9 @@ impl Screen {
     pub(crate) fn status(&mut self, state: &Value) -> io::Result<()> {
         self.extension_commands =
             serde_json::from_value(state["extensionCommands"].clone()).unwrap_or_default();
-        self.has_credentials = state["hasCredentials"]
+        self.has_credentials = state["hasAccess"]
             .as_bool()
+            .or_else(|| state["hasCredentials"].as_bool())
             .unwrap_or_else(|| state["model"].is_object());
         let provider = state["model"]["provider"].as_str().unwrap_or("");
         let model = state["model"]["id"].as_str().unwrap_or("no active model");

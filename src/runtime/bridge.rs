@@ -373,7 +373,7 @@ impl Client {
                     Some("compaction_end") if event["aborted"] == true => {
                         display.set_work("Compaction cancelled…")?
                     }
-                    Some("extension_ui_request" | "extension_error") => {
+                    Some("extension_ui_request" | "extension_error" | "provider_error") => {
                         dialogs.handle(
                             writer,
                             &event,
@@ -879,7 +879,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             Some("summarization_retry_attempt_start") if kind == "prompt" => {
                 display.set_work("Retrying context summary…")?;
             }
-            Some("extension_ui_request" | "extension_error") => {
+            Some("extension_ui_request" | "extension_error" | "provider_error") => {
                 // Full-screen dialogs render through the shared cached modal
                 // component; only line mode uses direct terminal prompts.
                 dialogs.handle(input, &event, fallback, display, raw, events, interactive)?;

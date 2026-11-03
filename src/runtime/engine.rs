@@ -100,7 +100,7 @@ pub fn serve(socket: UnixStream, config: Config, session: Session) -> Result<()>
         .build()?
         .block_on(serve_async(socket, config, session))
 }
-async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Result<()> {
+async fn serve_async(socket: UnixStream, mut config: Config, mut session: Session) -> Result<()> {
     socket.set_nonblocking(true)?;
     let (reader, mut writer) = tokio::net::UnixStream::from_std(socket)?.into_split();
     let (commands, mut input) = mpsc::channel(64);
@@ -132,9 +132,21 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
         }
         Ok::<_, std::io::Error>(())
     });
+    let mut catalog_error = None;
+    if session
+        .model
+        .as_ref()
+        .is_none_or(|(p, _)| p == super::rooxcode::ID)
+    {
+        catalog_error = super::rooxcode::refresh(&mut config)
+            .await
+            .err()
+            .map(|e| e.to_string());
+        select_rooxcode(&mut session, &config);
+    }
     let session = Arc::new(Mutex::new(session));
     let queue = Arc::new(Mutex::new(Queue::default()));
-    let config = Arc::new(config);
+    let mut config = Arc::new(config);
     let extensions = Arc::new(crate::extensions::Catalog::new(
         crate::extensions::Registry::discover()
             .unwrap_or_else(|e| crate::extensions::Registry::unavailable(&e.to_string())),
@@ -144,6 +156,9 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
         for warning in initial.warnings() {
             emit(&out, json!({"type":"extension_error","error":warning})).await?;
         }
+    }
+    if let Some(error) = &catalog_error {
+        emit(&out, json!({"type":"provider_error","error":error})).await?;
     }
     let (cancel, _) = watch::channel(false);
     let mut active: Option<tokio::task::JoinHandle<()>> = None;
@@ -205,14 +220,30 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                     .unwrap()
                     .selected(&config)
                     .and_then(|(p, m)| {
-                        config::key(p)?;
+                        config::access(p)?;
                         if !images.is_empty() && !m.images {
                             return Err("Selected model does not support images".into());
                         }
                         Ok(())
                     });
                 if let Err(e) = validation {
-                    emit(&out, failure(&id, &e.to_string())).await?;
+                    let message = if session
+                        .lock()
+                        .unwrap()
+                        .model
+                        .as_ref()
+                        .is_none_or(|(p, _)| p == super::rooxcode::ID)
+                    {
+                        catalog_error.as_deref().unwrap_or("").to_owned()
+                    } else {
+                        String::new()
+                    };
+                    let message = if message.is_empty() {
+                        e.to_string()
+                    } else {
+                        message
+                    };
+                    emit(&out, failure(&id, &message)).await?;
                     continue;
                 }
                 if busy {
@@ -363,6 +394,66 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                     q.lock().unwrap().running = false;
                 }));
             }
+            Command::NewSession if !busy => {
+                if config
+                    .model
+                    .as_deref()
+                    .is_none_or(|m| m.starts_with("rooxcode/"))
+                {
+                    catalog_error = super::rooxcode::refresh(Arc::make_mut(&mut config))
+                        .await
+                        .err()
+                        .map(|e| e.to_string());
+                }
+                match Session::open(&super::bridge::SessionStart::New, &config) {
+                    Ok(mut next) => {
+                        select_rooxcode(&mut next, &config);
+                        *session.lock().unwrap() = next;
+                        if let Some(error) = &catalog_error {
+                            emit(&out, json!({"type":"provider_error","error":error})).await?;
+                        }
+                        emit(&out, response(&id, json!({}))).await?;
+                    }
+                    Err(error) => emit(&out, failure(&id, &error.to_string())).await?,
+                }
+            }
+            Command::SwitchSession { session_path } if !busy => {
+                match Session::open(
+                    &super::bridge::SessionStart::Selected(session_path),
+                    &config,
+                ) {
+                    Ok(next) => {
+                        if next
+                            .model
+                            .as_ref()
+                            .is_some_and(|(p, _)| p == super::rooxcode::ID)
+                        {
+                            catalog_error = super::rooxcode::refresh(Arc::make_mut(&mut config))
+                                .await
+                                .err()
+                                .map(|e| e.to_string());
+                        }
+                        *session.lock().unwrap() = next;
+                        emit(&out, response(&id, json!({}))).await?;
+                    }
+                    Err(error) => emit(&out, failure(&id, &error.to_string())).await?,
+                }
+            }
+            Command::GetAvailableModels => {
+                if !busy {
+                    catalog_error = super::rooxcode::refresh(Arc::make_mut(&mut config))
+                        .await
+                        .err()
+                        .map(|e| e.to_string());
+                    select_rooxcode(&mut session.lock().unwrap(), &config);
+                }
+                let models = config.providers.iter().flat_map(|p| p.models.iter().map(move |m| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window,"reasoning":m.reasoning}))).collect::<Vec<_>>();
+                emit(
+                    &out,
+                    response(&id, json!({"models":models,"catalogError":catalog_error})),
+                )
+                .await?;
+            }
             command => {
                 let result = (|| -> Result<Value> {
                     let mut s = session.lock().unwrap();
@@ -381,9 +472,6 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                             Ok(json!({"output":super::tool_output::get(&s.messages, index)}))
                         }
                         Command::GetSessionStats => Ok(s.stats(&config)),
-                        Command::GetAvailableModels => Ok(
-                            json!({"models":config.providers.iter().flat_map(|p|p.models.iter().map(move|m|json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window,"reasoning":m.reasoning}))).collect::<Vec<_>>()}),
-                        ),
                         Command::GetAvailableThinkingLevels => Ok(
                             json!({"levels":if s.selected(&config).is_ok_and(|(p,m)|m.reasoning&&p.api==config::Api::Responses){vec!["off","low","medium","high"]}else{vec!["off"]}}),
                         ),
@@ -413,17 +501,6 @@ async fn serve_async(socket: UnixStream, config: Config, session: Session) -> Re
                             }
                             s.thinking = level;
                             s.save()?;
-                            Ok(json!({}))
-                        }
-                        Command::NewSession if !busy => {
-                            *s = Session::open(&super::bridge::SessionStart::New, &config)?;
-                            Ok(json!({}))
-                        }
-                        Command::SwitchSession { session_path } if !busy => {
-                            *s = Session::open(
-                                &super::bridge::SessionStart::Selected(session_path),
-                                &config,
-                            )?;
                             Ok(json!({}))
                         }
                         _ => Err("Command unavailable while a run is active".into()),
@@ -517,7 +594,7 @@ async fn run_turns(
             let call = provider::request(
                 p,
                 m,
-                &snapshot.messages,
+                &snapshot,
                 &instructions,
                 &snapshot.thinking,
                 Some(&definitions),
@@ -678,8 +755,11 @@ async fn compact(
         return Err("No conversation to compact".into());
     }
     let (p, m) = snapshot.selected(&config)?;
+    if p.authentication == config::Authentication::Rooxcode {
+        snapshot.save()?;
+    }
     let prompt=format!("Summarize this conversation for continuation. Preserve user requirements, decisions, changed files, verified results, unresolved work and tool outcomes. Do not execute tools. {}",instructions.unwrap_or(""));
-    let reply = tokio::select! {r=provider::request(p,m,&snapshot.messages,&prompt,"off",None,out)=>r?,_=cancel.changed()=>return Err("Cancelled compact".into())};
+    let reply = tokio::select! {r=provider::request(p,m,&snapshot,&prompt,"off",None,out)=>r?,_=cancel.changed()=>return Err("Cancelled compact".into())};
     let summary = reply.message.text();
     if summary.trim().is_empty() {
         return Err("Empty compaction summary; history unchanged".into());
@@ -733,4 +813,14 @@ async fn maybe_compact(
         emit(out, json!({"type":"compaction_end","result":value})).await?;
     }
     Ok(())
+}
+
+fn select_rooxcode(session: &mut Session, config: &Config) {
+    if session.model.is_none() && config.model.is_none() {
+        session.model = config
+            .providers
+            .iter()
+            .find(|p| p.id == super::rooxcode::ID)
+            .and_then(|p| p.models.first().map(|m| (p.id.clone(), m.id.clone())));
+    }
 }

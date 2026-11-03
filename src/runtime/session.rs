@@ -70,6 +70,7 @@ impl Message {
 #[derive(Clone)]
 pub struct Session {
     pub id: String,
+    pub rooxcode_session: super::rooxcode::SessionId,
     pub path: PathBuf,
     pub cwd: PathBuf,
     pub model: Option<(String, String)>,
@@ -93,14 +94,7 @@ impl Session {
             return Self::load(path, &cwd, config);
         }
         let id = format!("{:x}", config::unique());
-        let selected = config.model.clone().or_else(|| {
-            config
-                .providers
-                .iter()
-                .filter(|p| config::key(p).is_ok())
-                .flat_map(|p| p.models.iter().map(move |m| format!("{}/{}", p.id, m.id)))
-                .next()
-        });
+        let selected = config.model.clone();
         let model = selected
             .map(|s| {
                 s.split_once('/')
@@ -110,6 +104,7 @@ impl Session {
             .transpose()?;
         let session = Self {
             id: id.clone(),
+            rooxcode_session: super::rooxcode::SessionId::new()?,
             path: crate::paths::home()?
                 .join("sessions")
                 .join(format!("{id}.jsonl")),
@@ -121,7 +116,11 @@ impl Session {
             usage: json!({"input":0,"output":0,"cacheRead":0}),
             context: None,
         };
-        if session.model.is_some() {
+        if session
+            .model
+            .as_ref()
+            .is_some_and(|(p, _)| p != super::rooxcode::ID)
+        {
             session.selected(config)?;
         }
         Ok(session)
@@ -142,6 +141,10 @@ impl Session {
         let mut session = Self::open(&SessionStart::New, config)?;
         session.path = path;
         session.id = head["id"].as_str().ok_or("Invalid session ID")?.into();
+        if let Some(value) = head.get("rooxcodeSession") {
+            session.rooxcode_session = serde_json::from_value(value.clone())
+                .map_err(|_| "Invalid Rooxcode conversation UUID in session")?;
+        }
         session.model = serde_json::from_value(head["model"].clone())?;
         session.thinking = head["thinking"].as_str().unwrap_or("off").into();
         session.steps = serde_json::from_value(head["steps"].clone()).unwrap_or_default();
@@ -155,7 +158,11 @@ impl Session {
                     .push(serde_json::from_value(value["message"].clone())?);
             }
         }
-        if session.model.is_some() {
+        if session
+            .model
+            .as_ref()
+            .is_some_and(|(p, _)| p != super::rooxcode::ID)
+        {
             session.selected(config)?;
         }
         let mut pending = std::collections::BTreeMap::<String, String>::new();
@@ -181,7 +188,7 @@ impl Session {
     }
     pub fn save(&self) -> Result<()> {
         let mut bytes = serde_json::to_vec(
-            &json!({"type":"session","format":"hibiscus","version":1,"id":self.id,"cwd":self.cwd,"model":self.model,"thinking":self.thinking,"steps":self.steps,"usage":self.usage,"context":self.context}),
+            &json!({"type":"session","format":"hibiscus","version":1,"id":self.id,"rooxcodeSession":self.rooxcode_session,"cwd":self.cwd,"model":self.model,"thinking":self.thinking,"steps":self.steps,"usage":self.usage,"context":self.context}),
         )?;
         bytes.push(b'\n');
         for message in &self.messages {
@@ -204,17 +211,23 @@ impl Session {
             .models
             .iter()
             .find(|v| &v.id == m)
-            .ok_or("Session model is no longer configured")?;
+            .ok_or(if p == super::rooxcode::ID { "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly." } else { "Session model is no longer configured" })?;
         Ok((provider, model))
     }
     pub fn state(&self, config: &Config) -> Value {
         let model = self
             .selected(config)
             .ok()
-            .filter(|(p, _)| config::key(p).is_ok())
+            .filter(|(p, _)| config::access(p).is_ok())
             .map(|(p, m)| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window}));
-        let has_credentials = config.providers.iter().any(|p| config::key(p).is_ok());
-        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"model":model,"thinkingLevel":self.thinking,"hasCredentials":has_credentials})
+        let has_credentials = config.providers.iter().any(|p| {
+            p.authentication != config::Authentication::Rooxcode && config::key(p).is_ok()
+        });
+        let has_access = config
+            .providers
+            .iter()
+            .any(|p| !p.models.is_empty() && config::access(p).is_ok());
+        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"model":model,"thinkingLevel":self.thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
     }
     pub fn stats(&self, config: &Config) -> Value {
         let window = self
