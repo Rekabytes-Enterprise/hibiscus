@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-11-03
+
+### Added
+
+- Built-in Rooxcode model discovery and anonymous Chat Completions access with per-conversation client metadata, streaming, tool continuation and cancellation.
+- Fixed service diagnostics for catalog failures, unavailable models, metadata rejection, rate limits and disabled/upstream inference, with no automatic generation retries or provider fallback.
+
 ## [0.3.20] - 2026-11-03
 
 ### Added

@@ -20,6 +20,7 @@ pub enum Authentication {
     #[default]
     ApiKey,
     Codex,
+    Rooxcode,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,8 +120,10 @@ pub fn load() -> Result<Config> {
             }],
         });
     }
+    super::rooxcode::install(&mut config);
     let mut ids = std::collections::HashSet::new();
     for p in &config.providers {
+        super::rooxcode::validate_provider(p)?;
         if (p.authentication == Authentication::Codex || p.id == "openai-codex")
             && (p.id != "openai-codex"
                 || p.authentication != Authentication::Codex
@@ -199,6 +202,9 @@ pub fn unique() -> u128 {
         + NEXT.fetch_add(1, Ordering::Relaxed) as u128
 }
 pub fn key(provider: &Provider) -> Result<String> {
+    if provider.authentication == Authentication::Rooxcode {
+        return Err("Rooxcode does not use provider credentials".into());
+    }
     if provider.authentication == Authentication::Codex {
         return super::oauth::stored_access_token();
     }
@@ -212,4 +218,12 @@ pub fn key(provider: &Provider) -> Result<String> {
     }
     let keys = super::auth::keys()?;
     keys.get(&provider.id).cloned().ok_or_else(||format!("Authentication required for {}. Use /login or configure its API key environment variable.",provider.id).into())
+}
+
+pub fn access(provider: &Provider) -> Result<()> {
+    if provider.authentication == Authentication::Rooxcode {
+        super::rooxcode::validate_provider(provider)
+    } else {
+        key(provider).map(|_| ())
+    }
 }
