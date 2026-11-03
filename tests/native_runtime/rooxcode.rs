@@ -384,3 +384,122 @@ fn rooxcode_mid_stream_errors_do_not_commit_or_execute_tool_calls() {
     assert_eq!(f.captured().len(), 1);
     assert!(!String::from_utf8_lossy(&output.stderr).contains("PRIVATE_STREAM_FAILURE"));
 }
+
+#[test]
+fn rooxcode_compacts_large_tool_history_in_bounded_requests_and_continues() {
+    let read = (
+        200,
+        format!(
+            "{}{}data: [DONE]\n\n",
+            sse(
+                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"large-read","function":{"name":"read","arguments":json!({"path":"large.txt"}).to_string()}}]},"finish_reason":null}]})
+            ),
+            sse(json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}))
+        ),
+    );
+    let mut replies = vec![read];
+    replies.extend((0..20).map(|_| {
+        done(
+            "Keep reading the requested project. The completed read is recorded. CONTEXT_CONTINUED",
+        )
+    }));
+    let f = Fixture::new("chat_completions", replies);
+    setup(
+        &f,
+        json!([{"id":"bounded-model","context_window":20000,"max_request_bytes":10485760,"max_messages":256}]),
+    );
+    fs::write(
+        f.root.join("large.txt"),
+        "verified file content\n".repeat(1400),
+    )
+    .unwrap();
+    let output = f.run("Read large.txt and then continue.", &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("CONTEXT_CONTINUED"));
+    let requests = f.requests.lock().unwrap();
+    let summaries = requests
+        .iter()
+        .filter(|r| {
+            r["messages"][0]["content"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("Summarize this conversation"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        summaries.len() > 1,
+        "expected bounded summary chunks, got {}",
+        summaries.len()
+    );
+    for request in &*requests {
+        assert!(serde_json::to_vec(request).unwrap().len() < 12723);
+    }
+    assert!(requests.last().unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["content"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|v| v["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("Previous conversation summary"))))));
+    drop(requests);
+    assert_metadata(&f);
+}
+
+#[test]
+fn rooxcode_failed_compaction_keeps_original_prompt_and_tool_history() {
+    let read = (
+        200,
+        format!(
+            "{}{}data: [DONE]\n\n",
+            sse(
+                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"read-once","function":{"name":"read","arguments":json!({"path":"large.txt"}).to_string()}}]},"finish_reason":null}]})
+            ),
+            sse(json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}))
+        ),
+    );
+    let f = Fixture::new(
+        "chat_completions",
+        vec![
+            read,
+            (
+                413,
+                json!({"error":{"code":"request_too_large","message":"PRIVATE-BODY"}}).to_string(),
+            ),
+        ],
+    );
+    setup(
+        &f,
+        json!([{"id":"bounded-model","context_window":20000,"max_request_bytes":10485760}]),
+    );
+    fs::write(
+        f.root.join("large.txt"),
+        "original file content\n".repeat(1400),
+    )
+    .unwrap();
+    let output = f.run("Read large.txt and continue.", &[]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("Compact") && !error.contains("PRIVATE-BODY"));
+    assert_eq!(f.requests.lock().unwrap().len(), 2);
+    let sessions = fs::read_dir(f.root.join("app/sessions"))
+        .unwrap()
+        .map(|p| fs::read_to_string(p.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].contains("Read large.txt and continue."));
+    assert_eq!(
+        sessions[0]
+            .lines()
+            .filter(|line| serde_json::from_str::<Value>(line)
+                .ok()
+                .is_some_and(|v| v["message"]["role"] == "toolResult"))
+            .count(),
+        1
+    );
+    assert!(!sessions[0].contains("Previous conversation summary"));
+}

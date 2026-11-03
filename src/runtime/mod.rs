@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod bridge;
 pub(crate) mod config;
+mod context;
 pub(crate) mod diagnostics;
 pub(crate) mod dialog;
 mod engine;

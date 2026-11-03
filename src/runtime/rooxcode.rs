@@ -161,6 +161,12 @@ fn catalog(bytes: &[u8]) -> Result<Vec<Model>> {
     #[derive(Deserialize)]
     struct Entry {
         id: String,
+        #[serde(default)]
+        context_window: Option<u64>,
+        #[serde(default)]
+        max_request_bytes: Option<u64>,
+        #[serde(default)]
+        max_messages: Option<u64>,
     }
     let catalog: Catalog =
         serde_json::from_slice(bytes).map_err(|_| "Rooxcode returned an invalid model catalog")?;
@@ -175,13 +181,28 @@ fn catalog(bytes: &[u8]) -> Result<Vec<Model>> {
             if entry.id.trim().is_empty()
                 || entry.id.len() > 256
                 || entry.id.chars().any(char::is_control)
+                || entry
+                    .context_window
+                    .is_some_and(|n| !(4097..=10_000_000).contains(&n))
+                || entry
+                    .max_request_bytes
+                    .is_some_and(|n| !(1024..=104_857_600).contains(&n))
+                || entry
+                    .max_messages
+                    .is_some_and(|n| !(4..=10000).contains(&n))
                 || !seen.insert(entry.id.clone())
             {
                 return Err("Rooxcode returned invalid or duplicate model IDs".into());
             }
             Ok(Model {
                 id: entry.id,
-                context_window: None,
+                context_window: entry
+                    .context_window
+                    .filter(|n| (4097..=10_000_000).contains(n)),
+                max_request_bytes: entry
+                    .max_request_bytes
+                    .filter(|n| (1024..=104_857_600).contains(n)),
+                max_messages: entry.max_messages.filter(|n| (4..=10000).contains(n)),
                 max_tokens: 4096,
                 reasoning: false,
                 images: false,
@@ -192,6 +213,7 @@ fn catalog(bytes: &[u8]) -> Result<Vec<Model>> {
 
 pub(super) fn code_message(status: u16, code: Option<&str>) -> String {
     let detail = match code {
+        Some("request_too_large") => "the conversation exceeds the gateway request size limit. Compact the conversation before continuing",
         Some("hibiscus_client_required") => "client metadata was rejected. Update Hibiscus; no account or API key is needed",
         Some("inference_disabled") => "inference is disabled by the operator",
         Some("model_not_found" | "model_unavailable" | "model_ineligible") => "the selected model is unavailable. Open /models and explicitly choose an available model",
@@ -374,7 +396,13 @@ mod tests {
         assert!(models
             .iter()
             .all(|m| m.context_window.is_none() && !m.images && !m.reasoning));
+        let models=catalog(br#"{"data":[{"id":"sized","context_window":131072,"max_request_bytes":10485760,"max_messages":256}]}"#).unwrap();
+        assert_eq!(models[0].context_window, Some(131072));
+        assert_eq!(models[0].max_request_bytes, Some(10485760));
+        assert!(code_message(413, Some("request_too_large")).contains("Compact"));
         for value in [
+            json!({"data":[{"id":"x","max_request_bytes":0}]}),
+            json!({"data":[{"id":"x","context_window":4096}]}),
             json!({}),
             json!({"data":null}),
             json!({"data":[{"id":"x"},{"id":"x"}]}),
