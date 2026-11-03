@@ -37,6 +37,9 @@ pub(crate) fn choose_model<R: BufRead>(
         events,
         interactive,
     )?;
+    if let Some(error) = available["catalogError"].as_str() {
+        writeln!(output, "{error}")?;
+    }
     let Some(all) = available["models"].as_array() else {
         return Err("invalid get_available_models response".into());
     };

@@ -18,6 +18,7 @@ use support::{unique_temp_dir, Pty};
 struct Fixture {
     root: PathBuf,
     requests: Arc<Mutex<Vec<Value>>>,
+    headers: Arc<Mutex<Vec<Value>>>,
     stop: Arc<AtomicBool>,
     server: Option<thread::JoinHandle<()>>,
 }
@@ -29,9 +30,12 @@ impl Fixture {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
-        fs::write(home.join("config.json"),serde_json::to_vec(&json!({"model":"test/model","providers":[{"id":"test","baseUrl":format!("http://{address}/v1"),"api":api,"apiKeyEnv":"HIBISCUS_TEST_NATIVE_KEY","models":[{"id":"model","contextWindow":128000,"maxTokens":4096,"images":true}]}]})).unwrap()).unwrap();
+        fs::write(home.join("config.json"),serde_json::to_vec(&json!({"model":"test/model","providers":[{"id":"test","baseUrl":format!("http://{address}/v1"),"api":api,"apiKeyEnv":"HIBISCUS_TEST_NATIVE_KEY","models":[{"id":"model","contextWindow":128000,"maxTokens":4096,"images":true}]},{"id":"rooxcode","baseUrl":format!("http://{address}/v1"),"api":"chat_completions","authentication":"rooxcode"}]})).unwrap()).unwrap();
         let requests = Arc::new(Mutex::new(vec![]));
         let captured = requests.clone();
+        let headers = Arc::new(Mutex::new(vec![]));
+        let captured_headers = headers.clone();
+        let server_root = root.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let server = thread::spawn(move || {
@@ -52,15 +56,39 @@ impl Fixture {
                         reader.read_line(&mut line).unwrap();
                         let route = line.clone();
                         let mut length = 0;
+                        let mut fields = vec![];
                         loop {
                             line.clear();
                             reader.read_line(&mut line).unwrap();
                             if line == "\r\n" {
                                 break;
                             }
+                            if let Some((name, value)) = line.split_once(':') {
+                                fields.push((
+                                    name.trim().to_ascii_lowercase(),
+                                    value.trim().to_owned(),
+                                ));
+                            }
                             if let Some(n) = line.to_lowercase().strip_prefix("content-length:") {
                                 length = n.trim().parse::<usize>().unwrap();
                             }
+                        }
+                        captured_headers
+                            .lock()
+                            .unwrap()
+                            .push(json!({"route":route,"headers":fields}));
+                        if route.starts_with("GET /v1/models ") {
+                            let fixture: Value =
+                                fs::read(server_root.join("rooxcode-catalog.json"))
+                                    .ok()
+                                    .and_then(|b| serde_json::from_slice(&b).ok())
+                                    .unwrap_or(json!({"status":200,"body":{"data":[]}}));
+                            let status = fixture["status"].as_u64().unwrap_or(200);
+                            let body = fixture["body"].to_string();
+                            let header = format!("HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len());
+                            let _ = socket.write_all(header.as_bytes());
+                            let _ = socket.write_all(body.as_bytes());
+                            continue;
                         }
                         assert!(length < 64 * 1024 * 1024);
                         let mut bytes = vec![0; length];
@@ -91,7 +119,11 @@ impl Fixture {
                         } else {
                             body.len()
                         };
-                        let header=format!("HTTP/1.1 {actual} {reason}\r\nContent-Type: text/event-stream\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n");
+                        let retry = fs::read_to_string(server_root.join("rooxcode-retry-after"))
+                            .ok()
+                            .map(|v| format!("Retry-After: {v}\r\n"))
+                            .unwrap_or_default();
+                        let header=format!("HTTP/1.1 {actual} {reason}\r\nContent-Type: text/event-stream\r\n{retry}Content-Length: {length}\r\nConnection: close\r\n\r\n");
                         if status == 299 && socket.write_all(header.as_bytes()).is_ok() {
                             let _ = socket.write_all(body.as_bytes());
                             for _ in 0..100 {
@@ -129,6 +161,7 @@ impl Fixture {
         Self {
             root,
             requests,
+            headers,
             stop,
             server: Some(server),
         }
@@ -483,8 +516,24 @@ fn anthropic_streams_tool_use_and_replays_results() {
         .contains("tool_result"));
 }
 #[test]
-fn automatic_model_selection_skips_providers_without_credentials() {
-    let f = Fixture::new("responses", vec![response("SIGNED_IN_DEFAULT")]);
+fn automatic_model_selection_prefers_rooxcode_over_keyed_or_unavailable_providers() {
+    let f = Fixture::new(
+        "responses",
+        vec![(
+            200,
+            format!(
+                "{}data: [DONE]\n\n",
+                sse(
+                    json!({"choices":[{"delta":{"content":"FREE_DEFAULT"},"finish_reason":"stop"}]})
+                )
+            ),
+        )],
+    );
+    fs::write(
+        f.root.join("rooxcode-catalog.json"),
+        json!({"status":200,"body":{"data":[{"id":"discovered-free"}]}}).to_string(),
+    )
+    .unwrap();
     let config_path = f.root.join("app/config.json");
     let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
     config.as_object_mut().unwrap().remove("model");
@@ -497,7 +546,12 @@ fn automatic_model_selection_skips_providers_without_credentials() {
     );
     fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     good(&f.run("", &["hello"]));
-    assert_eq!(f.captured()[0]["model"], "model");
+    assert_eq!(f.captured()[0]["model"], "discovered-free");
+    assert!(f.headers.lock().unwrap().iter().all(|r| r["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|h| h[0] != "authorization")));
 }
 
 #[test]
@@ -653,3 +707,6 @@ fn authoritative_completion_does_not_wait_for_http_socket_close() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("AUTHORITATIVE_DONE"));
     assert!(start.elapsed() < Duration::from_secs(3));
 }
+
+#[path = "native_runtime/rooxcode.rs"]
+mod rooxcode;

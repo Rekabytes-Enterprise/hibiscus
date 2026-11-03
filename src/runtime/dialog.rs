@@ -21,9 +21,13 @@ impl Dialogs {
         events: Option<&Receiver<u8>>,
         interactive: bool,
     ) -> Result<()> {
-        if event["type"] == "extension_error" {
+        if event["type"] == "extension_error" || event["type"] == "provider_error" {
             let error = super::error::ChatError::new(
-                super::error::ErrorSource::Extension,
+                if event["type"] == "provider_error" {
+                    super::error::ErrorSource::Local
+                } else {
+                    super::error::ErrorSource::Extension
+                },
                 event["error"].as_str().unwrap_or("Extension failed"),
             );
             if interactive {

@@ -123,29 +123,21 @@ fn wire_messages(messages: &[Message], provider: &Provider, model: &Model) -> Ve
 pub async fn request(
     provider: &Provider,
     model: &Model,
-    messages: &[Message],
+    conversation: &super::session::Session,
     system: &str,
     thinking: &str,
     tools: Option<&[Value]>,
     out: &Sender<Value>,
 ) -> Result<Reply> {
+    super::rooxcode::validate_provider(provider)?;
+    let anonymous = provider.authentication == super::config::Authentication::Rooxcode;
     let codex = if provider.authentication == super::config::Authentication::Codex {
         Some(super::oauth::credential().await?)
     } else {
         None
     };
-    let key = if let Some(token) = &codex {
-        token.access.clone()
-    } else {
-        super::config::key(provider)?
-    };
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(600))
-        .build()?;
     let definitions = tools.unwrap_or_default();
-    let mut wire = wire_messages(messages, provider, model);
+    let mut wire = wire_messages(&conversation.messages, provider, model);
     let (route, mut body) = match provider.api {
         Api::Responses => (
             "responses",
@@ -166,20 +158,42 @@ pub async fn request(
     if thinking != "off" && model.reasoning && provider.api == Api::Responses {
         body["reasoning"] = json!({"effort":thinking});
     }
+    if anonymous {
+        // The public catalog has IDs only. Let the gateway apply its own
+        // model-specific output limit instead of guessing a token capability.
+        body.as_object_mut().unwrap().remove("max_tokens");
+    }
     if tools.is_none() {
         body.as_object_mut().unwrap().remove("tools");
     }
     let url = format!("{}/{}", provider.base_url.trim_end_matches('/'), route);
-    let req = authenticated_request(&client, &url, body, &key, codex.as_ref())?;
+    let req = if anonymous {
+        super::rooxcode::chat_request(provider, &body, &conversation.rooxcode_session)?
+    } else {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(600))
+            .build()?;
+        let key = if let Some(token) = &codex {
+            token.access.clone()
+        } else {
+            super::config::key(provider)?
+        };
+        authenticated_request(&client, &url, body, &key, codex.as_ref())?
+    };
     let req = if provider.api == Api::Anthropic {
         req.header("anthropic-version", "2023-06-01")
     } else {
         req
     };
     let mut response = req.send().await.map_err(|_| {
-        "Provider network request failed. Check connectivity and endpoint configuration."
+        if anonymous { "Rooxcode network request failed. Check service connectivity; nothing was retried automatically." } else { "Provider network request failed. Check connectivity and endpoint configuration." }
     })?;
     if !response.status().is_success() {
+        if anonymous {
+            return Err(super::rooxcode::response_error(response).await.into());
+        }
         return Err(format!("Provider returned HTTP {}. Check authentication, model access, quota and endpoint configuration.",response.status().as_u16()).into());
     }
     let mut decoder = Decoder::default();
@@ -196,6 +210,11 @@ pub async fn request(
             }
             let event: Value =
                 serde_json::from_str(&frame).map_err(|_| "Malformed provider streaming event")?;
+            if anonymous && event["error"].is_object() {
+                return Err(
+                    super::rooxcode::code_message(502, event["error"]["code"].as_str()).into(),
+                );
+            }
             let delta = state.observe(&provider.api, &event)?;
             if let Some(delta) = delta.filter(|_| tools.is_some()) {
                 emit(out, Event::Text(&delta).wire()).await?;
