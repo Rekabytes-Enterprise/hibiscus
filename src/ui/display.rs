@@ -6,6 +6,8 @@ use std::{
     io::{self, Write},
     sync::{mpsc::Receiver, Arc},
 };
+
+pub(crate) const ROOXCODE_WAITING: &str = "Rooxcode is busy. Waiting…";
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PromptAction {
     Text(Option<String>),

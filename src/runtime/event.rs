@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 pub enum Event<'a> {
     Started,
     Text(&'a str),
+    ProviderWaiting(bool),
     MessageStarted(&'a Message),
     MessageFinished(&'a Message),
     ToolStarted {
@@ -28,6 +29,9 @@ impl Event<'_> {
             Self::Started => json!({"type":"agent_start"}),
             Self::Text(delta) => {
                 json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":delta}})
+            }
+            Self::ProviderWaiting(waiting) => {
+                json!({"type":"provider_status","provider":"rooxcode","waiting":waiting})
             }
             Self::MessageStarted(message) => json!({"type":"message_start","message":message}),
             Self::MessageFinished(message) => json!({"type":"message_end","message":message}),

@@ -16,6 +16,7 @@ use crate::{
     Result,
 };
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::os::{fd::AsRawFd, unix::net::UnixStream};
@@ -369,6 +370,7 @@ impl Client {
                     return Ok(data.clone());
                 }
                 match event["type"].as_str() {
+                    Some("provider_status") => provider_status(display, &event)?,
                     Some("compaction_start") => display.set_work("Compacting context…")?,
                     Some("compaction_end") if event["aborted"] == true => {
                         display.set_work("Compaction cancelled…")?
@@ -511,6 +513,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
     let mut accepted = false;
     let mut settled = false;
     let mut printed_text = false;
+    let mut leading_whitespace = String::new();
     let mut pending_newline = false;
     let mut run = RunState::default();
     let mut interrupted = false;
@@ -717,8 +720,16 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         display.set_work(&format!("Preparing {}…", safe_detail(name)))?;
                     }
                     Some("text_delta") => {
-                        display.set_work("Writing reply…")?;
                         if let Some(delta) = update["delta"].as_str() {
+                            let Some(delta) = assistant_chunk(
+                                delta,
+                                printed_text,
+                                interactive,
+                                &mut leading_whitespace,
+                            ) else {
+                                continue;
+                            };
+                            display.set_work("Writing reply…")?;
                             if !printed_text && reasoning_since.is_some() {
                                 show_reasoning(&ui, display, &mut reasoning_since)?;
                             }
@@ -732,7 +743,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                                     ui.assistant(display)?;
                                 }
                             }
-                            display.assistant_text(delta)?;
+                            display.assistant_text(&delta)?;
                             display.flush()?;
                             printed_text = true;
                         }
@@ -740,6 +751,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                     _ => {}
                 }
             }
+            Some("provider_status") => provider_status(display, &event)?,
             Some("message_end") if kind == "prompt" && event["message"]["role"] == "assistant" => {
                 show_reasoning(&ui, display, &mut reasoning_since)?;
                 let message = &event["message"];
@@ -747,10 +759,20 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 // intermediate failures must not be printed as final outcomes.
                 // Some providers emit no text deltas; use the completed message instead.
                 if !printed_text {
+                    // Completed text already includes any streamed whitespace.
+                    leading_whitespace.clear();
                     if let Some(blocks) = message["content"].as_array() {
                         for block in blocks {
                             if block["type"] == "text" {
                                 if let Some(text) = block["text"].as_str() {
+                                    let Some(text) = assistant_chunk(
+                                        text,
+                                        printed_text,
+                                        interactive,
+                                        &mut leading_whitespace,
+                                    ) else {
+                                        continue;
+                                    };
                                     if pending_newline {
                                         writeln!(display)?;
                                         pending_newline = false;
@@ -761,7 +783,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                                             ui.assistant(display)?;
                                         }
                                     }
-                                    display.assistant_text(text)?;
+                                    display.assistant_text(&text)?;
                                     printed_text = true;
                                 }
                             }
@@ -769,6 +791,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                         display.flush()?;
                     }
                 }
+                leading_whitespace.clear();
                 display.end_assistant_text()?;
                 if printed_text {
                     pending_newline = true;
@@ -1342,6 +1365,46 @@ fn write_command(input: &mut impl Write, command: &Value, images: &[SharedImage]
     result
 }
 
+fn provider_status(display: &mut impl ScrollDisplay, event: &Value) -> io::Result<()> {
+    if event["provider"] == "rooxcode" {
+        match event["waiting"].as_bool() {
+            Some(true) => display.set_work(crate::ui::display::ROOXCODE_WAITING)?,
+            Some(false) => display.set_work("Preparing response…")?,
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+/// Delay human-facing speaker/timeline changes until a reply has visible text.
+/// Keep leading indentation across chunks, bounded independently of saved text.
+fn assistant_chunk<'a>(
+    text: &'a str,
+    printed: bool,
+    interactive: bool,
+    leading: &mut String,
+) -> Option<Cow<'a, str>> {
+    if !interactive || printed {
+        return Some(Cow::Borrowed(text));
+    }
+    if text.trim().is_empty() {
+        for ch in text.chars() {
+            if leading.len() + ch.len_utf8() > 8192 {
+                break;
+            }
+            leading.push(ch);
+        }
+        return None;
+    }
+    if leading.is_empty() {
+        Some(Cow::Borrowed(text))
+    } else {
+        let mut text_with_indent = std::mem::take(leading);
+        text_with_indent.push_str(text);
+        Some(Cow::Owned(text_with_indent))
+    }
+}
+
 fn finish_turn<W: ScrollDisplay>(
     ui: &Ui,
     display: &mut W,
@@ -1583,6 +1646,28 @@ mod tests {
             tx.send(Ok(serde_json::from_str(line).unwrap())).unwrap();
         }
         rx
+    }
+
+    #[test]
+    fn assistant_labels_wait_for_visible_text_without_losing_indentation() {
+        let mut leading = String::new();
+        assert!(assistant_chunk("", false, true, &mut leading).is_none());
+        assert!(assistant_chunk("\n    ", false, true, &mut leading).is_none());
+        assert_eq!(
+            assistant_chunk("indented", false, true, &mut leading).unwrap(),
+            "\n    indented"
+        );
+        assert!(leading.is_empty());
+        assert_eq!(
+            assistant_chunk("\n", true, true, &mut leading).unwrap(),
+            "\n"
+        );
+        assert_eq!(
+            assistant_chunk("  ", false, false, &mut leading).unwrap(),
+            "  "
+        );
+        assert!(assistant_chunk(&"\u{2003}".repeat(9000), false, true, &mut leading).is_none());
+        assert!(leading.len() <= 8192);
     }
 
     fn run_exchange(
