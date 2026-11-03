@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-11-04
+
+### Fixed
+
+- Rooxcode requests now measure the full encoded payload and compact before advertised byte, message or context budgets are reached. Large histories use bounded summary chunks and retain recent complete tool groups when they fit.
+- Failed or cancelled compaction preserves conversation history. Structured request-size errors provide sanitized recovery guidance. Codex and other providers retain their existing compaction policy.
+
 ## [0.3.22] - 2026-11-03
 
 ### Added

@@ -120,22 +120,15 @@ fn wire_messages(messages: &[Message], provider: &Provider, model: &Model) -> Ve
     }
     wire
 }
-pub async fn request(
+pub(super) fn request_body(
     provider: &Provider,
     model: &Model,
     conversation: &super::session::Session,
     system: &str,
     thinking: &str,
     tools: Option<&[Value]>,
-    out: &Sender<Value>,
-) -> Result<Reply> {
-    super::rooxcode::validate_provider(provider)?;
+) -> (&'static str, Value) {
     let anonymous = provider.authentication == super::config::Authentication::Rooxcode;
-    let codex = if provider.authentication == super::config::Authentication::Codex {
-        Some(super::oauth::credential().await?)
-    } else {
-        None
-    };
     let definitions = tools.unwrap_or_default();
     let mut wire = wire_messages(&conversation.messages, provider, model);
     let (route, mut body) = match provider.api {
@@ -159,13 +152,33 @@ pub async fn request(
         body["reasoning"] = json!({"effort":thinking});
     }
     if anonymous {
-        // The public catalog has IDs only. Let the gateway apply its own
-        // model-specific output limit instead of guessing a token capability.
+        // Let the gateway apply its advertised default output limit.
+        // The client reserves output space without overriding that default.
         body.as_object_mut().unwrap().remove("max_tokens");
     }
     if tools.is_none() {
         body.as_object_mut().unwrap().remove("tools");
     }
+    (route, body)
+}
+
+pub async fn request(
+    provider: &Provider,
+    model: &Model,
+    conversation: &super::session::Session,
+    system: &str,
+    thinking: &str,
+    tools: Option<&[Value]>,
+    out: &Sender<Value>,
+) -> Result<Reply> {
+    super::rooxcode::validate_provider(provider)?;
+    let anonymous = provider.authentication == super::config::Authentication::Rooxcode;
+    let codex = if provider.authentication == super::config::Authentication::Codex {
+        Some(super::oauth::credential().await?)
+    } else {
+        None
+    };
+    let (route, body) = request_body(provider, model, conversation, system, thinking, tools);
     let url = format!("{}/{}", provider.base_url.trim_end_matches('/'), route);
     let req = if anonymous {
         super::rooxcode::chat_request(provider, &body, &conversation.rooxcode_session)?
