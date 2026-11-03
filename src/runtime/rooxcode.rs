@@ -8,6 +8,9 @@ use std::{collections::HashSet, time::Duration};
 
 pub(super) const ID: &str = "rooxcode";
 pub(super) const URL: &str = "https://api-rooxcode.reka-bytes.my/v1";
+// v0.1.9 permits up to 300s queued, then a 120s generation deadline.
+// Keep a bounded 600s total, including the wait; keepalives never extend it.
+const CHAT_TIMEOUT_SECONDS: u64 = 600;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(try_from = "String")]
@@ -96,7 +99,7 @@ pub(super) fn chat_request(
     session: &SessionId,
 ) -> Result<reqwest::RequestBuilder> {
     validate_provider(provider)?;
-    Ok(client(600)?
+    Ok(client(CHAT_TIMEOUT_SECONDS)?
         .post(format!(
             "{}/chat/completions",
             provider.base_url.trim_end_matches('/')
@@ -192,11 +195,63 @@ pub(super) fn code_message(status: u16, code: Option<&str>) -> String {
         Some("hibiscus_client_required") => "client metadata was rejected. Update Hibiscus; no account or API key is needed",
         Some("inference_disabled") => "inference is disabled by the operator",
         Some("model_not_found" | "model_unavailable" | "model_ineligible") => "the selected model is unavailable. Open /models and explicitly choose an available model",
+        Some("queue_full") => "the shared waiting queue is full. Retry manually later",
+        Some("network_queue_full") => "your network already has its maximum number of waiting requests. Let those requests finish before retrying manually",
+        Some("queue_timeout") => "the maximum queue wait elapsed before generation started. Retry manually later",
+        Some("queue_disabled") => "request waiting was disabled by the operator. This request has stopped; retry manually when capacity is available",
+        Some("network_daily_quota_exhausted") => "your network's daily quota is exhausted. Waiting cannot restore this allowance; retry manually after reset",
+        Some("shared_quota_exhausted") => "the shared daily quota is exhausted. Waiting cannot restore this allowance; retry manually after reset",
+        Some("upstream_quota_exhausted") => "the upstream free request quota is exhausted. Waiting cannot restore this allowance",
+        Some("network_work_budget_exhausted") => "your network's daily work budget for input/output is exhausted. Retry manually after reset",
         _ if status == 429 => "rate limit or shared capacity is exhausted",
         _ if status >= 500 => "the service or upstream provider is unavailable",
         _ => "the request was rejected; check model availability and request support",
     };
     format!("Rooxcode HTTP {status}: {detail}. Nothing was retried or switched automatically.")
+}
+
+pub(super) fn model_output(event: &Value) -> bool {
+    event["choices"].as_array().is_some_and(|choices| {
+        choices.iter().any(|choice| {
+            let delta = &choice["delta"];
+            ["content", "reasoning", "reasoning_content", "refusal"]
+                .iter()
+                .any(|name| delta[*name].as_str().is_some_and(|v| !v.is_empty()))
+                || delta["tool_calls"]
+                    .as_array()
+                    .is_some_and(|v| !v.is_empty())
+        })
+    })
+}
+
+fn retry_seconds(value: Option<u64>) -> Option<u64> {
+    value.filter(|seconds| *seconds <= 86400)
+}
+
+fn with_retry(mut message: String, retry: Option<u64>) -> String {
+    if let Some(seconds) = retry_seconds(retry) {
+        message.push_str(&format!(
+            " Retry-After: {seconds} seconds; retry manually later."
+        ));
+    }
+    message
+}
+
+pub(super) fn stream_error(event: &Value) -> String {
+    let error = &event["error"];
+    let status = error["status"]
+        .as_u64()
+        .filter(|s| (400..=599).contains(s))
+        .and_then(|s| u16::try_from(s).ok())
+        .unwrap_or(502);
+    with_retry(
+        code_message(status, error["code"].as_str()).replacen(
+            "Rooxcode HTTP",
+            "Rooxcode stream error",
+            1,
+        ),
+        error["retry_after"].as_u64(),
+    )
 }
 
 pub(super) async fn response_error(mut response: reqwest::Response) -> String {
@@ -210,24 +265,52 @@ pub(super) async fn response_error(mut response: reqwest::Response) -> String {
         .await
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-    let mut message = code_message(
+    let message = code_message(
         status,
         body.as_ref().and_then(|b| b["error"]["code"].as_str()),
     );
-    if status == 429 {
-        if let Some(seconds) = retry {
-            message.push_str(&format!(
-                " Retry-After: {seconds} seconds; retry manually later."
-            ));
-        }
-    }
-    message
+    with_retry(message, retry)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn queue_stream_errors_validate_status_retry_and_never_echo_untrusted_text() {
+        let error = stream_error(
+            &json!({"error":{"code":"queue_timeout","status":429,"retry_after":5,"message":"PRIVATE"}}),
+        );
+        assert!(
+            error.contains("stream error 429")
+                && error.contains("maximum queue wait")
+                && error.contains("Retry-After: 5")
+        );
+        assert!(!error.contains("PRIVATE"));
+        for invalid in [
+            json!(-1),
+            json!(1.5),
+            json!("5\nPRIVATE"),
+            json!(u64::MAX),
+            Value::Null,
+        ] {
+            let error = stream_error(
+                &json!({"error":{"code":"queue_full","status":invalid,"retry_after":invalid,"message":"PRIVATE"}}),
+            );
+            assert!(error.contains("stream error 502") && error.contains("queue is full"));
+            assert!(!error.contains("Retry-After") && !error.contains("PRIVATE"));
+        }
+        assert!(!model_output(
+            &json!({"choices":[{"delta":{"role":"assistant"}}]})
+        ));
+        assert!(model_output(
+            &json!({"choices":[{"delta":{"tool_calls":[{"index":0}]}}]})
+        ));
+        assert!(model_output(
+            &json!({"choices":[{"delta":{"content":"hi"}}]})
+        ));
+    }
 
     #[test]
     fn built_in_provider_has_no_credentials_or_fixed_models_and_preserves_config() {

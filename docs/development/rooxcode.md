@@ -48,6 +48,46 @@ generation retry, fallback model, enrollment or infrastructure component.
 
 ## Verification and limits
 
+### Request waiting
+
+The adjacent gateway's `docs/request-queue.md` defines the v0.1.9 contract.
+The shared SSE decoder separates comment frames from data frames. Only the
+Rooxcode adapter interprets `rooxcode waiting` as capacity status. Other comments
+remain keepalives. Role-only deltas do not clear waiting; the first nonempty
+text/reasoning/refusal or tool-call delta does. A native `provider_status` event
+updates the existing work phase in both views, never session/model messages.
+In TUI, `Rooxcode is busy. Waiting…` replaces Working below the composer and
+retains the existing flower animation and elapsed timer without a new tick loop.
+Each tool continuation can enter waiting independently in the same conversation.
+
+Queue errors can arrive as ordinary HTTP errors or inside HTTP200 SSE streams.
+The Rooxcode boundary allowlists error codes, accepts integer embedded statuses
+from 400 through 599, and bounds numeric retry delays to 0 through 86400 seconds.
+Invalid fields use a fixed fallback diagnostic; raw service messages are never
+echoed. Queue capacity failures remain separate from terminal daily quotas and
+work budgets. Retry delays are advice for manual recovery, never a retry timer.
+
+Timeout audit: Rooxcode discovery remains five seconds with a three-second
+connect timeout. Generation retains its 600-second total deadline, enough for
+the server's maximum 300-second queue wait plus its current 120-second generation
+deadline. Comments do not reset it. Active prompt exchange has no shorter idle
+deadline. Manual compaction retains its 600-second idle deadline; the 30-second
+control-write deadline bounds delivery only. Cancellation retains the existing
+10-second settlement safety ceiling; the queued TCP fixture settles and closes
+the connection in under two seconds. Other providers are unchanged.
+
+`tests/native_runtime/rooxcode/queue.rs` runs the real binary against local SSE
+fixtures: waiting then text in both views, waiting then a native tool and its
+continuation, Esc and observed TCP disconnect, all four queue errors and four
+quota/budget errors over HTTP and SSE, failed-draft restore without replaying a
+completed shell command, interrupted tool streams, and existing-provider comment
+handling. Unit tests cover arbitrary chunk boundaries and invalid error fields.
+These tests use short controlled waits rather than spending 300 seconds in a
+queue or calling the deployed service. Full deadline coverage is a source audit,
+not a wall-clock load test.
+
+### Existing access checks
+
 Local fixtures exercise catalog discovery, metadata/header uniqueness, no-key
 CLI/TUI access, real native tool continuation, session resume/migration,
 compaction, cancellation, rejected catalogs, removed models, HTTP errors and

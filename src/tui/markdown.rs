@@ -15,6 +15,8 @@ pub(crate) enum Tone {
     Activity,
     Success,
     Error,
+    ToolSuccess,
+    ToolError,
     DiffAdded,
     DiffRemoved,
     DiffContext,
@@ -236,6 +238,24 @@ fn format_with_diagrams(
             fence = false;
             in_diff = false;
             in_table = false;
+            // Old saved tool-only messages can contain an empty text block.
+            // Do not turn that into an orphan speaker label on replay.
+            if content.trim().is_empty()
+                && !sources
+                    .clone()
+                    .take_while(|line| {
+                        !line.starts_with("you › ")
+                            && !line.starts_with("hibi › ")
+                            && !line.starts_with("hibiscus › ")
+                            && !line.trim_start().starts_with('·')
+                    })
+                    .any(|line| !line.trim().is_empty())
+            {
+                while sources.peek().is_some_and(|line| line.trim().is_empty()) {
+                    sources.next();
+                }
+                continue;
+            }
             let mut label = Vec::new();
             push(&mut label, "hibi", Tone::Activity);
             rows.extend(wrap_cells(label, width, role));
@@ -304,6 +324,8 @@ fn format_with_diagrams(
                 _ => Tone::DiffContext,
             };
             push(&mut cells, content, tone);
+        } else if let Some(status) = tool_status(content).filter(|_| role == Role::Note) {
+            cells = status;
         } else if role == Role::Assistant && trimmed.starts_with("```") {
             if !fence && trimmed.len() > 3 {
                 push(
@@ -411,6 +433,32 @@ fn format_with_diagrams(
         }
     }
     rows
+}
+
+fn tool_status(content: &str) -> Option<Vec<Cell>> {
+    let status = content.trim_start().strip_prefix("· ")?;
+    let (badge, detail) = status.split_once(" · ")?;
+    let tone = if badge.starts_with("✓ ") {
+        Tone::ToolSuccess
+    } else if badge.starts_with("✗ ") {
+        Tone::ToolError
+    } else {
+        return None;
+    };
+    let mut cells = Vec::new();
+    push(&mut cells, "  ", Tone::Muted);
+    let badge = badge
+        .strip_suffix(" edit")
+        .map(|prefix| format!("{prefix} Edit"))
+        .or_else(|| {
+            badge
+                .strip_suffix(" write")
+                .map(|prefix| format!("{prefix} Write"))
+        })
+        .unwrap_or_else(|| badge.to_owned());
+    push(&mut cells, &format!(" {badge} "), tone);
+    push(&mut cells, &format!("  {detail}"), Tone::Muted);
+    Some(cells)
 }
 
 // A completed fence is required: while streaming, keep the original source.

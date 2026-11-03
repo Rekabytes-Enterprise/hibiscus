@@ -198,12 +198,23 @@ pub async fn request(
     }
     let mut decoder = Decoder::default();
     let mut state = Stream::default();
+    let mut capacity = Capacity::Pending;
     'stream: while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|_| "Provider response stream failed; partial output was not committed.")?
     {
-        for frame in decoder.push(&chunk)? {
+        for frame in decoder.push_frames(&chunk)? {
+            let frame = match frame {
+                Frame::Comment(comment) => {
+                    if anonymous && comment == "rooxcode waiting" && capacity == Capacity::Pending {
+                        capacity = Capacity::Waiting;
+                        emit(out, Event::ProviderWaiting(true).wire()).await?;
+                    }
+                    continue;
+                }
+                Frame::Data(data) => data,
+            };
             if frame == "[DONE]" {
                 state.done = true;
                 break 'stream;
@@ -211,11 +222,15 @@ pub async fn request(
             let event: Value =
                 serde_json::from_str(&frame).map_err(|_| "Malformed provider streaming event")?;
             if anonymous && event["error"].is_object() {
-                return Err(
-                    super::rooxcode::code_message(502, event["error"]["code"].as_str()).into(),
-                );
+                return Err(super::rooxcode::stream_error(&event).into());
             }
             let delta = state.observe(&provider.api, &event)?;
+            if anonymous && capacity != Capacity::Started && super::rooxcode::model_output(&event) {
+                if capacity == Capacity::Waiting {
+                    emit(out, Event::ProviderWaiting(false).wire()).await?;
+                }
+                capacity = Capacity::Started;
+            }
             if let Some(delta) = delta.filter(|_| tools.is_some()) {
                 emit(out, Event::Text(&delta).wire()).await?;
             }
@@ -239,6 +254,19 @@ pub async fn request(
         raw["model"] = json!(model.id);
     }
     Ok(reply)
+}
+
+#[derive(PartialEq)]
+enum Capacity {
+    Pending,
+    Waiting,
+    Started,
+}
+
+#[derive(Debug, PartialEq)]
+enum Frame {
+    Data(String),
+    Comment(String),
 }
 
 fn authenticated_request(
@@ -274,7 +302,18 @@ struct Decoder {
     buffer: Vec<u8>,
 }
 impl Decoder {
+    #[cfg(any(test, feature = "fuzzing"))]
     fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>> {
+        Ok(self
+            .push_frames(bytes)?
+            .into_iter()
+            .filter_map(|frame| match frame {
+                Frame::Data(data) => Some(data),
+                Frame::Comment(_) => None,
+            })
+            .collect())
+    }
+    fn push_frames(&mut self, bytes: &[u8]) -> Result<Vec<Frame>> {
         if bytes.len() > (2 * 1024 * 1024_usize).saturating_sub(self.buffer.len()) {
             return Err("Provider streaming frame exceeds 2 MiB".into());
         }
@@ -295,6 +334,9 @@ impl Decoder {
             });
             let Some((end, skip)) = marker else { break };
             let frame = std::str::from_utf8(&remaining[..end])?;
+            for comment in frame.lines().filter_map(|line| line.strip_prefix(':')) {
+                frames.push(Frame::Comment(comment.trim_start().to_owned()));
+            }
             let data = frame
                 .lines()
                 .filter_map(|line| {
@@ -304,7 +346,7 @@ impl Decoder {
                 .collect::<Vec<_>>()
                 .join("\n");
             if !data.is_empty() {
-                frames.push(data);
+                frames.push(Frame::Data(data));
             }
             consumed += end + skip;
         }
@@ -721,6 +763,27 @@ pub(super) fn fuzz_stream(bytes: &[u8]) {
 #[cfg(test)]
 mod parser_fuzz_regressions {
     use super::*;
+
+    #[test]
+    fn sse_comments_stay_separate_from_data_across_every_chunk_boundary() {
+        let wire =
+            b": rooxcode waiting\r\n\r\n: ping\n\nevent: message\ndata: {\"choices\":[]}\n\n";
+        for size in 1..=wire.len() {
+            let mut decoder = Decoder::default();
+            let frames: Vec<_> = wire
+                .chunks(size)
+                .flat_map(|bytes| decoder.push_frames(bytes).unwrap())
+                .collect();
+            assert_eq!(
+                frames,
+                vec![
+                    Frame::Comment("rooxcode waiting".into()),
+                    Frame::Comment("ping".into()),
+                    Frame::Data("{\"choices\":[]}".into())
+                ]
+            );
+        }
+    }
 
     #[test]
     fn mixed_sse_delimiters_preserve_wire_order_across_chunks() {

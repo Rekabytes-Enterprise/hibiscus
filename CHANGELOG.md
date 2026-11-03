@@ -4,6 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-11-03
+
+### Added
+
+- Rooxcode v0.1.9 waiting support with animated `Rooxcode is busy. Waiting…` status below the TUI composer, CLI status, SSE keepalives and distinct queue, daily-quota and work-budget errors, including failures delivered after HTTP200 streaming headers.
+- Queue regressions for cancellation, tool continuation, manual recovery without replay and provider credential isolation.
+
+### Fixed
+
+- Empty assistant messages no longer create orphan `hibi` labels or split consecutive tool activity. Tool summaries use green/red success/failure badges with muted details.
+
 ## [0.3.21] - 2026-11-03
 
 ### Added
