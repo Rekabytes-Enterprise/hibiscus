@@ -1,4 +1,6 @@
 use super::*;
+#[path = "rooxcode/continuation.rs"]
+mod continuation;
 #[path = "rooxcode/queue.rs"]
 mod queue;
 
