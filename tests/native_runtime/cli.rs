@@ -291,6 +291,7 @@ fn cli_streamed_and_edit_diffs_use_red_green_and_respect_no_color() {
         tty.wait_text(" · CLI");
         tty.send(b"apply the patch\r");
         tty.wait_text("PATCH_DONE");
+        tty.wait_text("\x1b[?2004h");
         tty.send(b"/quit\r");
         let shown = tty.finish();
         if color {

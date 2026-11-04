@@ -200,12 +200,22 @@ pub async fn request(
             .extend(follow_up);
     };
     if state.finish == "length" && state.calls.is_empty() {
+        if tools.is_none() {
+            return Err(
+                "Compaction summary exceeded the provider output limit; history unchanged.".into(),
+            );
+        }
         state.text.push_str(CUT_NOTICE);
         if tools.is_some() {
             emit(out, Event::Text(CUT_NOTICE).wire()).await?;
         }
     }
     let mut reply = state.reply(&provider.api)?;
+    if let Some([input, output, cache]) = continuation.usage {
+        reply.input = input;
+        reply.output = output;
+        reply.cache = cache;
+    }
     if let Message::Assistant {
         provider_data: Some(raw),
         ..
@@ -228,11 +238,23 @@ struct Continuation {
     text: String,
     rounds: u8,
     reissued: bool,
+    usage: Option<[Option<u64>; 3]>,
 }
 impl Continuation {
     /// Messages to append for another request, or None once `state` is the final round,
     /// which then carries the text of every earlier round.
     fn next(&mut self, api: &Api, state: &mut Stream) -> Option<Vec<Value>> {
+        if *api == Api::ChatCompletions {
+            let current = [state.input, state.output, state.cache];
+            self.usage = Some(match self.usage {
+                None => current,
+                Some(previous) => std::array::from_fn(|index| {
+                    previous[index]
+                        .zip(current[index])
+                        .map(|(before, next)| before.saturating_add(next))
+                }),
+            });
+        }
         let tool = !state.calls.is_empty();
         if *api != Api::ChatCompletions
             || state.finish != "length"
@@ -828,6 +850,38 @@ mod tests {
     }
     fn reply_text(reply: &Reply) -> String {
         reply.message.text()
+    }
+
+    #[test]
+    fn continuation_usage_sums_rounds_without_turning_missing_values_into_zero() {
+        for missing in [false, true] {
+            let mut continuation = Continuation::default();
+            let mut first = Stream {
+                finish: "length".into(),
+                input: Some(u64::MAX),
+                output: Some(2),
+                cache: (!missing).then_some(1),
+                ..Stream::default()
+            };
+            assert!(continuation
+                .next(&Api::ChatCompletions, &mut first)
+                .is_some());
+            let mut last = Stream {
+                finish: "stop".into(),
+                input: Some(15),
+                output: Some(3),
+                cache: Some(2),
+                ..Stream::default()
+            };
+            assert!(continuation
+                .next(&Api::ChatCompletions, &mut last)
+                .is_none());
+            assert_eq!(
+                continuation.usage,
+                Some([Some(u64::MAX), Some(5), (!missing).then_some(3)])
+            );
+            assert_eq!(last.reply(&Api::ChatCompletions).unwrap().context, Some(18));
+        }
     }
 
     #[test]
