@@ -4,6 +4,14 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.26] - 2026-11-04
+
+### Changed
+
+- Merge the six reviewed Dependabot updates: Base64 0.23.1, Rand 0.10.3, libc 0.2.191, serde_json 1.0.154, unicode-width 0.2.3 and libfuzzer-sys 0.4.13.
+- Migrate Codex OAuth and Rooxcode session randomness to Rand's system RNG API while retaining fallible error handling.
+- Update pinned Python setup and cache restore/save actions to their reviewed releases.
+
 ## [0.3.25] - 2026-11-04
 
 ### Fixed

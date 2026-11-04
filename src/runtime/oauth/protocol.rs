@@ -1,7 +1,7 @@
 use super::Token;
 use crate::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::RngCore;
+use rand::TryRng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, time::Duration};
@@ -40,7 +40,7 @@ pub(super) fn now() -> u64 {
 }
 fn random() -> Result<String> {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut bytes)
         .map_err(|_| "Cannot obtain secure randomness for Codex login")?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
