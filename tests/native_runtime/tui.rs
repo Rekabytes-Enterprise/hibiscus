@@ -12,6 +12,7 @@ fn empty_assistant_tool_steps_stay_in_one_activity_group_without_orphan_labels()
     tty.wait_text("Enter send");
     tty.send(b"Check the project\r");
     tty.wait_text("Checks complete.");
+    tty.wait_text("Enter send");
     tty.send(b"/quit\r");
     let shown = tty.finish();
     let views = support::screen::snapshots(&shown);
@@ -28,6 +29,15 @@ fn empty_assistant_tool_steps_stay_in_one_activity_group_without_orphan_labels()
         "{view}"
     );
     assert_eq!(view.matches("✓ Bash").count(), 1, "{view}");
+    let heading = view
+        .lines()
+        .position(|line| line.trim().trim_start_matches('│').trim() == "hibi")
+        .unwrap();
+    let command = view
+        .lines()
+        .position(|line| line.contains("✓ Bash"))
+        .unwrap();
+    assert!(heading < command, "{view}");
     assert!(
         view.contains("4 commands") && view.contains("✗ Bash"),
         "{view}"
