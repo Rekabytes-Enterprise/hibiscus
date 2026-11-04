@@ -4,6 +4,15 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-11-04
+
+### Fixed
+
+- Chat-completions replies that stop at the output limit (`finish_reason: length`) are continued automatically, up to three times per response, and the new text joins the same reply. After the cap the text is kept with a visible notice instead of an error. Rooxcode still omits `max_tokens`.
+- Continuation usage totals include every request while the context gauge uses the final request. Summaries still cut off after the continuation cap preserve the original conversation.
+- CLI diff regression waits for input readiness before quitting, avoiding a premature-exit test race.
+- A tool call cut off at the output limit is never executed. It is discarded and the model is asked once to re-issue it in full; a second cut-off reports a clear error. Content-filter stops now say the provider blocked the response. A missing finish reason remains an error. Anthropic and Responses are unchanged.
+
 ## [0.3.23] - 2026-11-04
 
 ### Fixed

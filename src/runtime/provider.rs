@@ -172,28 +172,140 @@ pub async fn request(
     out: &Sender<Value>,
 ) -> Result<Reply> {
     super::rooxcode::validate_provider(provider)?;
-    let anonymous = provider.authentication == super::config::Authentication::Rooxcode;
     let codex = if provider.authentication == super::config::Authentication::Codex {
         Some(super::oauth::credential().await?)
     } else {
         None
     };
-    let (route, body) = request_body(provider, model, conversation, system, thinking, tools);
+    let (route, mut body) = request_body(provider, model, conversation, system, thinking, tools);
     let url = format!("{}/{}", provider.base_url.trim_end_matches('/'), route);
+    let mut continuation = Continuation::default();
+    let mut state = loop {
+        let mut state = exchange(
+            provider,
+            conversation,
+            &url,
+            &body,
+            codex.as_ref(),
+            tools,
+            out,
+        )
+        .await?;
+        let Some(follow_up) = continuation.next(&provider.api, &mut state) else {
+            break state;
+        };
+        body["messages"]
+            .as_array_mut()
+            .ok_or("Invalid chat request body")?
+            .extend(follow_up);
+    };
+    if state.finish == "length" && state.calls.is_empty() {
+        if tools.is_none() {
+            return Err(
+                "Compaction summary exceeded the provider output limit; history unchanged.".into(),
+            );
+        }
+        state.text.push_str(CUT_NOTICE);
+        if tools.is_some() {
+            emit(out, Event::Text(CUT_NOTICE).wire()).await?;
+        }
+    }
+    let mut reply = state.reply(&provider.api)?;
+    if let Some([input, output, cache]) = continuation.usage {
+        reply.input = input;
+        reply.output = output;
+        reply.cache = cache;
+    }
+    if let Message::Assistant {
+        provider_data: Some(raw),
+        ..
+    } = &mut reply.message
+    {
+        raw["provider"] = json!(provider.id);
+        raw["model"] = json!(model.id);
+    }
+    Ok(reply)
+}
+
+const CONTINUE_PROMPT: &str = "Continue exactly where you stopped. Do not repeat earlier text.";
+const REISSUE_PROMPT: &str = "Your tool call was cut off at the output limit and was not run. Re-issue the complete tool call.";
+const CUT_NOTICE: &str = "\n\n[Reply cut at the output limit.]";
+const MAX_CONTINUATIONS: u8 = 3;
+
+/// Chat-completions replies stopped by "length" are continued in follow-up requests.
+#[derive(Default)]
+struct Continuation {
+    text: String,
+    rounds: u8,
+    reissued: bool,
+    usage: Option<[Option<u64>; 3]>,
+}
+impl Continuation {
+    /// Messages to append for another request, or None once `state` is the final round,
+    /// which then carries the text of every earlier round.
+    fn next(&mut self, api: &Api, state: &mut Stream) -> Option<Vec<Value>> {
+        if *api == Api::ChatCompletions {
+            let current = [state.input, state.output, state.cache];
+            self.usage = Some(match self.usage {
+                None => current,
+                Some(previous) => std::array::from_fn(|index| {
+                    previous[index]
+                        .zip(current[index])
+                        .map(|(before, next)| before.saturating_add(next))
+                }),
+            });
+        }
+        let tool = !state.calls.is_empty();
+        if *api != Api::ChatCompletions
+            || state.finish != "length"
+            || self.rounds >= MAX_CONTINUATIONS
+            || (tool && self.reissued)
+        {
+            state.text.insert_str(0, &std::mem::take(&mut self.text));
+            return None;
+        }
+        self.rounds += 1;
+        self.reissued |= tool;
+        // Partial tool arguments are never executed or replayed.
+        state.calls.clear();
+        let partial = std::mem::take(&mut state.text);
+        self.text.push_str(&partial);
+        let mut wire = vec![];
+        if !partial.is_empty() {
+            wire.push(json!({"role":"assistant","content":partial}));
+        }
+        wire.push(
+            json!({"role":"user","content":if tool { REISSUE_PROMPT } else { CONTINUE_PROMPT }}),
+        );
+        Some(wire)
+    }
+}
+
+/// Sends one request and streams it to its completion event.
+async fn exchange(
+    provider: &Provider,
+    conversation: &super::session::Session,
+    url: &str,
+    body: &Value,
+    codex: Option<&super::oauth::Token>,
+    tools: Option<&[Value]>,
+    out: &Sender<Value>,
+) -> Result<Stream> {
+    let anonymous = provider.authentication == super::config::Authentication::Rooxcode;
     let req = if anonymous {
-        super::rooxcode::chat_request(provider, &body, &conversation.rooxcode_session)?
+        super::rooxcode::chat_request(provider, body, &conversation.rooxcode_session)?
     } else {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(600))
             .build()?;
-        let key = if let Some(token) = &codex {
+        let key = if let Some(token) = codex {
             token.access.clone()
         } else {
             super::config::key(provider)?
         };
-        authenticated_request(&client, &url, body, &key, codex.as_ref())?
+        authenticated_request(&client, url, body.clone(), &key, codex)?
     };
     let req = if provider.api == Api::Anthropic {
         req.header("anthropic-version", "2023-06-01")
@@ -257,16 +369,7 @@ pub async fn request(
             "Provider stream ended before its completion event; no tools were executed.".into(),
         );
     }
-    let mut reply = state.reply(&provider.api)?;
-    if let Message::Assistant {
-        provider_data: Some(raw),
-        ..
-    } = &mut reply.message
-    {
-        raw["provider"] = json!(provider.id);
-        raw["model"] = json!(model.id);
-    }
-    Ok(reply)
+    Ok(state)
 }
 
 #[derive(PartialEq)]
@@ -586,8 +689,13 @@ impl Stream {
                 json!({"api":"anthropic","items":self.blocks.into_values().collect::<Vec<_>>()})
             }
             Api::ChatCompletions => {
-                if !matches!(self.finish.as_str(), "stop" | "tool_calls") {
-                    return Err("Provider response was truncated or incomplete".into());
+                match self.finish.as_str() {
+                    "stop" | "tool_calls" => {}
+                    // Text-only replies reach here after the continuation cap.
+                    "length" if self.calls.is_empty() => {}
+                    "length" => return Err("A tool call exceeded the provider output limit and was not executed.".into()),
+                    "content_filter" => return Err("Provider blocked the response under its content policy; nothing was committed.".into()),
+                    _ => return Err("Provider response was truncated or incomplete".into()),
                 }
                 if !self.text.is_empty() {
                     blocks.push(Block::Text {
@@ -725,6 +833,166 @@ mod tests {
         assert_eq!(reply.input, Some(15));
         assert_eq!(reply.cache, Some(20));
         assert_eq!(reply.context, Some(70));
+    }
+
+    fn chat_round(events: &[Value]) -> Stream {
+        let mut stream = Stream::default();
+        for event in events {
+            stream.observe(&Api::ChatCompletions, event).unwrap();
+        }
+        stream
+    }
+    fn text(content: &str, finish: Option<&str>) -> Value {
+        json!({"choices":[{"delta":{"content":content},"finish_reason":finish}]})
+    }
+    fn call(id: &str, args: &str, finish: Option<&str>) -> Value {
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":id,"function":{"name":"write","arguments":args}}]},"finish_reason":finish}]})
+    }
+    fn reply_text(reply: &Reply) -> String {
+        reply.message.text()
+    }
+
+    #[test]
+    fn continuation_usage_sums_rounds_without_turning_missing_values_into_zero() {
+        for missing in [false, true] {
+            let mut continuation = Continuation::default();
+            let mut first = Stream {
+                finish: "length".into(),
+                input: Some(u64::MAX),
+                output: Some(2),
+                cache: (!missing).then_some(1),
+                ..Stream::default()
+            };
+            assert!(continuation
+                .next(&Api::ChatCompletions, &mut first)
+                .is_some());
+            let mut last = Stream {
+                finish: "stop".into(),
+                input: Some(15),
+                output: Some(3),
+                cache: Some(2),
+                ..Stream::default()
+            };
+            assert!(continuation
+                .next(&Api::ChatCompletions, &mut last)
+                .is_none());
+            assert_eq!(
+                continuation.usage,
+                Some([Some(u64::MAX), Some(5), (!missing).then_some(3)])
+            );
+            assert_eq!(last.reply(&Api::ChatCompletions).unwrap().context, Some(18));
+        }
+    }
+
+    #[test]
+    fn length_is_continued_and_text_is_joined() {
+        let mut continuation = Continuation::default();
+        let mut first = chat_round(&[text("Hello, ", Some("length"))]);
+        let follow_up = continuation
+            .next(&Api::ChatCompletions, &mut first)
+            .unwrap();
+        assert_eq!(
+            follow_up,
+            [
+                json!({"role":"assistant","content":"Hello, "}),
+                json!({"role":"user","content":CONTINUE_PROMPT})
+            ]
+        );
+        let mut second = chat_round(&[text("world.", Some("stop"))]);
+        assert!(continuation
+            .next(&Api::ChatCompletions, &mut second)
+            .is_none());
+        let reply = second.reply(&Api::ChatCompletions).unwrap();
+        assert_eq!(reply_text(&reply), "Hello, world.");
+    }
+
+    #[test]
+    fn partial_tool_call_is_discarded_and_the_reissued_call_is_returned() {
+        let mut continuation = Continuation::default();
+        let mut first = chat_round(&[
+            text("Writing.", None),
+            call("cut", "{\"path\":\"fi", Some("length")),
+        ]);
+        let follow_up = continuation
+            .next(&Api::ChatCompletions, &mut first)
+            .unwrap();
+        assert_eq!(follow_up[1]["content"], REISSUE_PROMPT);
+        assert!(!follow_up.iter().any(|m| m.get("tool_calls").is_some()));
+        let mut second = chat_round(&[call("full", "{\"path\":\"file\"}", Some("tool_calls"))]);
+        assert!(continuation
+            .next(&Api::ChatCompletions, &mut second)
+            .is_none());
+        let reply = second.reply(&Api::ChatCompletions).unwrap();
+        let Message::Assistant { content, .. } = &reply.message else {
+            panic!("assistant reply expected")
+        };
+        let ids: Vec<_> = content
+            .iter()
+            .filter_map(|b| match b {
+                Block::ToolCall { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["full"]);
+        assert_eq!(reply_text(&reply), "Writing.");
+
+        // A re-issued call that is cut again is an error, never executed.
+        let mut continuation = Continuation::default();
+        let mut first = chat_round(&[call("a", "{", Some("length"))]);
+        continuation
+            .next(&Api::ChatCompletions, &mut first)
+            .unwrap();
+        let mut second = chat_round(&[call("b", "{", Some("length"))]);
+        assert!(continuation
+            .next(&Api::ChatCompletions, &mut second)
+            .is_none());
+        let error = second
+            .reply(&Api::ChatCompletions)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("tool call exceeded the provider output limit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn continuations_stop_after_three_and_keep_the_text() {
+        let mut continuation = Continuation::default();
+        for round in 0..MAX_CONTINUATIONS {
+            let mut stream = chat_round(&[text(&format!("{round}"), Some("length"))]);
+            assert!(continuation
+                .next(&Api::ChatCompletions, &mut stream)
+                .is_some());
+        }
+        let mut last = chat_round(&[text("3", Some("length"))]);
+        assert!(continuation
+            .next(&Api::ChatCompletions, &mut last)
+            .is_none());
+        let reply = last.reply(&Api::ChatCompletions).unwrap();
+        assert_eq!(reply_text(&reply), "0123");
+    }
+
+    #[test]
+    fn content_filter_and_missing_finish_reason_are_errors() {
+        let error = chat_round(&[text("x", Some("content_filter"))])
+            .reply(&Api::ChatCompletions)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("content policy"), "{error}");
+        assert!(!error.contains("truncated"), "{error}");
+        let mut missing = chat_round(&[text("x", None)]);
+        assert!(Continuation::default()
+            .next(&Api::ChatCompletions, &mut missing)
+            .is_none());
+        let error = missing
+            .reply(&Api::ChatCompletions)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("truncated or incomplete"), "{error}");
     }
 }
 
