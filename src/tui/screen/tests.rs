@@ -15,6 +15,13 @@ fn saved_tool_only_replies_hide_empty_labels_and_status_badges_do_not_tint_detai
         plain.iter().filter(|line| line.as_str() == "hibi").count(),
         1
     );
+    assert!(
+        plain.iter().position(|line| line == "hibi").unwrap()
+            < plain
+                .iter()
+                .position(|line| line.contains("✓ Bash"))
+                .unwrap()
+    );
     let success = rows
         .iter()
         .find(|row| row.cells.iter().any(|c| c.tone == Tone::ToolSuccess))
