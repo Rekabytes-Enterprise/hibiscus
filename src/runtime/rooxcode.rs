@@ -1,7 +1,7 @@
 //! Anonymous Rooxcode catalog and client metadata. These headers are not authentication.
 use super::config::{Api, Authentication, Config, Model, Provider};
 use crate::Result;
-use rand::RngCore;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashSet, time::Duration};
@@ -18,7 +18,7 @@ pub(super) struct SessionId(String);
 impl SessionId {
     pub(super) fn new() -> Result<Self> {
         let mut bytes = [0u8; 16];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut bytes)
             .map_err(|_| "Cannot generate conversation UUID")?;
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
