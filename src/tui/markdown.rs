@@ -42,8 +42,8 @@ pub(crate) struct Row {
     pub(crate) cells: Vec<Cell>,
 }
 
-/// Cache at explicit role-reset boundaries, not arbitrary lines: fences and
-/// table lookahead can change the interpretation of previously received text.
+/// Cache whole user turns: assistant headings are shared by tools and prose,
+/// and fences/table lookahead can change previously received text.
 #[derive(Default)]
 pub(crate) struct Layout {
     width: usize,
@@ -82,11 +82,7 @@ impl Layout {
         let mut boundaries = vec![0];
         let mut offset = 0;
         for line in text.split_inclusive('\n') {
-            if offset > 0
-                && (line.starts_with("you › ")
-                    || line.starts_with("hibi › ")
-                    || line.starts_with("hibiscus › "))
-            {
+            if offset > 0 && line.starts_with("you › ") {
                 boundaries.push(offset);
             }
             offset += line.len();
@@ -222,9 +218,11 @@ fn format_with_diagrams(
     let mut fence = false;
     let mut in_diff = false;
     let mut in_table = false;
+    let mut assistant_labeled = false;
     let mut sources = text.lines().peekable();
     while let Some(source) = sources.next() {
         let content = if let Some(content) = source.strip_prefix("you › ") {
+            assistant_labeled = false;
             role = Role::User;
             fence = false;
             in_diff = false;
@@ -256,11 +254,22 @@ fn format_with_diagrams(
                 }
                 continue;
             }
-            let mut label = Vec::new();
-            push(&mut label, "hibi", Tone::Activity);
-            rows.extend(wrap_cells(label, width, role));
+            if !assistant_labeled {
+                let mut label = Vec::new();
+                push(&mut label, "hibi", Tone::Activity);
+                rows.extend(wrap_cells(label, width, role));
+                assistant_labeled = true;
+            }
             content
         } else if source.trim_start().starts_with('·') {
+            // Tool-first turns still need a speaker. Share one heading with
+            // subsequent tools and prose, including replayed empty replies.
+            if !assistant_labeled && is_tool_activity(source) {
+                let mut label = Vec::new();
+                push(&mut label, "hibi", Tone::Activity);
+                rows.extend(wrap_cells(label, width, Role::Assistant));
+                assistant_labeled = true;
+            }
             role = Role::Note;
             in_diff = source.trim_start().starts_with("· diff · ");
             in_table = false;
@@ -433,6 +442,24 @@ fn format_with_diagrams(
         }
     }
     rows
+}
+
+fn is_tool_activity(content: &str) -> bool {
+    content
+        .trim_start()
+        .strip_prefix("· ")
+        .and_then(|status| status.split_once(" · "))
+        .is_some_and(|(badge, _)| {
+            badge.starts_with(['✓', '✗', '◌'])
+                || matches!(
+                    badge,
+                    "◐ Exploring"
+                        | "◓ Exploring"
+                        | "◑ Exploring"
+                        | "◒ Exploring"
+                        | "Explore stopped"
+                )
+        })
 }
 
 fn tool_status(content: &str) -> Option<Vec<Cell>> {
@@ -774,7 +801,7 @@ mod tests {
     #[test]
     fn layout_matches_full_format_across_streaming_resize_and_replacement() {
         let mut layout = Layout::default();
-        let text = "you › literal **text**\n\nhibi › ## Title\n| A | B |\n| --- | --- |\n```rust\nlet x = 1;\n```\n\nyou › next\nhibi › [link](url)";
+        let text = "you › literal **text**\n  · ◐ Exploring · file\n  · ✓ Read · 1 file\nhibi › ## Title\n| A | B |\n| --- | --- |\n```rust\nlet x = 1;\n```\n\nyou › next\nhibi › [link](url)";
         for width in [73, 12, 1, 73] {
             for end in (0..=text.len()).filter(|&i| text.is_char_boundary(i)) {
                 layout.update(&text[..end], width);
@@ -817,6 +844,36 @@ mod tests {
             }
         }
         assert_eq!(text(&format("[no closing](", 73)[0]), "[no closing](");
+    }
+
+    #[test]
+    fn tool_first_turns_share_a_speaker_with_prose_and_reset_for_the_next_user() {
+        for activity in [
+            "◐ Exploring",
+            "◓ Exploring",
+            "◑ Exploring",
+            "◒ Exploring",
+            "Explore stopped",
+            "✓ Explored",
+            "✓ Read",
+            "✓ Bash",
+            "✗ Bash",
+            "◌ edit",
+        ] {
+            let input = format!("you › First\n  · {activity} · file\nhibi › Done.\nyou › Second\n  · ✓ Bash · 1 command");
+            let rows = format(&input, 80);
+            let lines: Vec<_> = rows.iter().map(text).collect();
+            assert_eq!(lines.iter().filter(|line| *line == "hibi").count(), 2);
+            assert_eq!(lines[1], "hibi", "{activity}");
+            assert_eq!(lines[5], "hibi", "{activity}");
+        }
+        let rows = format("  · Login cancelled.\nhibi › \n\n", 80);
+        assert!(!rows.iter().any(|row| text(row) == "hibi"));
+        let rows = format(
+            "you › First\nhibi › Reading.\n  · ✓ Read · 1 file\nhibi › Done.",
+            80,
+        );
+        assert_eq!(rows.iter().filter(|row| text(row) == "hibi").count(), 1);
     }
 
     #[test]
