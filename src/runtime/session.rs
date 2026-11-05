@@ -227,7 +227,34 @@ impl Session {
             .providers
             .iter()
             .any(|p| !p.models.is_empty() && config::access(p).is_ok());
-        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"model":model,"thinkingLevel":self.thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
+        let thinking = if self.thinking == "off"
+            && self
+                .model
+                .as_ref()
+                .is_some_and(|(p, _)| p == super::rooxcode::ID)
+        {
+            "default"
+        } else {
+            &self.thinking
+        };
+        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"model":model,"thinkingLevel":thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
+    }
+    /// Call only after authoritative discovery or an explicit model change.
+    pub fn reconcile_rooxcode_thinking(&mut self, config: &Config) -> bool {
+        if self.thinking != "off"
+            && self
+                .model
+                .as_ref()
+                .is_some_and(|(p, _)| p == super::rooxcode::ID)
+            && !self.selected(config).is_ok_and(|(p, m)| {
+                super::thinking::Policy::for_model(p, m).supports_stored(&self.thinking)
+            })
+        {
+            self.thinking = "off".into();
+            true
+        } else {
+            false
+        }
     }
     pub fn stats(&self, config: &Config) -> Value {
         let window = self

@@ -125,7 +125,20 @@ async fn bounded_body(response: &mut reqwest::Response, limit: usize) -> Result<
     Ok(bytes)
 }
 
-pub(super) async fn refresh(config: &mut Config) -> Result<()> {
+pub(super) enum CatalogStatus {
+    Available,
+    Empty,
+}
+impl CatalogStatus {
+    pub fn warning(&self) -> Option<&'static str> {
+        match self {
+            Self::Available => None,
+            Self::Empty => Some("Rooxcode has no available models. Inference may be disabled or temporarily unavailable; open /models to refresh later."),
+        }
+    }
+}
+
+pub(super) async fn refresh(config: &mut Config) -> Result<CatalogStatus> {
     let provider = config
         .providers
         .iter_mut()
@@ -147,10 +160,11 @@ pub(super) async fn refresh(config: &mut Config) -> Result<()> {
         return Err(response_error(response).await.into());
     }
     provider.models = catalog(&bounded_body(&mut response, 1024 * 1024).await?)?;
-    if provider.models.is_empty() {
-        return Err("Rooxcode has no available models. Inference may be disabled or temporarily unavailable; open /models to refresh later.".into());
-    }
-    Ok(())
+    Ok(if provider.models.is_empty() {
+        CatalogStatus::Empty
+    } else {
+        CatalogStatus::Available
+    })
 }
 
 fn catalog(bytes: &[u8]) -> Result<Vec<Model>> {
@@ -161,6 +175,10 @@ fn catalog(bytes: &[u8]) -> Result<Vec<Model>> {
     #[derive(Deserialize)]
     struct Entry {
         id: String,
+        #[serde(default)]
+        reasoning: Option<bool>,
+        #[serde(default)]
+        reasoning_efforts: Option<Vec<super::thinking::ReasoningEffort>>,
         #[serde(default)]
         context_window: Option<u64>,
         #[serde(default)]
@@ -178,6 +196,11 @@ fn catalog(bytes: &[u8]) -> Result<Vec<Model>> {
         .data
         .into_iter()
         .map(|entry| {
+            let efforts = entry.reasoning_efforts.unwrap_or_default();
+            let mut seen_efforts = HashSet::new();
+            if efforts.iter().any(|effort| !seen_efforts.insert(*effort)) {
+                return Err("Rooxcode returned invalid reasoning metadata".into());
+            }
             if entry.id.trim().is_empty()
                 || entry.id.len() > 256
                 || entry.id.chars().any(char::is_control)
@@ -204,7 +227,12 @@ fn catalog(bytes: &[u8]) -> Result<Vec<Model>> {
                     .filter(|n| (1024..=104_857_600).contains(n)),
                 max_messages: entry.max_messages.filter(|n| (4..=10000).contains(n)),
                 max_tokens: 4096,
-                reasoning: false,
+                reasoning: entry.reasoning == Some(true),
+                reasoning_efforts: if entry.reasoning == Some(true) {
+                    efforts
+                } else {
+                    vec![]
+                },
                 images: false,
             })
         })
@@ -415,6 +443,49 @@ mod tests {
                 .unwrap()
                 .to_string();
             assert!(!error.contains("SECRET"));
+        }
+    }
+
+    #[test]
+    fn reasoning_metadata_is_typed_and_requires_explicit_capability() {
+        let models = catalog(serde_json::to_vec(&json!({"data":[
+            {"id":"missing"},
+            {"id":"empty","reasoning":true,"reasoning_efforts":[]},
+            {"id":"flag-only","reasoning":true},
+            {"id":"null","reasoning":null,"reasoning_efforts":null},
+            {"id":"no-flag","reasoning_efforts":["high"]},
+            {"id":"disabled","reasoning":false,"reasoning_efforts":["high"]},
+            {"id":"subset","reasoning":true,"reasoning_efforts":["low","high"]},
+            {"id":"all","reasoning":true,"reasoning_efforts":["none","minimal","low","medium","high","xhigh","max"]}
+        ]})).unwrap().as_slice()).unwrap();
+        for model in &models[..6] {
+            assert!(model.reasoning_efforts.is_empty());
+        }
+        assert_eq!(
+            models[6]
+                .reasoning_efforts
+                .iter()
+                .map(|e| e.as_str())
+                .collect::<Vec<_>>(),
+            ["low", "high"]
+        );
+        assert_eq!(models[7].reasoning_efforts.len(), 7);
+        for metadata in [
+            json!({"reasoning":"true"}),
+            json!({"reasoning_efforts":"high"}),
+            json!({"reasoning_efforts":[1]}),
+            json!({"reasoning_efforts":["high","high"]}),
+            json!({"reasoning_efforts":["off"]}),
+            json!({"reasoning_efforts":["default"]}),
+            json!({"reasoning_efforts":["SECRET_UNSUPPORTED"]}),
+        ] {
+            let mut entry = metadata;
+            entry["id"] = json!("invalid");
+            let error = catalog(json!({"data":[entry]}).to_string().as_bytes())
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(!error.contains("SECRET_UNSUPPORTED"));
         }
     }
 }

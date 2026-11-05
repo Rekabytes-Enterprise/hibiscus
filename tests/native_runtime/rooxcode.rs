@@ -3,6 +3,8 @@ use super::*;
 mod continuation;
 #[path = "rooxcode/queue.rs"]
 mod queue;
+#[path = "rooxcode/thinking.rs"]
+mod thinking;
 
 fn done(text: &str) -> (u16, String) {
     (
@@ -412,14 +414,17 @@ fn rooxcode_compacts_large_tool_history_in_bounded_requests_and_continues() {
     let f = Fixture::new("chat_completions", replies);
     setup(
         &f,
-        json!([{"id":"bounded-model","context_window":20000,"max_request_bytes":10485760,"max_messages":256}]),
+        json!([{"id":"bounded-model","reasoning":true,"reasoning_efforts":["high"],"context_window":20000,"max_request_bytes":10485760,"max_messages":256}]),
     );
     fs::write(
         f.root.join("large.txt"),
         "verified file content\n".repeat(1400),
     )
     .unwrap();
-    let output = f.run("Read large.txt and then continue.", &[]);
+    let output = f.run(
+        "/thinking high\nRead large.txt and then continue.\n/quit\n",
+        &["--cli"],
+    );
     assert!(
         output.status.success(),
         "{}",
@@ -441,6 +446,7 @@ fn rooxcode_compacts_large_tool_history_in_bounded_requests_and_continues() {
         summaries.len()
     );
     for request in &*requests {
+        assert_eq!(request["reasoning_effort"], "high");
         assert!(serde_json::to_vec(request).unwrap().len() < 12723);
     }
     assert!(requests.last().unwrap()["messages"]

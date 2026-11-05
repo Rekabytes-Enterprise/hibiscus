@@ -1,6 +1,10 @@
 //! Runtime display events applied to the fullscreen state.
 use super::*;
 impl ScrollDisplay for Screen {
+    fn thinking_reset(&mut self) -> io::Result<()> {
+        self.input_notice = Some(crate::ui::display::THINKING_RESET.into());
+        self.render()
+    }
     fn extension_dialog(&mut self, event: &Value, events: &Receiver<u8>) -> Result<Option<Value>> {
         if !self.full || self.suspended {
             return Ok(None);

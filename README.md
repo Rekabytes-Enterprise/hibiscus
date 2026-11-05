@@ -134,7 +134,7 @@ Inside a chat:
 | `/continue` | Resume the latest saved session in this directory |
 | `/sessions` | Choose and switch sessions |
 | `/models` | Search and choose a model across configured native providers |
-| `/thinking [level]` | Choose a supported Responses reasoning level for the active model |
+| `/thinking [level]` | Choose the active model's supported thinking level (Responses or advertised Rooxcode levels) |
 | `/compact [instructions]` | Summarize older context with the configured provider (model call; original history remains archived) |
 | `/login` | Native Codex browser login or an API key for a configured provider |
 | `/logout` | Choose a provider and remove its stored credential inside Hibiscus |

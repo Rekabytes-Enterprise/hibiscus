@@ -152,6 +152,11 @@ pub(super) fn request_body(
         body["reasoning"] = json!({"effort":thinking});
     }
     if anonymous {
+        if let Some(effort) =
+            super::thinking::Policy::for_model(provider, model).rooxcode_effort(thinking)
+        {
+            body["reasoning_effort"] = json!(effort);
+        }
         // Let the gateway apply its advertised default output limit.
         // The client reserves output space without overriding that default.
         body.as_object_mut().unwrap().remove("max_tokens");
@@ -172,6 +177,14 @@ pub async fn request(
     out: &Sender<Value>,
 ) -> Result<Reply> {
     super::rooxcode::validate_provider(provider)?;
+    if provider.authentication == super::config::Authentication::Rooxcode
+        && !super::thinking::Policy::for_model(provider, model).supports_stored(thinking)
+    {
+        return Err(
+            "Unsupported Rooxcode thinking level. Refresh /models and choose /thinking again."
+                .into(),
+        );
+    }
     let codex = if provider.authentication == super::config::Authentication::Codex {
         Some(super::oauth::credential().await?)
     } else {
