@@ -23,6 +23,17 @@ Rooxcode does not appear in the API-key login choices.
 The catalog supplies IDs and may advertise verified context, request-byte and
 message limits. Missing context stays unknown; image and reasoning capabilities
 are not inferred. Rooxcode applies its own default output limit.
+
+When a Rooxcode model advertises `reasoning: true` and `reasoning_efforts`,
+`/thinking` lists **Default** plus that model's advertised choices. Use
+`/thinking high`, for example, only when `high` is listed. Default omits
+`reasoning_effort` and leaves reasoning to the upstream model's default; it does
+not promise reasoning is disabled. Explicit `none` is separate and is sent only
+when advertised. Missing or empty metadata offers only Default. The choice
+survives tools, compaction and session resume. A successful catalog refresh or
+model change that removes the choice resets it to Default with a short notice;
+failed discovery preserves the choice and blocks unavailable inference.
+
 Discovery has a five-second timeout, a 1 MiB response bound and at most 1,000
 unique model IDs. Catalog failures and empty catalogs are reported, and `/models`
 can refresh them. A removed selected model requires an explicit new selection.

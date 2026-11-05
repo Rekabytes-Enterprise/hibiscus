@@ -6,6 +6,7 @@ pub enum Event<'a> {
     Started,
     Text(&'a str),
     ProviderWaiting(bool),
+    ThinkingReset,
     MessageStarted(&'a Message),
     MessageFinished(&'a Message),
     ToolStarted {
@@ -33,6 +34,7 @@ impl Event<'_> {
             Self::ProviderWaiting(waiting) => {
                 json!({"type":"provider_status","provider":"rooxcode","waiting":waiting})
             }
+            Self::ThinkingReset => json!({"type":"thinking_reset"}),
             Self::MessageStarted(message) => json!({"type":"message_start","message":message}),
             Self::MessageFinished(message) => json!({"type":"message_end","message":message}),
             Self::ToolStarted { id, name, args } => {

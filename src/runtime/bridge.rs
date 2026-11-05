@@ -233,6 +233,10 @@ impl Client {
                 }
                 return Ok(record.get_mut("data").map_or(Value::Null, Value::take));
             }
+            if record["type"] == "thinking_reset" {
+                display.thinking_reset()?;
+                continue;
+            }
             dialogs.handle(
                 self.input.as_mut().ok_or("pi stdin unavailable")?,
                 &record,
@@ -370,6 +374,7 @@ impl Client {
                     return Ok(data.clone());
                 }
                 match event["type"].as_str() {
+                    Some("thinking_reset") => display.thinking_reset()?,
                     Some("provider_status") => provider_status(display, &event)?,
                     Some("compaction_start") => display.set_work("Compacting context…")?,
                     Some("compaction_end") if event["aborted"] == true => {
@@ -902,6 +907,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
             Some("summarization_retry_attempt_start") if kind == "prompt" => {
                 display.set_work("Retrying context summary…")?;
             }
+            Some("thinking_reset") => display.thinking_reset()?,
             Some("extension_ui_request" | "extension_error" | "provider_error") => {
                 // Full-screen dialogs render through the shared cached modal
                 // component; only line mode uses direct terminal prompts.

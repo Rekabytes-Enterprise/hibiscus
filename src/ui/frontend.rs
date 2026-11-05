@@ -342,6 +342,12 @@ impl Write for Frontend {
 }
 
 impl ScrollDisplay for Frontend {
+    fn thinking_reset(&mut self) -> io::Result<()> {
+        match &mut self.view {
+            View::Tui(s) => s.thinking_reset(),
+            View::Cli(s) => s.thinking_reset(),
+        }
+    }
     fn assistant_start(&mut self) -> io::Result<bool> {
         match &mut self.view {
             View::Tui(s) => s.assistant_start(),

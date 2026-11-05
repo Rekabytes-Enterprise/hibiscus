@@ -14,7 +14,7 @@ implementation. No gateway source is changed.
 ```text
 Authentication::Rooxcode
 rooxcode::install(&mut Config)
-rooxcode::refresh(&mut Config) -> async Result<()>
+rooxcode::refresh(&mut Config) -> async Result<CatalogStatus>
 rooxcode::SessionId(String) // validated non-nil hyphenated UUID
 rooxcode::chat_request(&Provider, &Value, &SessionId) -> RequestBuilder
 Session { rooxcode_session: SessionId, ... }
@@ -96,7 +96,8 @@ Rooxcode headers. The fixture URL is configured on loopback; a unit check binds
 the production default URL and verifies that it needs neither keys nor IDs.
 No live production inference or deployed-gateway compatibility is claimed.
 An ID-only catalog leaves context unknown; optional verified context metadata
-can supply a limit. Image/reasoning capabilities remain disabled. Hibiscus uses
+can supply a limit. Images remain disabled; reasoning requires explicit catalog
+metadata as described below. Hibiscus uses
 the gateway's output default while reserving output space during budgeting.
 Gateway quotas and context/tool limits remain authoritative.
 
@@ -120,3 +121,44 @@ Only a successful final summary archives and replaces it; failure or cancellatio
 keeps the original conversation. Completed tools are never replayed. Oversized
 fixed instructions/tools still fail clearly instead of looping or switching models.
 Gateway request_too_large errors receive a fixed, sanitized diagnostic.
+
+## Advertised thinking levels
+
+The adjacent gateway's `docs/public-api.md`, public catalog and request validator
+define `reasoning: true` plus a per-model `reasoning_efforts` array. Supported
+names are `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`; Hibiscus
+never adds a level to the advertised subset. Missing/null metadata, a false flag
+or an empty list exposes no explicit levels. Unknown names, wrong types and
+duplicates reject the catalog through the existing sanitized error path.
+
+```text
+ReasoningEffort enum                         // external names parsed once
+thinking::Policy::for_model(provider, model) // choices and validation
+Session.thinking                            // existing v1 stored value
+provider::request_body                      // exact reasoning_effort encoding
+Event::ThinkingReset                        // notice outside model history
+```
+
+Two designs were compared: a typed choice throughout session storage and runtime
+APIs, or a typed catalog with a small shared policy at selection/encoding
+boundaries. The latter keeps v1 sessions and other providers unchanged. The old
+stored `off` means omission and is displayed as **Default** for Rooxcode only.
+Explicit `none` is distinct. Default leaves upstream reasoning policy intact.
+
+Tool turns, length continuations and bounded compaction summaries retain the
+selected effort and conversation UUID. Startup/resume, idle catalog refresh and
+model changes revalidate the choice. A supported choice survives a Rooxcode
+model change; an unsupported choice is saved as Default before a notice is sent.
+Valid empty catalogs count as authoritative removals; transport or parse errors
+do not. Failed refreshes still clear unavailable models and block generation.
+The request boundary rejects an unsupported explicit level rather than silently
+omitting it. Responses retains its existing `reasoning.effort` behavior; other
+Chat Completions and Anthropic providers gain no new reasoning field.
+
+Local fixtures in `tests/native_runtime/rooxcode/thinking.rs` exercise the actual
+binary, numbered CLI selector and fullscreen TUI selector/header, captured JSON
+requests, tool continuation, compaction, resume, cancellation and catalog changes.
+The gateway deployment must expose this catalog metadata and accept the same
+efforts on `/chat/completions`. Local tests do not verify a live deployment or
+whether an upstream model honors its advertised effort. No gateway changes,
+keys, retries or fallback models are introduced here.

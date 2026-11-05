@@ -1,6 +1,7 @@
 use crate::{
     runtime::{bridge::Client, dialog::Dialogs},
     ui::{
+        display::thinking_label,
         terminal::{self, RawMode},
         Frontend,
     },
@@ -19,8 +20,8 @@ pub(crate) fn choose_model<R: BufRead>(
     raw: &mut Option<RawMode>,
 ) -> Result<()> {
     let mut dialogs = Dialogs;
-    let state = rpc.request(
-        json!({"type":"get_state"}),
+    let available = rpc.request(
+        json!({"type":"get_available_models"}),
         input,
         output,
         &mut dialogs,
@@ -28,8 +29,10 @@ pub(crate) fn choose_model<R: BufRead>(
         events,
         interactive,
     )?;
-    let available = rpc.request(
-        json!({"type":"get_available_models"}),
+    // Discovery can revalidate the selected thinking level. Read state after
+    // that refresh, including when the user cancels the model picker.
+    let state = rpc.request(
+        json!({"type":"get_state"}),
         input,
         output,
         &mut dialogs,
@@ -196,7 +199,7 @@ pub(crate) fn choose_thinking<R: BufRead>(
         let Some(keys) = events else { return Ok(()) };
         let labels = levels
             .iter()
-            .map(|level| (*level).to_owned())
+            .map(|level| thinking_label(level).to_owned())
             .collect::<Vec<_>>();
         output.select("Thinking · Runtime model", &labels, active, keys)?
     } else {
@@ -206,7 +209,7 @@ pub(crate) fn choose_thinking<R: BufRead>(
                 output,
                 "  {}. {}{}",
                 index + 1,
-                level,
+                thinking_label(level),
                 if Some(index) == active {
                     "  (current)"
                 } else {
@@ -237,7 +240,11 @@ pub(crate) fn choose_thinking<R: BufRead>(
     let Some(index) = selected else { return Ok(()) };
     if Some(index) == active {
         if !output.is_full() {
-            writeln!(output, "Already using {} thinking.", levels[index])?;
+            writeln!(
+                output,
+                "Already using {} thinking.",
+                thinking_label(levels[index])
+            )?;
         }
         return Ok(());
     }
@@ -266,7 +273,7 @@ pub(crate) fn choose_thinking<R: BufRead>(
         return Err("Runtime returned an unsupported thinking level".into());
     }
     if !output.is_full() {
-        writeln!(output, "Thinking level: {level}.")?;
+        writeln!(output, "Thinking level: {}.", thinking_label(level))?;
     }
     Ok(())
 }

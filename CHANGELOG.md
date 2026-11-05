@@ -4,6 +4,12 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.28] - 2026-11-05
+
+### Added
+
+- Use each Rooxcode model's advertised thinking levels in `/thinking`, CLI and TUI, and send the selected `reasoning_effort` through generation, tool continuation, compaction and resume. Default leaves the field unset; explicit `none` is offered only when advertised. Unsupported choices reset to Default with a notice after confirmed catalog or model changes.
+
 ## [0.3.27] - 2026-11-05
 
 ### Fixed

@@ -459,7 +459,7 @@ impl Screen {
                         .chars()
                         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
             })
-            .map(str::to_owned);
+            .map(|level| crate::ui::display::thinking_label(level).to_owned());
         self.session = state["sessionName"]
             .as_str()
             .filter(|name| !name.is_empty())

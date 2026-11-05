@@ -8,6 +8,15 @@ use std::{
 };
 
 pub(crate) const ROOXCODE_WAITING: &str = "Rooxcode is busy. Waiting…";
+pub(crate) const THINKING_RESET: &str =
+    "Thinking reset to Default; selected level is no longer available.";
+pub(crate) fn thinking_label(level: &str) -> &str {
+    if level == "default" {
+        "Default"
+    } else {
+        level
+    }
+}
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PromptAction {
     Text(Option<String>),
@@ -37,6 +46,9 @@ pub(crate) enum ActiveAction {
 }
 
 pub(crate) trait ScrollDisplay: Write {
+    fn thinking_reset(&mut self) -> io::Result<()> {
+        writeln!(self, "{THINKING_RESET}")
+    }
     fn assistant_start(&mut self) -> io::Result<bool> {
         Ok(false)
     }
