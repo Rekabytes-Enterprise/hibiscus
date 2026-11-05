@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.27] - 2026-11-05
+
+### Fixed
+
+- Start automatically after updating an older installation whose config contains `codexContextWindow`. Ignore the retired override and use native defaults for missing settings while preserving the original file, valid provider configuration and stored credentials.
+- Cover legacy numeric/null settings in both terminal interfaces, native provider authentication, anonymous Rooxcode access and installer preservation. Invalid native configuration still fails without resetting user settings.
+
 ## [0.3.26] - 2026-11-04
 
 ### Changed

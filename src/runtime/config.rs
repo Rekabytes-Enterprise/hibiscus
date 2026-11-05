@@ -104,9 +104,9 @@ pub fn load() -> Result<Config> {
     let mut config: Config = match fs::read(path) {
         Ok(b) => {
             let raw: serde_json::Value = serde_json::from_slice(&b)?;
-            if raw.get("codexContextWindow").is_some() && raw.get("providers").is_none() {
-                return Err("Legacy config.json needs native providers/model configuration. See docs/native-runtime.md; original configuration is unchanged.".into());
-            }
+            // Older installers wrote codexContextWindow. It no longer applies;
+            // ignore it like other unknown fields and use native defaults for
+            // missing settings, without rewriting the user's configuration.
             serde_json::from_value(raw)?
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::from_str("{}")?,

@@ -676,19 +676,8 @@ fn project_instructions_and_skill_catalog_enter_native_prompt() {
     assert!(system.contains("Available project skill: example"));
     assert!(system.contains("Writing guidance"));
 }
-#[test]
-fn legacy_configuration_is_rejected_with_migration_guidance() {
-    let f = Fixture::new("responses", vec![]);
-    fs::write(
-        f.root.join("app/config.json"),
-        "{\"codexContextWindow\":1000000}",
-    )
-    .unwrap();
-    let o = f.run("", &["hello"]);
-    assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("Legacy config.json"));
-    assert!(f.captured().is_empty());
-}
+#[path = "native_runtime/config.rs"]
+mod config;
 #[test]
 fn malformed_tool_arguments_fail_before_any_execution() {
     let bad = sse(
