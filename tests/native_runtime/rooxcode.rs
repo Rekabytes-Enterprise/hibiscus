@@ -91,6 +91,10 @@ fn assert_metadata(f: &Fixture) -> String {
 #[test]
 fn rooxcode_no_key_discovery_streaming_tools_and_credentials_are_isolated() {
     let f = Fixture::new("chat_completions", vec![tool(), done("ROOX_COMPLETE")]);
+    let path = f.root.join("app/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["codexContextWindow"] = json!(1_000_000);
+    fs::write(&path, config.to_string()).unwrap();
     let before = setup(&f, json!([{"id":"dynamic-first"},{"id":"operator/second"}]));
     use std::os::unix::fs::PermissionsExt;
     let auth = f.root.join("app/auth.json");

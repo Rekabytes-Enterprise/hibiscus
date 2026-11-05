@@ -122,7 +122,7 @@ Keys/tokens in `.pi`, Codex or Claude stores are never read. Claude browser logi
 
 ## Existing data
 
-A legacy config containing only `codexContextWindow` stops with migration guidance. Back it up and replace it with an explicit native provider/model configuration. The old blanket context override is not applied to direct API models.
+From v0.3.27, legacy configs containing `codexContextWindow` start automatically with native defaults for missing settings. Update Hibiscus and restart; no config rename, reset or manual migration is needed. The retired blanket context override is ignored. Existing native providers, model preferences and other valid settings still apply, and startup leaves the original config file intact. Invalid native settings or malformed JSON still report an error rather than resetting the configuration.
 
 New sessions use a versioned Hibiscus JSONL format in `sessions/`. Resume and session selection stay scoped to the current canonical workspace. Interrupted native tool calls receive an explicit unknown-outcome result on resume; they are never re-executed automatically. An original Pi session is rejected rather than interpreted as native history. There is no automatic Pi session or credential importer in this version. Existing files outside Hibiscus remain untouched.
 
