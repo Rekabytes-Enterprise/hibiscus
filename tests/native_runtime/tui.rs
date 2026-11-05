@@ -243,6 +243,9 @@ fn failed_run_returns_undelivered_queued_input_for_review() {
     tty.send(b"native queued text\x11");
     tty.wait_text("rejected queued");
     tty.wait_text("native queued text");
+    // Draft restoration can precede run settlement; commands are usable only
+    // once the normal composer footer returns.
+    tty.wait_text("Enter send");
     tty.send(b"\x03/quit\r");
     tty.finish();
     assert_eq!(f.captured().len(), 1);
