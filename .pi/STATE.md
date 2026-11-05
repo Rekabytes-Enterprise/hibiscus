@@ -1,15 +1,13 @@
 # Current state
 
-## v0.3.24 release preparation
+## v0.3.28 release preparation
 
-The owner requested a new release after reviewing the TUI tool-heading fix and a real CLI screenshot. Prepare v0.3.24 through the existing Hibiscus dev → main PR flow, then create an immutable tag, independently verify the draft assets and publish the stable GitHub Release. No npm registry publication or deployment is requested.
+The owner requested a new release after local Rooxcode thinking implementation. Prepare the patch through dev and main in Rekabytes-Enterprise/hibiscus, then verify and publish the signed GitHub Release. This request supersedes the preceding local-only scope. No registry publication or gateway deployment is included.
 
-The TUI now shows one hibi heading above the first genuine tool activity or visible assistant prose in each user turn. Later tools/prose reuse it; a new user message resets it. Empty provider chunks and ordinary notices create no orphan headings. Cache complete user turns so live streaming and replay match uncached formatting. Runtime/providers and CLI behavior are unchanged.
+The patch validates advertised per-model reasoning efforts, exposes Default plus supported levels in CLI/TUI, and sends reasoning_effort only for explicit Rooxcode choices. Default omits the field and does not imply disabled upstream reasoning; advertised none remains distinct. Selection survives tool/length continuation, compaction and resume. Successful catalog/model changes reset unsupported choices with a durable reset and short notice; failed discovery preserves the choice and blocks unavailable inference. Existing providers and anonymous credential isolation remain unchanged.
 
-Pre-bump verification: 220 unit and 91 native fixture tests, strict all-target Clippy and fmt/diff checks passed. Real isolated TUI/CLI captures executed reads, a failing test, an edit, passing tests and Bash checks through eight loopback responses; images inspected. No live account/provider inference. Post-bump full Rust tests (220 unit, 91 native and the Python evaluation launcher), strict Clippy with fuzzing, curated fuzz replay, fmt/diff, installer/version-bump and offline npm checks pass. Secret scan and remote PR/release gates are pending.
+Local implementation verification passed 227 unit tests, 107 native integration fixtures and the evaluation test, strict all-target Clippy with fuzzing, formatting and diff checks. Real CLI/TUI PTYs and captured request bodies cover selectors, headers, resets, lifecycle, cancellation and other-provider behavior. The v0.3.28 version-sensitive Rust suite, strict Clippy, parser corpus, installer/version/npm checks and formatting/diff checks passed. Hosted checks and signed archive verification remain pending.
 
-## Published baseline
+The adjacent gateway contract/source was read without changes. Production must advertise reasoning:true with per-model reasoning_efforts and accept matching request values. No live upstream inference or deployment verification is claimed.
 
-v0.3.23 is published latest/stable from main 3071c7549b3e1e888a98d115a3debea5706fe132. Dev 1b3b1cc8d20d9413df7147fa422be96779d49b1f has the same tree and includes main as an ancestor. Its release workflow, signed platform archives, anonymous public downloads and temporary-home installer were verified. Existing releases/tags must remain immutable.
-
-The owner deferred security-score chasing and repository-age eligibility. Separate issue 31/32/34 work, Keychain/SBOM and the Best Practices assessment are unchanged.
+Previous v0.3.27 remains published latest until this release is verified and published. It fixed startup for retired codexContextWindow configs while preserving native settings, original files and credentials. PR114/115/116 passed; main9cc88ab and dev428201a had matching trees and correct ancestry. Its four signed archives, public downloads, installer and isolated old-updater flow were verified. The old v0.3.25 intermediate tag/draft remains immutable and unpublished; its changes shipped in v0.3.26. Security-score/age eligibility and unrelated tasks remain deferred.

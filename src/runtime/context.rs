@@ -134,7 +134,7 @@ pub(super) async fn summarize(
             len = prefix_len(remaining, len / 2);
         }
         let reply = tokio::select! {
-            result = provider::request(p, m, &chunk, instructions, "off", None, out) => result?,
+            result = provider::request(p, m, &chunk, instructions, &chunk.thinking, None, out) => result?,
             _ = cancel.changed() => return Err("Cancelled compact; history unchanged".into()),
         };
         summary = reply.message.text();

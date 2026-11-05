@@ -37,6 +37,8 @@ pub struct Model {
     #[serde(default)]
     pub reasoning: bool,
     #[serde(default)]
+    pub reasoning_efforts: Vec<super::thinking::ReasoningEffort>,
+    #[serde(default)]
     pub images: bool,
 }
 fn default_output() -> u64 {
@@ -76,6 +78,7 @@ fn model(id: &str) -> Model {
         max_messages: None,
         max_tokens: 4096,
         reasoning: false,
+        reasoning_efforts: vec![],
         images: true,
     }
 }

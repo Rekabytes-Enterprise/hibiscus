@@ -11,6 +11,7 @@ mod provider;
 mod rooxcode;
 mod run;
 mod session;
+mod thinking;
 pub(crate) mod tool_output;
 mod tools;
 pub(crate) mod transport;

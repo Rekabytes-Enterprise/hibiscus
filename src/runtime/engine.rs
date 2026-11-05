@@ -100,7 +100,7 @@ pub fn serve(socket: UnixStream, config: Config, session: Session) -> Result<()>
         .build()?
         .block_on(serve_async(socket, config, session))
 }
-async fn serve_async(socket: UnixStream, mut config: Config, mut session: Session) -> Result<()> {
+async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -> Result<()> {
     socket.set_nonblocking(true)?;
     let (reader, mut writer) = tokio::net::UnixStream::from_std(socket)?.into_split();
     let (commands, mut input) = mpsc::channel(64);
@@ -133,18 +133,14 @@ async fn serve_async(socket: UnixStream, mut config: Config, mut session: Sessio
         Ok::<_, std::io::Error>(())
     });
     let mut catalog_error = None;
-    if session
+    let discover = session
         .model
         .as_ref()
-        .is_none_or(|(p, _)| p == super::rooxcode::ID)
-    {
-        catalog_error = super::rooxcode::refresh(&mut config)
-            .await
-            .err()
-            .map(|e| e.to_string());
-        select_rooxcode(&mut session, &config);
-    }
+        .is_none_or(|(p, _)| p == super::rooxcode::ID);
     let session = Arc::new(Mutex::new(session));
+    if discover {
+        catalog_error = refresh_rooxcode(&mut config, &session, &out).await?;
+    }
     let queue = Arc::new(Mutex::new(Queue::default()));
     let mut config = Arc::new(config);
     let extensions = Arc::new(crate::extensions::Catalog::new(
@@ -400,10 +396,11 @@ async fn serve_async(socket: UnixStream, mut config: Config, mut session: Sessio
                     .as_deref()
                     .is_none_or(|m| m.starts_with("rooxcode/"))
                 {
-                    catalog_error = super::rooxcode::refresh(Arc::make_mut(&mut config))
-                        .await
-                        .err()
-                        .map(|e| e.to_string());
+                    catalog_error = match super::rooxcode::refresh(Arc::make_mut(&mut config)).await
+                    {
+                        Ok(status) => status.warning().map(str::to_owned),
+                        Err(error) => Some(error.to_string()),
+                    };
                 }
                 match Session::open(&super::bridge::SessionStart::New, &config) {
                     Ok(mut next) => {
@@ -423,17 +420,16 @@ async fn serve_async(socket: UnixStream, mut config: Config, mut session: Sessio
                     &config,
                 ) {
                     Ok(next) => {
-                        if next
+                        let discover = next
                             .model
                             .as_ref()
-                            .is_some_and(|(p, _)| p == super::rooxcode::ID)
-                        {
-                            catalog_error = super::rooxcode::refresh(Arc::make_mut(&mut config))
-                                .await
-                                .err()
-                                .map(|e| e.to_string());
-                        }
+                            .is_some_and(|(p, _)| p == super::rooxcode::ID);
                         *session.lock().unwrap() = next;
+                        if discover {
+                            catalog_error =
+                                refresh_rooxcode(Arc::make_mut(&mut config), &session, &out)
+                                    .await?;
+                        }
                         emit(&out, response(&id, json!({}))).await?;
                     }
                     Err(error) => emit(&out, failure(&id, &error.to_string())).await?,
@@ -441,11 +437,8 @@ async fn serve_async(socket: UnixStream, mut config: Config, mut session: Sessio
             }
             Command::GetAvailableModels => {
                 if !busy {
-                    catalog_error = super::rooxcode::refresh(Arc::make_mut(&mut config))
-                        .await
-                        .err()
-                        .map(|e| e.to_string());
-                    select_rooxcode(&mut session.lock().unwrap(), &config);
+                    catalog_error =
+                        refresh_rooxcode(Arc::make_mut(&mut config), &session, &out).await?;
                 }
                 let models = config.providers.iter().flat_map(|p| p.models.iter().map(move |m| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window,"reasoning":m.reasoning}))).collect::<Vec<_>>();
                 emit(
@@ -455,6 +448,7 @@ async fn serve_async(socket: UnixStream, mut config: Config, mut session: Sessio
                 .await?;
             }
             command => {
+                let mut thinking_reset = false;
                 let result = (|| -> Result<Value> {
                     let mut s = session.lock().unwrap();
                     match command {
@@ -472,9 +466,10 @@ async fn serve_async(socket: UnixStream, mut config: Config, mut session: Sessio
                             Ok(json!({"output":super::tool_output::get(&s.messages, index)}))
                         }
                         Command::GetSessionStats => Ok(s.stats(&config)),
-                        Command::GetAvailableThinkingLevels => Ok(
-                            json!({"levels":if s.selected(&config).is_ok_and(|(p,m)|m.reasoning&&p.api==config::Api::Responses){vec!["off","low","medium","high"]}else{vec!["off"]}}),
-                        ),
+                        Command::GetAvailableThinkingLevels => {
+                            let (p, m) = s.selected(&config)?;
+                            Ok(json!({"levels":super::thinking::Policy::for_model(p, m).levels()}))
+                        }
                         Command::SetModel { provider, model_id } if !busy => {
                             let selected = config
                                 .providers
@@ -484,28 +479,40 @@ async fn serve_async(socket: UnixStream, mut config: Config, mut session: Sessio
                             if selected.is_none() {
                                 return Err("Model is not configured".into());
                             }
+                            let previous = (s.model.clone(), s.thinking.clone(), s.context);
+                            let rooxcode = provider == super::rooxcode::ID;
                             s.model = Some((provider, model_id));
-                            s.thinking = "off".into();
+                            if rooxcode {
+                                thinking_reset = s.reconcile_rooxcode_thinking(&config);
+                            } else {
+                                s.thinking = "off".into();
+                            }
                             s.context = None;
-                            s.save()?;
+                            if let Err(error) = s.save() {
+                                (s.model, s.thinking, s.context) = previous;
+                                thinking_reset = false;
+                                return Err(error);
+                            }
                             Ok(s.state(&config))
                         }
                         Command::SetThinkingLevel { level } if !busy => {
                             let (p, m) = s.selected(&config)?;
-                            if level != "off"
-                                && (!m.reasoning
-                                    || p.api != config::Api::Responses
-                                    || !matches!(level.as_str(), "low" | "medium" | "high"))
-                            {
-                                return Err("Unsupported thinking level for selected model".into());
+                            let level = super::thinking::Policy::for_model(p, m)
+                                .requested(&level)
+                                .ok_or("Unsupported thinking level for selected model")?;
+                            let previous = std::mem::replace(&mut s.thinking, level);
+                            if let Err(error) = s.save() {
+                                s.thinking = previous;
+                                return Err(error);
                             }
-                            s.thinking = level;
-                            s.save()?;
                             Ok(json!({}))
                         }
                         _ => Err("Command unavailable while a run is active".into()),
                     }
                 })();
+                if thinking_reset {
+                    emit(&out, Event::ThinkingReset.wire()).await?;
+                }
                 emit(
                     &out,
                     match result {
@@ -845,5 +852,36 @@ fn select_rooxcode(session: &mut Session, config: &Config) {
             .iter()
             .find(|p| p.id == super::rooxcode::ID)
             .and_then(|p| p.models.first().map(|m| (p.id.clone(), m.id.clone())));
+    }
+}
+
+/// A failed discovery clears the unusable catalog but is not evidence that a
+/// saved effort was removed. Only an authoritative catalog can reset it.
+async fn refresh_rooxcode(
+    config: &mut Config,
+    session: &Mutex<Session>,
+    out: &mpsc::Sender<Value>,
+) -> Result<Option<String>> {
+    match super::rooxcode::refresh(config).await {
+        Ok(status) => {
+            let reset = {
+                let mut s = session.lock().unwrap();
+                select_rooxcode(&mut s, config);
+                let previous = s.thinking.clone();
+                let reset = s.reconcile_rooxcode_thinking(config);
+                if reset {
+                    if let Err(error) = s.save() {
+                        s.thinking = previous;
+                        return Err(error);
+                    }
+                }
+                reset
+            };
+            if reset {
+                emit(out, Event::ThinkingReset.wire()).await?;
+            }
+            Ok(status.warning().map(str::to_owned))
+        }
+        Err(error) => Ok(Some(error.to_string())),
     }
 }
