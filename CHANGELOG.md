@@ -4,6 +4,11 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.29] - 2026-11-08
+
+### Added
+
+- Built-in OpenRouter (`OPENROUTER_API_KEY`) and OpenCode Go (`OPENCODE_API_KEY`) API-key providers. With a key, Hibiscus loads each provider's own model list at startup and when opening `/models`, using the context window, image and reasoning support it reports and skipping models without tool support. No `max_tokens` is sent, so each provider applies its own output limit. `/login` → API Key shows where to create the key, then opens the model picker. Listing `models` for either provider in `config.json` turns discovery off for it.
 ## [0.3.28] - 2026-11-05
 
 ### Added
