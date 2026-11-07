@@ -860,12 +860,19 @@ fn inline_login<R: BufRead>(
                 .map(SessionStart::Selected)
                 .unwrap_or(SessionStart::New);
             rpc.reconnect(start)?;
-            if let Some(model) = crate::runtime::config::load()?
-                .providers
-                .iter()
-                .find(|p| p.id == provider)
-                .and_then(|p| p.models.first())
-            {
+            let configured = crate::runtime::config::load()?;
+            let configured = configured.providers.iter().find(|p| p.id == provider);
+            if configured.is_some_and(|p| p.models.is_empty()) {
+                // Catalog providers load their models at runtime; let the user pick one.
+                choose_model(
+                    rpc,
+                    input,
+                    output,
+                    interactive,
+                    events.as_ref().map(|keys| &keys.receiver),
+                    raw,
+                )?;
+            } else if let Some(model) = configured.and_then(|p| p.models.first()) {
                 rpc.request(
                     json!({"type":"set_model","provider":provider,"modelId":model.id}),
                     input,

@@ -58,7 +58,7 @@ Then start a conversation:
 hibiscus
 ```
 
-Rooxcode models are discovered automatically and can be used without an account, login, API key or configuration. Use `/models` to see its currently available models. For other providers, use `/login` to connect through native Codex browser login or a configured provider API key, then `/models` to choose a model. API-key providers use API billing; Codex browser login uses your ChatGPT account and its limits.
+Rooxcode models are discovered automatically and can be used without an account, login, API key or configuration. Use `/models` to see its currently available models. For other providers, use `/login` to connect through native Codex browser login or a configured provider API key, then `/models` to choose a model. OpenRouter and OpenCode Go are built in: add their API key with `/login` and their models appear in `/models` automatically. API-key providers use API billing; Codex browser login uses your ChatGPT account and its limits.
 
 The installer verifies release checksums and places Hibiscus in `~/.local/bin`. It creates `~/.hibiscus/` for native configuration, private credentials, sessions, cache and user extensions. An absolute `HIBISCUS_HOME` selects another data directory. Other provider/model IDs and supported context limits use explicit [configuration](docs/native-runtime.md#provider-configuration); existing credentials or sessions from other applications are not imported. The installed agent requires neither Node.js nor Rust. Node.js is needed only to run the npm installer.
 
