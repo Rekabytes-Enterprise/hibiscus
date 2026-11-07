@@ -158,10 +158,7 @@ impl Screen {
         } else {
             let suggestions = self.picker.is_none();
             let picker = self.picker.as_mut().or(self.suggestions.as_mut())?;
-            picker.move_by(
-                0,
-                height.saturating_sub(3 + 3 * usize::from(picker.query.is_some())),
-            );
+            picker.move_by(0, height.saturating_sub(picker.chrome()));
             modal::picker_panel(picker, width, height, suggestions)
         };
         let top = height.saturating_sub(rows.len());

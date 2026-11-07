@@ -8,7 +8,7 @@ impl Screen {
         current: Option<usize>,
         events: &Receiver<u8>,
     ) -> Result<Option<usize>> {
-        self.select_inner(false, title, items, current, events)
+        self.select_inner(false, title, items, current, None, events)
     }
 
     pub(crate) fn select_searchable(
@@ -16,9 +16,10 @@ impl Screen {
         title: &str,
         items: &[String],
         current: Option<usize>,
+        tabs: Option<Tabs>,
         events: &Receiver<u8>,
     ) -> Result<Option<usize>> {
-        self.select_inner(true, title, items, current, events)
+        self.select_inner(true, title, items, current, tabs, events)
     }
 
     pub(super) fn select_inner(
@@ -27,6 +28,7 @@ impl Screen {
         title: &str,
         items: &[String],
         current: Option<usize>,
+        tabs: Option<Tabs>,
         events: &Receiver<u8>,
     ) -> Result<Option<usize>> {
         if !self.full || items.is_empty() {
@@ -37,16 +39,21 @@ impl Screen {
         if searchable {
             self.picker.as_mut().unwrap().enable_search();
         }
+        if let Some(tabs) = tabs {
+            let rows = self.selectable_rows.len().saturating_sub(7).max(1);
+            let picker = self.picker.as_mut().unwrap();
+            picker.enable_tabs(&tabs.names, tabs.groups, tabs.prefixes, tabs.tab, rows);
+            if !tabs.query.is_empty() {
+                picker.search(&tabs.query, false, rows);
+            }
+        }
         let mut utf8 = Vec::new();
         let mut paste: Option<PasteInput> = None;
         let result = (|| {
             self.render()?;
             loop {
-                let rows = self
-                    .selectable_rows
-                    .len()
-                    .saturating_sub(3 + 3 * usize::from(searchable))
-                    .clamp(1, 5);
+                let chrome = self.picker.as_ref().map_or(3, Picker::chrome);
+                let rows = self.selectable_rows.len().saturating_sub(chrome).max(1);
                 let byte = match events.recv_timeout(Duration::from_millis(100)) {
                     Ok(byte) => byte,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -106,6 +113,7 @@ impl Screen {
                         }
                         key => key,
                     },
+                    b'\t' => Navigation::Right,
                     b'j' => Navigation::Down,
                     b'k' => Navigation::Up,
                     _ => Navigation::Other,
@@ -125,6 +133,8 @@ impl Screen {
                         Navigation::ScrollPage(dir) => picker.page(-(dir as isize), rows),
                         Navigation::Home => picker.move_by(-(picker.items.len() as isize), rows),
                         Navigation::End => picker.move_by(picker.items.len() as isize, rows),
+                        Navigation::Left if !picker.tabs.is_empty() => picker.switch_tab(-1, rows),
+                        Navigation::Right if !picker.tabs.is_empty() => picker.switch_tab(1, rows),
                         _ => continue,
                     }
                 }

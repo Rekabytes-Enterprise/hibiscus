@@ -90,6 +90,32 @@ fn choices(picker: &Picker, width: usize, height: usize) -> Vec<Row> {
     rows
 }
 
+/// Tabs separated by " │ ", the active one in brackets. Leading tabs are dropped
+/// behind "‹ " until the active tab fits.
+fn tab_line(picker: &Picker, width: usize) -> String {
+    let labels = picker
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(i, tab)| {
+            if i == picker.tab {
+                format!("[{tab}]")
+            } else {
+                tab.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut start = 0;
+    loop {
+        let prefix = if start > 0 { "‹ " } else { "" };
+        let shown = labels[start..=picker.tab].join(" │ ");
+        if start == picker.tab || prefix.chars().count() + shown.chars().count() <= width {
+            return format!("{prefix}{}", labels[start..].join(" │ "));
+        }
+        start += 1;
+    }
+}
+
 pub(crate) fn picker_panel(
     picker: &Picker,
     width: usize,
@@ -100,6 +126,8 @@ pub(crate) fn picker_panel(
         "{}   {}/{}",
         if suggestions {
             "↑↓ choose · Tab complete · Enter run · Esc dismiss"
+        } else if !picker.tabs.is_empty() {
+            "←→/Tab provider · ↑↓ move · Enter select · Esc"
         } else {
             "↑↓ move · Enter select · Esc cancel"
         },
@@ -111,6 +139,14 @@ pub(crate) fn picker_panel(
         picker.items.len()
     );
     let mut body = Vec::new();
+    if !picker.tabs.is_empty() {
+        body.push(inner(
+            &tab_line(picker, width.saturating_sub(4)),
+            width,
+            TEXT,
+            '│',
+        ));
+    }
     if let Some(query) = &picker.query {
         body.push(inner("Search models", width, TEXT, '│'));
         let input = if query.is_empty() {
