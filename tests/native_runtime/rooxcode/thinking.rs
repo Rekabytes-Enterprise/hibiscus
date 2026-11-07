@@ -153,7 +153,7 @@ fn roox_thinking_actual_cli_selector_and_model_changes() {
     tty.wait_text("\x1b[?2004h");
     tty.send(b"/models\r");
     tty.wait_text("Choose a number");
-    tty.send(b"3\r");
+    tty.send(b"2\r");
     tty.wait_text("Selected rooxcode/b.");
     tty.wait_text("\x1b[?2004h");
     tty.send(b"first\r");
@@ -161,7 +161,7 @@ fn roox_thinking_actual_cli_selector_and_model_changes() {
     tty.wait_text("\x1b[?2004h");
     tty.send(b"/models\r");
     tty.wait_text("Choose a number");
-    tty.send(b"4\r");
+    tty.send(b"3\r");
     tty.wait_text("Thinking reset to Default");
     tty.wait_text("\x1b[?2004h");
     tty.send(b"/thinking\r");

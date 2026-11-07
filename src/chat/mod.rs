@@ -444,11 +444,12 @@ fn chat<R: BufRead>(
                         writeln!(output, "No saved sessions for this directory.")?;
                     }
                 }
-                "/models" => {
+                _ if message == "/models" || message.starts_with("/models ") => {
                     choose_model(
                         rpc,
                         input,
                         output,
+                        message.strip_prefix("/models"),
                         interactive,
                         events.as_ref().map(|e| &e.receiver),
                         raw,
@@ -860,12 +861,20 @@ fn inline_login<R: BufRead>(
                 .map(SessionStart::Selected)
                 .unwrap_or(SessionStart::New);
             rpc.reconnect(start)?;
-            if let Some(model) = crate::runtime::config::load()?
-                .providers
-                .iter()
-                .find(|p| p.id == provider)
-                .and_then(|p| p.models.first())
-            {
+            let configured = crate::runtime::config::load()?;
+            let configured = configured.providers.iter().find(|p| p.id == provider);
+            if configured.is_some_and(|p| p.models.is_empty()) {
+                // Catalog providers load their models at runtime; let the user pick one.
+                choose_model(
+                    rpc,
+                    input,
+                    output,
+                    Some(provider),
+                    interactive,
+                    events.as_ref().map(|keys| &keys.receiver),
+                    raw,
+                )?;
+            } else if let Some(model) = configured.and_then(|p| p.models.first()) {
                 rpc.request(
                     json!({"type":"set_model","provider":provider,"modelId":model.id}),
                     input,

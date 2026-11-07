@@ -93,7 +93,17 @@ pub(crate) fn sign_in(
     {
         return Err("Unknown provider".into());
     }
-    let Some(answer) = output.auth_input(events, true, || Ok(false))? else {
+    let answer = match super::catalog::key_page(provider) {
+        Some(page) => output.auth_prompt(
+            events,
+            &format!("{provider} API key · create one at {page}"),
+            "Enter API key",
+            true,
+            || Ok(false),
+        )?,
+        None => output.auth_input(events, true, || Ok(false))?,
+    };
+    let Some(answer) = answer else {
         return Ok(AuthOutcome::Cancelled);
     };
     if answer.trim().is_empty() || answer.len() > 8192 || answer.chars().any(char::is_control) {

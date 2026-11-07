@@ -119,7 +119,10 @@ impl Session {
         if session
             .model
             .as_ref()
-            .is_some_and(|(p, _)| p != super::rooxcode::ID)
+            // Rooxcode and catalog providers load their models after the session opens.
+            .is_some_and(|(p, _)| {
+                p != super::rooxcode::ID && !super::catalog::discovered(config, p)
+            })
         {
             session.selected(config)?;
         }
@@ -161,7 +164,10 @@ impl Session {
         if session
             .model
             .as_ref()
-            .is_some_and(|(p, _)| p != super::rooxcode::ID)
+            // Rooxcode and catalog providers load their models after the session opens.
+            .is_some_and(|(p, _)| {
+                p != super::rooxcode::ID && !super::catalog::discovered(config, p)
+            })
         {
             session.selected(config)?;
         }
@@ -211,7 +217,7 @@ impl Session {
             .models
             .iter()
             .find(|v| &v.id == m)
-            .ok_or(if p == super::rooxcode::ID { "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly." } else { "Session model is no longer configured" })?;
+            .ok_or(if p == super::rooxcode::ID { "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly." } else if super::catalog::discovered(config, p) { "The selected model is not in the provider's model list. Use /login to add its API key, or open /models to choose another." } else { "Session model is no longer configured" })?;
         Ok((provider, model))
     }
     pub fn state(&self, config: &Config) -> Value {

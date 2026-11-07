@@ -58,7 +58,7 @@ Then start a conversation:
 hibiscus
 ```
 
-Rooxcode models are discovered automatically and can be used without an account, login, API key or configuration. Use `/models` to see its currently available models. For other providers, use `/login` to connect through native Codex browser login or a configured provider API key, then `/models` to choose a model. API-key providers use API billing; Codex browser login uses your ChatGPT account and its limits.
+Rooxcode models are discovered automatically and can be used without an account, login, API key or configuration. Use `/models` to see its currently available models. For other providers, use `/login` to connect through native Codex browser login or a configured provider API key, then `/models` to choose a model. OpenRouter and OpenCode Go are built in: add their API key with `/login` and their models appear in `/models` automatically. API-key providers use API billing; Codex browser login uses your ChatGPT account and its limits.
 
 The installer verifies release checksums and places Hibiscus in `~/.local/bin`. It creates `~/.hibiscus/` for native configuration, private credentials, sessions, cache and user extensions. An absolute `HIBISCUS_HOME` selects another data directory. Other provider/model IDs and supported context limits use explicit [configuration](docs/native-runtime.md#provider-configuration); existing credentials or sessions from other applications are not imported. The installed agent requires neither Node.js nor Rust. Node.js is needed only to run the npm installer.
 
@@ -133,10 +133,10 @@ Inside a chat:
 | `/new` | Open a blank chat while keeping previous sessions saved |
 | `/continue` | Resume the latest saved session in this directory |
 | `/sessions` | Choose and switch sessions |
-| `/models` | Search and choose a model across configured native providers |
+| `/models [provider] [search]` | Choose a model by provider tab and search; `/models provider/model` selects directly |
 | `/thinking [level]` | Choose the active model's supported thinking level (Responses or advertised Rooxcode levels) |
 | `/compact [instructions]` | Summarize older context with the configured provider (model call; original history remains archived) |
-| `/login` | Native Codex browser login or an API key for a configured provider |
+| `/login` | Native Codex browser login or an API key for a configured provider, including OpenRouter and OpenCode Go |
 | `/logout` | Choose a provider and remove its stored credential inside Hibiscus |
 | `/restore` | Restore a failed prompt and images for review, without sending |
 | `/reconnect` | Restart the native runtime connection without replaying requests |

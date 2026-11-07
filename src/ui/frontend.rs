@@ -262,10 +262,11 @@ impl Frontend {
         title: &str,
         items: &[String],
         current: Option<usize>,
+        tabs: Option<crate::tui::Tabs>,
         events: &Receiver<u8>,
     ) -> Result<Option<usize>> {
         match self.tui() {
-            Some(s) => s.select_searchable(title, items, current, events),
+            Some(s) => s.select_searchable(title, items, current, tabs, events),
             None => Ok(None),
         }
     }

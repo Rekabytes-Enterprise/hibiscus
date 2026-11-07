@@ -445,6 +445,112 @@ fn provider_errors_do_not_echo_sensitive_bodies() {
     assert!(!e.contains("secret.invalid"));
 }
 #[test]
+fn catalog_provider_discovers_models_with_its_key_and_sends_no_output_limit() {
+    let reply = format!(
+        "{}data: [DONE]\n\n",
+        sse(json!({"choices":[{"delta":{"content":"CATALOG_OK"},"finish_reason":"stop"}]}))
+    );
+    let f = Fixture::new("chat_completions", vec![(200, reply)]);
+    let config: Value =
+        serde_json::from_slice(&fs::read(f.root.join("app/config.json")).unwrap()).unwrap();
+    let base = config["providers"][0]["baseUrl"].clone();
+    fs::write(
+        f.root.join("app/config.json"),
+        serde_json::to_vec(&json!({"model":"openrouter/a/agent","providers":[
+            {"id":"openrouter","baseUrl":base,"api":"chat_completions","apiKeyEnv":"HIBISCUS_TEST_NATIVE_KEY"}
+        ]}))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        f.root.join("rooxcode-catalog.json"),
+        json!({"status":200,"body":{"data":[
+            {"id":"a/agent","context_length":262144,"top_provider":{"max_completion_tokens":262144},"supported_parameters":["tools"]},
+            {"id":"b/no-tools","supported_parameters":["temperature"]}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let output = f.run("", &["hello"]);
+    good(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("CATALOG_OK"));
+    let request = &f.captured()[0];
+    assert_eq!(request["model"], "a/agent");
+    assert!(request.get("max_tokens").is_none(), "{request}");
+    let headers = f.headers.lock().unwrap().clone();
+    let discovery = headers
+        .iter()
+        .find(|h| h["route"].as_str().unwrap().starts_with("GET /v1/models "))
+        .unwrap();
+    assert!(discovery["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| h[0] == "authorization" && h[1] == "Bearer SYNTHETIC-KEY"));
+}
+/// Rooxcode and OpenRouter both read the mock catalog: 60 models each.
+fn large_catalog(f: &Fixture) {
+    let config: Value =
+        serde_json::from_slice(&fs::read(f.root.join("app/config.json")).unwrap()).unwrap();
+    let base = config["providers"][0]["baseUrl"].clone();
+    fs::write(
+        f.root.join("app/config.json"),
+        serde_json::to_vec(&json!({"model":"openrouter/m0","providers":[
+            {"id":"openrouter","baseUrl":base,"api":"chat_completions","apiKeyEnv":"HIBISCUS_TEST_NATIVE_KEY"},
+            {"id":"rooxcode","baseUrl":base,"api":"chat_completions","authentication":"rooxcode"}
+        ]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let models = (0..60)
+        .map(|i| json!({"id":format!("m{i}"),"context_length":262144,"supported_parameters":["tools"]}))
+        .collect::<Vec<_>>();
+    fs::write(
+        f.root.join("rooxcode-catalog.json"),
+        json!({"status":200,"body":{"data":models}}).to_string(),
+    )
+    .unwrap();
+}
+#[test]
+fn cli_models_summarizes_large_catalogs_filters_by_provider_and_selects_exact_ids() {
+    let f = Fixture::new("chat_completions", vec![]);
+    large_catalog(&f);
+    let output = f.run(
+        "/models\n/models openrouter m1\n/models openrouter/m5\n/quit\n",
+        &[],
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Model providers:"), "{text}");
+    assert!(text.contains("openrouter  60 models") && text.contains("rooxcode  60 models"));
+    let filtered = text.split("Models (sorted by provider):").nth(1).unwrap();
+    assert!(filtered.contains("openrouter/m1") && filtered.contains("openrouter/m19"));
+    let filtered = filtered.split("Model selection requires").next().unwrap();
+    // m1 and m10..m19 only, and no Rooxcode models.
+    assert_eq!(filtered.matches("openrouter/m").count(), 11, "{filtered}");
+    assert!(!filtered.contains("rooxcode/"));
+    assert!(text.contains("Selected openrouter/m5."), "{text}");
+}
+#[test]
+fn tui_models_picker_opens_on_the_current_provider_tab_and_switches_with_tab() {
+    let f = Fixture::new("chat_completions", vec![]);
+    large_catalog(&f);
+    let mut tty = Pty::spawn_with_size(&mut f.command(), false, 120, 32);
+    tty.wait_text("Enter send");
+    tty.send(b"/models\r");
+    tty.wait_text("[openrouter 60]");
+    tty.wait_text("←→/Tab provider");
+    tty.wait_text("262K ctx");
+    tty.send(b"\t");
+    tty.wait_text("[rooxcode 60]");
+    tty.send(b"\t");
+    tty.wait_text("[All 120]");
+    tty.wait_text("openrouter/m0");
+    tty.send(b"\x1b");
+    tty.wait_text("Enter send");
+    tty.send(b"/quit\r");
+    tty.finish();
+}
+#[test]
 fn chat_completions_assembles_fragmented_tool_arguments() {
     let data = format!(
         "{}{}{}data: [DONE]\n\n",
