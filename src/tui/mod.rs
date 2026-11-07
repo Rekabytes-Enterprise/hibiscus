@@ -10,4 +10,5 @@ mod paint;
 mod picker;
 mod screen;
 mod text_clipboard;
+pub(crate) use picker::Tabs;
 pub(crate) use screen::Screen;

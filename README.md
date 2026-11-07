@@ -133,7 +133,7 @@ Inside a chat:
 | `/new` | Open a blank chat while keeping previous sessions saved |
 | `/continue` | Resume the latest saved session in this directory |
 | `/sessions` | Choose and switch sessions |
-| `/models` | Search and choose a model across configured native providers |
+| `/models [provider] [search]` | Choose a model by provider tab and search; `/models provider/model` selects directly |
 | `/thinking [level]` | Choose the active model's supported thinking level (Responses or advertised Rooxcode levels) |
 | `/compact [instructions]` | Summarize older context with the configured provider (model call; original history remains archived) |
 | `/login` | Native Codex browser login or an API key for a configured provider, including OpenRouter and OpenCode Go |

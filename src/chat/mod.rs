@@ -444,11 +444,12 @@ fn chat<R: BufRead>(
                         writeln!(output, "No saved sessions for this directory.")?;
                     }
                 }
-                "/models" => {
+                _ if message == "/models" || message.starts_with("/models ") => {
                     choose_model(
                         rpc,
                         input,
                         output,
+                        message.strip_prefix("/models"),
                         interactive,
                         events.as_ref().map(|e| &e.receiver),
                         raw,
@@ -868,6 +869,7 @@ fn inline_login<R: BufRead>(
                     rpc,
                     input,
                     output,
+                    Some(provider),
                     interactive,
                     events.as_ref().map(|keys| &keys.receiver),
                     raw,

@@ -11,10 +11,16 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::sync::mpsc::Receiver;
 
+/// CLI lists stay numbered up to this size; larger catalogs print a provider summary.
+const CLI_LIST_LIMIT: usize = 50;
+
+/// `request` is the text after `/models`: an exact `provider/model` selects it,
+/// a leading provider name opens that provider, and the rest filters models.
 pub(crate) fn choose_model<R: BufRead>(
     rpc: &mut Client,
     input: &mut R,
     output: &mut Frontend,
+    request: Option<&str>,
     interactive: bool,
     events: Option<&Receiver<u8>>,
     raw: &mut Option<RawMode>,
@@ -52,30 +58,98 @@ pub(crate) fn choose_model<R: BufRead>(
         return Ok(());
     }
     let active = active_index(&models, &state);
-    let selected = if output.is_full() {
+    let name = |model: &Value| {
+        format!(
+            "{}/{}",
+            model["provider"].as_str().unwrap(),
+            model["id"].as_str().unwrap()
+        )
+    };
+    let request = request.map(str::trim).filter(|r| !r.is_empty());
+    let exact = request.and_then(|r| models.iter().position(|m| name(m) == r));
+    let mut providers = models
+        .iter()
+        .map(|m| m["provider"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    providers.dedup();
+    let (tab, query) = match request.map(|r| r.split_once(' ').unwrap_or((r, ""))) {
+        Some((first, rest)) => match providers.iter().position(|p| p.eq_ignore_ascii_case(first)) {
+            Some(tab) => (Some(tab), rest.trim()),
+            None => (None, request.unwrap()),
+        },
+        None => (None, ""),
+    };
+    let selected = if exact.is_some() {
+        exact
+    } else if output.is_full() {
         let Some(keys) = events else { return Ok(()) };
+        let width = models
+            .iter()
+            .map(|m| m["id"].as_str().unwrap().chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(40);
         let labels = models
             .iter()
-            .map(|model| {
-                format!(
-                    "{}/{}",
-                    model["provider"].as_str().unwrap(),
-                    model["id"].as_str().unwrap()
-                )
+            .map(|m| {
+                let id = m["id"].as_str().unwrap();
+                match details(m) {
+                    d if d.is_empty() => id.to_owned(),
+                    d => format!("{id:<width$}  {d}"),
+                }
             })
             .collect::<Vec<_>>();
-        output.select_searchable("Models · all providers", &labels, active, keys)?
+        let start = tab.unwrap_or(if request.is_some() {
+            providers.len()
+        } else {
+            active
+                .and_then(|i| providers.iter().position(|p| *p == models[i]["provider"]))
+                .unwrap_or(0)
+        });
+        let tabs = crate::tui::Tabs {
+            names: providers.iter().map(|p| p.to_string()).collect(),
+            groups: models
+                .iter()
+                .map(|m| providers.iter().position(|p| *p == m["provider"]).unwrap())
+                .collect(),
+            prefixes: models
+                .iter()
+                .map(|m| format!("{}/", m["provider"].as_str().unwrap()))
+                .collect(),
+            tab: start,
+            query: query.to_owned(),
+        };
+        output.select_searchable("Models · all providers", &labels, active, Some(tabs), keys)?
     } else {
+        if request.is_none() && models.len() > CLI_LIST_LIMIT {
+            writeln!(output, "Model providers:")?;
+            for provider in &providers {
+                let count = models.iter().filter(|m| m["provider"] == *provider).count();
+                writeln!(output, "  {provider}  {count} models")?;
+            }
+            writeln!(output, "List one with /models <provider> [search], or select with /models <provider>/<model>.")?;
+            return Ok(());
+        }
+        let terms = query.to_lowercase();
+        let shown = (0..models.len())
+            .filter(|&i| tab.is_none_or(|t| models[i]["provider"] == providers[t]))
+            .filter(|&i| {
+                let label = name(models[i]).to_lowercase();
+                terms.split_whitespace().all(|term| label.contains(term))
+            })
+            .collect::<Vec<_>>();
+        if shown.is_empty() {
+            writeln!(output, "No matching models.")?;
+            return Ok(());
+        }
         writeln!(output, "Models (sorted by provider):")?;
-        for (index, model) in models.iter().enumerate() {
-            let provider = model["provider"].as_str().unwrap();
-            let id = model["id"].as_str().unwrap();
+        for (number, &index) in shown.iter().enumerate() {
             let marker = if Some(index) == active {
                 "  (current)"
             } else {
                 ""
             };
-            writeln!(output, "  {}. {provider}/{id}{marker}", index + 1)?;
+            writeln!(output, "  {}. {}{marker}", number + 1, name(models[index]))?;
         }
         let answer = if let (Some(keys), Some(raw)) = (events, raw.as_mut()) {
             raw.write("Choose a number (Enter to cancel): ")?;
@@ -95,8 +169,8 @@ pub(crate) fn choose_model<R: BufRead>(
         };
         answer
             .and_then(|answer| answer.trim().parse::<usize>().ok())
-            .and_then(|index| index.checked_sub(1))
-            .filter(|index| *index < models.len())
+            .and_then(|number| number.checked_sub(1))
+            .and_then(|number| shown.get(number).copied())
     };
     let Some(index) = selected else { return Ok(()) };
     let provider = models[index]["provider"].as_str().unwrap();
@@ -278,6 +352,30 @@ pub(crate) fn choose_thinking<R: BufRead>(
     Ok(())
 }
 
+/// Short capability notes copied from the runtime catalog, e.g. "1M ctx · img".
+fn details(model: &Value) -> String {
+    let mut parts = vec![];
+    if let Some(n) = model["contextWindow"].as_u64() {
+        parts.push(if n >= 1_000_000 {
+            let tenths = (n + 50_000) / 100_000;
+            if tenths % 10 == 0 {
+                format!("{}M ctx", tenths / 10)
+            } else {
+                format!("{}.{}M ctx", tenths / 10, tenths % 10)
+            }
+        } else {
+            format!("{}K ctx", (n + 500) / 1000)
+        });
+    }
+    if model["images"] == true {
+        parts.push("img".into());
+    }
+    if model["reasoning"] == true {
+        parts.push("reasoning".into());
+    }
+    parts.join(" · ")
+}
+
 fn active_index(models: &[&Value], state: &Value) -> Option<usize> {
     let provider = state["model"]["provider"].as_str()?;
     let id = state["model"]["id"].as_str()?;
@@ -339,6 +437,17 @@ mod tests {
                 "openrouter/Z"
             ]
         );
+    }
+
+    #[test]
+    fn details_summarize_reported_capabilities_only() {
+        assert_eq!(
+            details(&json!({"contextWindow":1048576,"images":true,"reasoning":true})),
+            "1M ctx · img · reasoning"
+        );
+        assert_eq!(details(&json!({"contextWindow":1_050_000})), "1.1M ctx");
+        assert_eq!(details(&json!({"contextWindow":262144})), "262K ctx");
+        assert_eq!(details(&json!({"contextWindow":null})), "");
     }
 
     #[test]

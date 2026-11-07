@@ -24,7 +24,7 @@ use super::{
     markdown::{self, Role, Tone},
     modal::{self, Modal},
     paint::{Cursor, Painter, SYNC_END},
-    picker::Picker,
+    picker::{Picker, Tabs},
 };
 use crate::{
     commands,
