@@ -445,6 +445,50 @@ fn provider_errors_do_not_echo_sensitive_bodies() {
     assert!(!e.contains("secret.invalid"));
 }
 #[test]
+fn catalog_provider_discovers_models_with_its_key_and_sends_no_output_limit() {
+    let reply = format!(
+        "{}data: [DONE]\n\n",
+        sse(json!({"choices":[{"delta":{"content":"CATALOG_OK"},"finish_reason":"stop"}]}))
+    );
+    let f = Fixture::new("chat_completions", vec![(200, reply)]);
+    let config: Value =
+        serde_json::from_slice(&fs::read(f.root.join("app/config.json")).unwrap()).unwrap();
+    let base = config["providers"][0]["baseUrl"].clone();
+    fs::write(
+        f.root.join("app/config.json"),
+        serde_json::to_vec(&json!({"model":"openrouter/a/agent","providers":[
+            {"id":"openrouter","baseUrl":base,"api":"chat_completions","apiKeyEnv":"HIBISCUS_TEST_NATIVE_KEY"}
+        ]}))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        f.root.join("rooxcode-catalog.json"),
+        json!({"status":200,"body":{"data":[
+            {"id":"a/agent","context_length":262144,"top_provider":{"max_completion_tokens":262144},"supported_parameters":["tools"]},
+            {"id":"b/no-tools","supported_parameters":["temperature"]}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let output = f.run("", &["hello"]);
+    good(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("CATALOG_OK"));
+    let request = &f.captured()[0];
+    assert_eq!(request["model"], "a/agent");
+    assert!(request.get("max_tokens").is_none(), "{request}");
+    let headers = f.headers.lock().unwrap().clone();
+    let discovery = headers
+        .iter()
+        .find(|h| h["route"].as_str().unwrap().starts_with("GET /v1/models "))
+        .unwrap();
+    assert!(discovery["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| h[0] == "authorization" && h[1] == "Bearer SYNTHETIC-KEY"));
+}
+#[test]
 fn chat_completions_assembles_fragmented_tool_arguments() {
     let data = format!(
         "{}{}{}data: [DONE]\n\n",

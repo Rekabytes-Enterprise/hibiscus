@@ -141,6 +141,7 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
     if discover {
         catalog_error = refresh_rooxcode(&mut config, &session, &out).await?;
     }
+    let provider_errors = super::catalog::refresh(&mut config).await;
     let queue = Arc::new(Mutex::new(Queue::default()));
     let mut config = Arc::new(config);
     let extensions = Arc::new(crate::extensions::Catalog::new(
@@ -153,7 +154,7 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
             emit(&out, json!({"type":"extension_error","error":warning})).await?;
         }
     }
-    if let Some(error) = &catalog_error {
+    for error in catalog_error.iter().chain(&provider_errors) {
         emit(&out, json!({"type":"provider_error","error":error})).await?;
     }
     let (cancel, _) = watch::channel(false);
@@ -436,10 +437,17 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                 }
             }
             Command::GetAvailableModels => {
+                let mut errors = vec![];
                 if !busy {
                     catalog_error =
                         refresh_rooxcode(Arc::make_mut(&mut config), &session, &out).await?;
+                    errors = super::catalog::refresh(Arc::make_mut(&mut config)).await;
                 }
+                let catalog_error = catalog_error
+                    .iter()
+                    .chain(&errors)
+                    .cloned()
+                    .reduce(|a, b| format!("{a}\n{b}"));
                 let models = config.providers.iter().flat_map(|p| p.models.iter().map(move |m| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window,"reasoning":m.reasoning}))).collect::<Vec<_>>();
                 emit(
                     &out,

@@ -66,6 +66,9 @@ pub struct Config {
     pub model: Option<String>,
     #[serde(default = "default_steps")]
     pub max_steps: usize,
+    /// Providers whose models come from their own catalog at runtime.
+    #[serde(skip)]
+    pub(super) discovered: std::collections::HashSet<String>,
 }
 fn default_steps() -> usize {
     64
@@ -130,6 +133,7 @@ pub fn load() -> Result<Config> {
         });
     }
     super::rooxcode::install(&mut config);
+    super::catalog::install(&mut config);
     let mut ids = std::collections::HashSet::new();
     for p in &config.providers {
         super::rooxcode::validate_provider(p)?;
