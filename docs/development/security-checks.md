@@ -1,8 +1,16 @@
 # Security checks and protected branches
 
-Pull requests into `dev` and `main` run the same checks. Contributor changes target
-`dev`; releases promote a tested `dev` revision into `main`. Dependency security
-fixes may target the default branch directly and receive the same checks.
+Checks run once, where code changes. Pull requests into `dev` and pushes to `dev`
+run the full suite. A release promotion, a PR from this repository's `dev` into
+`main`, skips every job: its commit is `dev`'s tip, which already passed on the push
+to `dev`, and those results satisfy `main`'s required checks because results belong
+to the commit. Every other PR into `main`, such as dependency security fixes or a
+fork's branch named `dev`, runs the full suite. Pushes to `main` are merges of
+checked PRs and run nothing new; the default-branch schedules (daily dependency
+audit and fuzzing, weekly CodeQL) keep checking `main`.
+
+Contributor changes target `dev`; releases promote a tested `dev` revision into
+`main`.
 
 After merging a release promotion into `main`, open a PR from a branch based on
 that released main commit back into `dev`. Use a merge commit for this sync to
