@@ -4,6 +4,11 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Desktop app (`desktop/`, Tauri v2 + Svelte): a sidebar of sessions by folder, chat with Markdown, highlighted code blocks and copy buttons, grouped tool calls with edit diffs, a session details panel, a branch diff view, image attachments, and a Settings page for providers. Not yet packaged for release.
+- `hibiscus::desktop` library API used by the app: start engines per project folder, send commands, read events, save or remove credentials, sign in to Codex through the browser, and list sessions. See `docs/desktop/`.
+
 ## [0.3.30] - 2026-11-08
 
 ### Added

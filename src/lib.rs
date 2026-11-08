@@ -4,6 +4,7 @@ mod chat;
 mod checkpoints;
 mod cli;
 mod client;
+pub mod desktop;
 mod engine;
 mod extensions;
 mod paths;

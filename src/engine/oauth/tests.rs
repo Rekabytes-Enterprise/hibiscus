@@ -122,3 +122,42 @@ fn cancelling_pending_login_releases_callback_without_touching_credentials() {
     assert!(server.requests.lock().unwrap().is_empty());
     assert_eq!(fs::read(store.path()).unwrap(), before);
 }
+#[test]
+fn desktop_sign_in_saves_pasted_login_and_failure_keeps_previous_one() {
+    let temp = Temp::new();
+    let store = temp.store();
+    store.write(&token()).unwrap();
+    let before = fs::read(store.path()).unwrap();
+    let server = Server::new(vec![(200, receipt("account-b", "new-refresh"))]);
+    let redirect = |sign_in: &CodexSignIn, state: Option<&str>| {
+        let url = reqwest::Url::parse(sign_in.url()).unwrap();
+        let get = |name: &str| {
+            url.query_pairs()
+                .find(|(k, _)| k == name)
+                .unwrap()
+                .1
+                .into_owned()
+        };
+        format!(
+            "{}?state={}&code=FAKE-CODE",
+            get("redirect_uri"),
+            state.map_or_else(|| get("state"), str::to_owned)
+        )
+    };
+    runtime().block_on(async {
+        let wrong = CodexSignIn::with(protocol::Pending::local(), &server.endpoint).unwrap();
+        wrong
+            .paste()
+            .send(redirect(&wrong, Some("other")))
+            .await
+            .unwrap();
+        assert!(wrong.finish_at(&store, &server.endpoint).await.is_err());
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+
+        let right = CodexSignIn::with(protocol::Pending::local(), &server.endpoint).unwrap();
+        right.paste().send(redirect(&right, None)).await.unwrap();
+        right.finish_at(&store, &server.endpoint).await.unwrap();
+    });
+    assert_eq!(store.read().unwrap().unwrap().refresh, "new-refresh");
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
+}

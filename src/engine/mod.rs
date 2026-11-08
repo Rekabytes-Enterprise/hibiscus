@@ -16,6 +16,7 @@ mod thinking;
 pub(crate) mod tool_output;
 mod tools;
 
+pub use oauth::CodexSignIn;
 pub(crate) use session::SessionStart;
 
 /// Quota derives from the actual native catalog, including extension authoring tools.

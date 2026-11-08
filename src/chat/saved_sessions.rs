@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 pub(crate) struct SessionInfo {
     pub(crate) path: PathBuf,
     pub(crate) title: String,
-    modified: SystemTime,
+    pub(crate) modified: SystemTime,
 }
 
 fn session_dir(_cwd: &Path) -> Result<PathBuf> {
