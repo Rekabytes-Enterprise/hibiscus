@@ -31,9 +31,16 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/coverage-tools"
-          curl --fail --silent --show-error --location --max-time 120 \
-            https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz \
-            --output "$RUNNER_TEMP/coverage-tool.tar.gz"
+          # github.com release downloads can return 504 for minutes; retry, then use the API route.
+          # The checksum below is verified either way.
+          name=cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz
+          fetch() { curl --fail --silent --show-error --location --max-time 120 --retry 4 --retry-all-errors --retry-delay 10 "$@"; }
+          if ! fetch "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/$name" --output "$RUNNER_TEMP/coverage-tool.tar.gz"; then
+            asset=$(fetch -H 'Accept: application/vnd.github+json' https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/tags/v0.9.1 |
+              jq -r --arg name "$name" '.assets[] | select(.name == $name) | .url')
+            case "$asset" in https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/*) ;; *) exit 1 ;; esac
+            fetch -H 'Accept: application/octet-stream' "$asset" --output "$RUNNER_TEMP/coverage-tool.tar.gz"
+          fi
           printf '%s  %s\n' 3fca950394a3c49457657c158b1619cec8dfd2647ae5b48746734c0ab969a522 "$RUNNER_TEMP/coverage-tool.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/coverage-tool.tar.gz" -C "$RUNNER_TEMP/coverage-tools" cargo-llvm-cov
       - name: Test coverage evidence handling
