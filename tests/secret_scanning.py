@@ -133,6 +133,19 @@ class SecretScanning(unittest.TestCase):
             policy.unpack_verified(b'not an executable', '0' * 64, destination)
         self.assertFalse(destination.exists())
 
+    def test_scanner_download_retries_server_errors_and_reports_the_real_failure(self):
+        import io
+        import urllib.error
+        from unittest import mock
+        busy = lambda: urllib.error.HTTPError('https://github.com/x', 503, 'Unavailable', {}, None)
+        with mock.patch.object(policy.time, 'sleep'), \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[busy(), io.BytesIO(b'archive')]):
+            self.assertEqual(policy.download('https://github.com/x', 100, policy.ScanError), b'archive')
+        with mock.patch.object(policy.time, 'sleep'), \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[busy() for _ in range(5)]):
+            with self.assertRaisesRegex(policy.ScanError, 'Download failed: HTTP 503 from github.com'):
+                policy.download('https://github.com/x', 100, policy.ScanError)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

@@ -256,6 +256,25 @@ class ReleasePolicy(unittest.TestCase):
             run.assert_not_called()
         self.assertFalse(directory.exists())
 
+    def test_tool_download_retries_server_errors_and_reports_the_real_failure(self):
+        import urllib.error
+        busy = lambda: urllib.error.HTTPError('https://github.com/x', 504, 'Gateway Time-out', {}, None)
+        with mock.patch.object(policy.time, 'sleep') as sleep, \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[busy(), busy(), io.BytesIO(b'archive')]):
+            self.assertEqual(policy.download('https://github.com/x', 100, policy.InvalidProvenance), b'archive')
+        self.assertEqual(sleep.call_count, 2)
+        with mock.patch.object(policy.time, 'sleep') as sleep, \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[busy() for _ in range(5)]):
+            with self.assertRaisesRegex(policy.InvalidProvenance, 'Download failed: HTTP 504 from github.com'):
+                policy.download('https://github.com/x', 100, policy.InvalidProvenance)
+        self.assertEqual(sleep.call_count, 4)
+        missing = urllib.error.HTTPError('https://github.com/x', 404, 'Not Found', {}, None)
+        with mock.patch.object(policy.time, 'sleep') as sleep, \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[missing]):
+            with self.assertRaisesRegex(policy.InvalidProvenance, 'HTTP 404'):
+                policy.download('https://github.com/x', 100, policy.InvalidProvenance)
+        sleep.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

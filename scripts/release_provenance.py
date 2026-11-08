@@ -17,6 +17,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from typing import Union
@@ -267,6 +270,25 @@ def verify_release(artifacts: dict, bundle: Path, expected: Union[ExpectedReleas
     verified_statement(result.stdout, expected, artifacts)
 
 
+def download(request, limit, error):
+    """Fetches a pinned tool archive; the caller verifies its checksum. GitHub release
+    downloads sometimes fail with 5xx or time out on CI runners, so retry first."""
+    delays = (5, 10, 20, 40)
+    for attempt in range(len(delays) + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read(limit + 1)
+        except urllib.error.HTTPError as failure:
+            if failure.code < 500 or attempt == len(delays):
+                host = urllib.parse.urlsplit(failure.url or "").netloc or "the download host"
+                raise error(f"Download failed: HTTP {failure.code} from {host}") from failure
+        except OSError as failure:
+            if attempt == len(delays):
+                reason = getattr(failure, "reason", failure)
+                raise error(f"Download failed: {type(reason).__name__}") from failure
+        time.sleep(delays[attempt])
+
+
 def install_verifier(directory):
     selection = VERIFIER_ARCHIVES.get((platform.system(), platform.machine()))
     require(selection is not None, "Unsupported CI verifier platform")
@@ -274,8 +296,7 @@ def install_verifier(directory):
     root = f"gh_{VERIFIER_VERSION}_{target}"
     url = f"https://github.com/cli/cli/releases/download/v{VERIFIER_VERSION}/{root}.{extension}"
     request = urllib.request.Request(url, headers={"User-Agent": "hibiscus-provenance-ci"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        data = response.read(256 * 1024 * 1024 + 1)
+    data = download(request, 256 * 1024 * 1024, InvalidProvenance)
     require(len(data) <= 256 * 1024 * 1024 and hashlib.sha256(data).hexdigest() == expected,
             "CI verifier archive digest mismatch")
     member = f"{root}/bin/gh"
