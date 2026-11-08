@@ -1,6 +1,8 @@
 //! Fullscreen state and session presentation.
 mod events;
 mod input;
+mod picker;
+mod prompt;
 mod render;
 use crate::ui::{
     display::*,
@@ -27,7 +29,7 @@ use super::{
     picker::{Picker, Tabs},
 };
 use crate::{
-    commands,
+    chat::commands,
     ui::{format::compact_tokens, text::base64},
     Result,
 };
@@ -209,7 +211,7 @@ pub(crate) struct Screen {
     suspended: bool,
     color: bool,
     painter: Painter,
-    diagnostics: crate::runtime::diagnostics::Diagnostics,
+    diagnostics: crate::client::diagnostics::Diagnostics,
     diagnostic_revision: u64,
     last_paint: Option<Instant>,
     paint_pending: bool,
@@ -271,14 +273,14 @@ impl Screen {
         Self::with_diagnostics(
             interactive,
             false,
-            crate::runtime::diagnostics::Diagnostics::default(),
+            crate::client::diagnostics::Diagnostics::default(),
         )
     }
 
     pub(crate) fn with_diagnostics(
         interactive: bool,
         color: bool,
-        diagnostics: crate::runtime::diagnostics::Diagnostics,
+        diagnostics: crate::client::diagnostics::Diagnostics,
     ) -> io::Result<Self> {
         let out = io::stdout();
         // Capability selection belongs to ui::Frontend. Once selected, a

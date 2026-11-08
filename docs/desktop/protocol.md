@@ -1,6 +1,6 @@
 # Engine protocol
 
-The records exchanged with `hibiscus::desktop::Engine`. They are the same JSON records the TUI exchanges with the engine (`src/runtime/engine.rs`, `src/runtime/event.rs`). This page describes the current behaviour; the code is the authority.
+The records exchanged with `hibiscus::desktop::Engine`. They are the same JSON records the TUI exchanges with the engine (`src/engine/agent.rs`, `src/engine/event.rs`). This page describes the current behaviour; the code is the authority.
 
 Back to the [desktop plan](README.md).
 

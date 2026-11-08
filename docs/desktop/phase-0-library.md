@@ -1,6 +1,6 @@
 # Phase 0: library API
 
-Status: **done** (`src/desktop.rs`, `src/runtime/embed.rs`, `tests/desktop_api.rs`).
+Status: **done** (`src/desktop.rs`, `src/client/embed.rs`, `tests/desktop_api.rs`).
 
 Goal: let a program other than the terminal UI start the engine, send commands and read events. **No user-visible change.** The CLI and TUI keep their current behaviour and tests.
 
@@ -42,7 +42,7 @@ Unix sockets, `/bin/sh`, process groups and `0600` files all work on macOS and L
 - Any Tauri code, frontend or packaging (Phase 1).
 - Windows support.
 - Changing the protocol itself. If the desktop app needs a new command, add it in Phase 1 with a test.
-- Anything in `runtime/rooxcode.rs` or the Rooxcode Gateway.
+- Anything in `engine/rooxcode.rs` or the Rooxcode Gateway.
 
 ## Tests
 

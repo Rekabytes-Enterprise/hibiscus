@@ -8,7 +8,7 @@ Back to the [desktop plan](README.md).
 
 About 21 files rely on Unix-only features, and none of them work on Windows as written:
 
-- the Unix socket between the UI and the engine (`runtime/bridge.rs`, `runtime/transport.rs`);
+- the Unix socket between the UI and the engine (`client/bridge/`, `client/transport.rs`);
 - `/bin/sh` for the shell tool;
 - process groups and `libc` signals for stopping tools;
 - `0600` file permissions for `auth.json` and sessions;

@@ -32,7 +32,7 @@ Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, se
 
 ## Making a change
 
-1. Keep the change focused and follow the [module map](docs/architecture.md). Shared workflows belong in `src/chat/`, the agent in `src/runtime/`, extensions in `src/extensions/`, file recovery in `src/checkpoints/`, and presentation in `src/cli/`, `src/tui/` or `src/ui/`. Update docs when usage, layout, or behavior changes.
+1. Keep the change focused and follow the [module map](docs/architecture.md). Shared workflows belong in `src/chat/`, the agent in `src/engine/`, its terminal client in `src/client/`, extensions in `src/extensions/`, file recovery in `src/checkpoints/`, and presentation in `src/cli/`, `src/tui/` or `src/ui/`. Update docs when usage, layout, or behavior changes.
 2. Add automated tests for every major new feature. For other behavior changes and bug fixes, add a unit or integration regression test when feasible and explain any testing gap in the PR. Local HTTP fixtures are suitable for provider behavior; use a controlling PTY for input/rendering/authentication behavior. Drain PTY output concurrently.
 3. Run:
 
