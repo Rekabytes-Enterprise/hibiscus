@@ -15,14 +15,14 @@ The app's version comes from the root `package.json` (`"version": "../../package
 
 ## How a release runs
 
-1. **verify** resolves the tag to a commit and accepts it only if it is on `main`. A manual build-only run (no tag) may also use `dev`.
-2. **macos_arm64** and **linux_x64** check out exactly that commit, without credentials, run `npm ci`, and build with Tauri. Each records the SHA-256 of its file.
+1. **verify** takes the commit that triggered the run and accepts it only if it is on `main`. A manual build-only run may also use `dev`.
+2. **macos_arm64** and **linux_x64** check out that same triggering commit, without credentials, confirm it is the authorized one, run `npm ci`, and build with Tauri. Each records the SHA-256 of its file.
 3. **provenance** checks both files against those digests, signs them with `actions/attest`, and writes `SHA256SUMS-desktop`.
 4. **publish** waits up to 30 minutes for `release.yml` to create the draft release, then uploads the four files into it. It never creates a release and refuses one that is already published.
 
 Only `publish` can write to the repository, and only `provenance` can sign.
 
-To try the build without releasing, run the workflow by hand with an empty tag. The two files are kept as run artifacts for 5 days and nothing is published.
+To try the build without releasing, run the workflow by hand on `main` or `dev`. The two files are kept as run artifacts for 5 days and nothing is published. To rebuild a release, re-run the failed jobs of that tag's run; the workflow only ever builds the commit that triggered it.
 
 ## Opening the unsigned files
 

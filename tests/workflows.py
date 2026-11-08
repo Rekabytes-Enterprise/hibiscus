@@ -311,14 +311,16 @@ class DesktopReleasePolicy(unittest.TestCase):
             if name != 'verify':
                 self.assertNotIn('GH_TOKEN', block)
         for name in ['provenance', 'publish']:
-            self.assertIn("if: github.event_name == 'push' || inputs.release_tag != ''", job(self.source, name))
+            self.assertIn("if: github.event_name == 'push'\n", job(self.source, name))
+        # The build checks out only the commit that triggered the run, never a computed ref.
+        self.assertNotIn('inputs.', self.source)
+        self.assertNotIn('ref: ${{', self.source)
         for unsafe in ['pull_request', 'secrets.', 'secrets: inherit']:
             self.assertNotIn(unsafe, self.source)
 
     def test_builds_use_the_authorized_commit_and_pinned_toolchains(self):
         for name in ['macos_arm64', 'linux_x64']:
             block = job(self.source, name)
-            self.assertIn('ref: ${{ needs.verify.outputs.source_commit }}', block)
             self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', block)
             self.assertIn('toolchain: 1.99.1', block)
             self.assertIn('npm ci', block)

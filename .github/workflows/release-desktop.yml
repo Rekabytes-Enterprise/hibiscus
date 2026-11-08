@@ -7,19 +7,15 @@ on:
   push:
     tags:
       - "v*"
+  # A manual run builds the branch it starts from and publishes nothing; the
+  # files stay as run artifacts. To rebuild a release, re-run the tag's run.
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Existing tag to rebuild and upload; empty means build only (files stay as run artifacts)
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: read
 
 env:
-  RELEASE_TAG: ${{ inputs.release_tag || (github.event_name == 'push' && github.ref_name) || '' }}
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
 
 jobs:
   verify:
@@ -34,11 +30,14 @@ jobs:
         id: authorize
         shell: bash
         env:
-          SOURCE_REF: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name) || github.sha }}
+          SOURCE_REF: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ || "$SOURCE_REF" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [ -n "$RELEASE_TAG" ]; then
+            [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          fi
           commit=$(gh api "repos/$GH_REPO/commits/$SOURCE_REF" --jq .sha)
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
           # Release files only come from main. A build-only run may also use dev.
@@ -62,7 +61,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.source_commit }}
           persist-credentials: false
       - name: Check out the authorized commit
         shell: bash
@@ -109,7 +107,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.source_commit }}
           persist-credentials: false
       - name: Check out the authorized commit
         shell: bash
@@ -149,7 +146,7 @@ jobs:
           retention-days: 5
 
   provenance:
-    if: github.event_name == 'push' || inputs.release_tag != ''
+    if: github.event_name == 'push'
     needs: [verify, macos_arm64, linux_x64]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -204,7 +201,7 @@ jobs:
           retention-days: 5
 
   publish:
-    if: github.event_name == 'push' || inputs.release_tag != ''
+    if: github.event_name == 'push'
     needs: provenance
     runs-on: ubuntu-latest
     timeout-minutes: 45
