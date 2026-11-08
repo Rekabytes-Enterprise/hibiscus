@@ -12,4 +12,4 @@ Verified: 236 unit tests, 110 native fixtures, tests/desktop_api.rs, strict Clip
 
 Next: release.yml desktop jobs into the same draft release (SHA256SUMS + provenance), install-desktop.sh with tests, a desktop CI job, a docs/installation.md section, confirming the bundle ID domain (placeholder com.rooxcode.hibiscus), and image tools (read images for vision models, an image-generation extension, inline display).
 
-Release notes: v0.3.29 is published latest. Old v0.3.25 and v0.3.12 drafts remain unpublished. main is one empty merge commit ahead of dev.
+v0.3.30 (Codex plan model discovery for the TUI and CLI) shipped from main and is back in dev; its draft release holds all six files. Publish releases only after the tag-triggered workflow creates the draft.

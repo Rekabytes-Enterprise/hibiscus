@@ -166,12 +166,6 @@ See runtime/context.rs and the native Rooxcode bounded-history/failure regressio
 This budget policy is scoped to Rooxcode; Codex and other providers retain their
 existing compaction paths.
 
-## Desktop app embedding
-
-The desktop app embeds the engine in-process through hibiscus::desktop (src/desktop.rs over runtime/embed.rs), reusing the TUI transport limits, write deadlines and shutdown. The workspace is a parameter of Session::open and Engine::start, never the process current directory: a Dock-launched app has no meaningful one and several engines may share a process. New/switched sessions inherit the current session's workspace. The CLI/TUI still pass current_dir(). Evidence: tests/desktop_api.rs.
-
-desktop/src-tauri is a separate Cargo package with its own lockfile and an empty [workspace] table; without it Cargo refuses to build because the root Cargo.toml declares a workspace. GUI launches lack the user's shell PATH and key variables, so the glue imports the login shell environment (marker + env -0, 5 s timeout) before any thread starts; HIBISCUS_DESKTOP_KEEP_ENV=1 skips it.
-
 ## Codex model discovery
 
 The Codex subscription endpoint lists the plan's models at GET {RESOURCE}/models?client_version=X with the Codex bearer token and chatgpt-account-id. client_version is required (400 without it) and a model is listed only when X >= its minimal_client_version (0.144-0.155 in 2026-11), so an old or Hibiscus-own version returns no models. Hibiscus sends the current official Codex release from npm (@openai/codex latest), looked up once per engine run; codex-client-version in the Hibiscus home is only the offline fallback, then a pinned release. Only visibility "list" models are kept. supported_reasoning_levels become the model's efforts, and only Codex uses listed efforts: configured non-Rooxcode Responses models keep low/medium/high (guarded by non_roox_thinking_wire_behavior_is_unchanged). A user-written openai-codex entry in config.json disables discovery. Evidence: catalog.rs tests.
