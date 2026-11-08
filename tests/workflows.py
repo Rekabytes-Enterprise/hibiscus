@@ -52,7 +52,8 @@ class WorkflowPolicy(unittest.TestCase):
         text = (ROOT / '.github/workflows/coverage.yml').read_text()
         for forbidden in ['pull_request_target:', ': write', 'secrets.', 'continue-on-error:', 'if: always()']:
             self.assertNotIn(forbidden, text)
-        self.assertEqual(text.count('branches: [dev, main]'), 2)
+        self.assertIn('  push:\n    branches: [dev]\n', text)
+        self.assertIn('  pull_request:\n    branches: [dev, main]\n', text)
         self.assertIn('toolchain: nightly-2026-10-01', text)
         self.assertIn('components: llvm-tools-preview', text)
         self.assertIn('/v0.9.1/', text)
@@ -69,12 +70,26 @@ class WorkflowPolicy(unittest.TestCase):
                 section = re.search(r'^  ' + event + r':\n(.*?)(?=^  \w|\npermissions:)',
                                     text, re.M | re.S)[1]
                 self.assertIn('dev', section)
-                self.assertIn('main', section)
+                # Pull requests into main are checked; pushes to main are merges of checked PRs.
+                (self.assertIn if event == 'pull_request' else self.assertNotIn)('main', section)
                 self.assertNotIn('paths:', section)
                 self.assertNotIn('paths-ignore:', section)
             for unsafe in ['pull_request_target:', 'secrets.', 'secrets: inherit',
                            'contents: write', 'id-token: write']:
                 self.assertNotIn(unsafe, text)
+
+    def test_only_same_repository_dev_promotions_into_main_skip_checks(self):
+        condition = ("if: github.event_name != 'pull_request' || github.base_ref != 'main' || "
+                     "github.head_ref != 'dev' || github.event.pull_request.head.repo.full_name != github.repository")
+        for name, jobs in {'ci.yml': ['lint', 'test'], 'codeql.yml': ['analyze'],
+                           'dependency-security.yml': ['audit'], 'coverage.yml': ['coverage'],
+                           'fuzzing.yml': ['fuzz']}.items():
+            source = (ROOT / '.github/workflows' / name).read_text()
+            for job_name in jobs:
+                self.assertIn(condition, job(source, job_name), (name, job_name))
+        # main itself is still covered by the default-branch schedules.
+        for name in ['codeql.yml', 'dependency-security.yml', 'fuzzing.yml']:
+            self.assertIn('schedule:', (ROOT / '.github/workflows' / name).read_text())
 
     def test_codeql_uses_isolated_upload_permissions_and_actual_rust_probe(self):
         text = (ROOT / '.github/workflows/codeql.yml').read_text()
@@ -332,6 +347,8 @@ class DesktopReleasePolicy(unittest.TestCase):
         signer = job(self.source, 'provenance')
         self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign desktop files'))
         self.assertIn('test "${#files[@]}" -eq 2', signer)
+        # GitHub's attestation API rejects SLSA provenance without internalParameters.
+        self.assertIn('"internalParameters":{"github":{"event_name":', signer)
         publisher = job(self.source, 'publish')
         self.assertIn('test "$draft" = true', publisher)
         self.assertNotIn('gh release create', publisher)

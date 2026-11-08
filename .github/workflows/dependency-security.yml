@@ -2,7 +2,7 @@ name: Dependency security
 
 on:
   push:
-    branches: [dev, main]
+    branches: [dev]
   pull_request:
     branches: [dev, main]
   schedule:
@@ -18,6 +18,8 @@ concurrency:
 
 jobs:
   audit:
+    # A release promotion (this repo's dev into main) is the exact commit already checked on the push to dev.
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'dev' || github.event.pull_request.head.repo.full_name != github.repository
     name: RustSec dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -4,6 +4,12 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.32] - 2026-11-09
+
+### Fixed
+
+- Desktop release files are signed and attached to the release. The v0.3.31 desktop build could not be signed (its provenance lacked a field GitHub requires), so v0.3.31 was not published; this release ships everything listed under 0.3.31.
+
 ## [0.3.31] - 2026-11-08
 
 ### Added
