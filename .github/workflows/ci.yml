@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - dev
-      - main
   pull_request:
     branches:
       - dev
@@ -20,6 +19,8 @@ concurrency:
 
 jobs:
   lint:
+    # A release promotion (this repo's dev into main) is the exact commit already checked on the push to dev.
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'dev' || github.event.pull_request.head.repo.full_name != github.repository
     name: Format, Clippy, and installer
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -70,6 +71,8 @@ jobs:
         run: sh -n install.sh && sh -n scripts/bump-version.sh && sh tests/install.sh && sh tests/bump-version.sh
 
   test:
+    # A release promotion (this repo's dev into main) is the exact commit already checked on the push to dev.
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'dev' || github.event.pull_request.head.repo.full_name != github.repository
     name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
