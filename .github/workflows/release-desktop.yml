@@ -1,0 +1,235 @@
+name: Desktop release
+
+# Builds the desktop app (macOS .dmg, Linux .AppImage) for the same release tags
+# as release.yml, and adds the files to the draft release that release.yml
+# creates. Kept separate so the CLI release contract stays untouched.
+on:
+  push:
+    tags:
+      - "v*"
+  # A manual run builds the branch it starts from and publishes nothing; the
+  # files stay as run artifacts. To rebuild a release, re-run the tag's run.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.authorize.outputs.commit }}
+    steps:
+      - name: Authorize release source
+        id: authorize
+        shell: bash
+        env:
+          SOURCE_REF: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [ -n "$RELEASE_TAG" ]; then
+            [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          fi
+          commit=$(gh api "repos/$GH_REPO/commits/$SOURCE_REF" --jq .sha)
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          # Release files only come from main. A build-only run may also use dev.
+          if [ -n "$RELEASE_TAG" ]; then branches=main; else branches="main dev"; fi
+          accepted=false
+          for branch in $branches; do
+            state=$(gh api "repos/$GH_REPO/compare/$branch...$commit" --jq .status)
+            case "$state" in identical|behind) accepted=true ;; esac
+          done
+          test "$accepted" = true
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+
+  macos_arm64:
+    needs: verify
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the authorized commit
+        shell: bash
+        env:
+          AUTHORIZED_COMMIT: ${{ needs.verify.outputs.source_commit }}
+        run: test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - name: Build the app
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run tauri -- build --ci --bundles dmg
+      - name: Name the file and record its digest
+        id: receipt
+        shell: bash
+        run: |
+          shopt -s nullglob
+          built=(desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          test "${#built[@]}" -eq 1
+          mkdir -p dist
+          cp "${built[0]}" dist/hibiscus-desktop-aarch64-apple-darwin.dmg
+          printf 'sha256=%s\n' "$(shasum -a 256 dist/hibiscus-desktop-aarch64-apple-darwin.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-aarch64-apple-darwin
+          path: dist/hibiscus-desktop-aarch64-apple-darwin.dmg
+          if-no-files-found: error
+          retention-days: 5
+
+  linux_x64:
+    needs: verify
+    # The oldest supported Ubuntu, so the AppImage runs on more distributions.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the authorized commit
+        shell: bash
+        env:
+          AUTHORIZED_COMMIT: ${{ needs.verify.outputs.source_commit }}
+        run: test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"
+      - name: Install Tauri's Linux libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - name: Build the app
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run tauri -- build --ci --bundles appimage
+      - name: Name the file and record its digest
+        id: receipt
+        shell: bash
+        run: |
+          shopt -s nullglob
+          built=(desktop/src-tauri/target/release/bundle/appimage/*.AppImage)
+          test "${#built[@]}" -eq 1
+          mkdir -p dist
+          cp "${built[0]}" dist/hibiscus-desktop-x86_64.AppImage
+          printf 'sha256=%s\n' "$(sha256sum dist/hibiscus-desktop-x86_64.AppImage | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-x86_64-linux
+          path: dist/hibiscus-desktop-x86_64.AppImage
+          if-no-files-found: error
+          retention-days: 5
+
+  provenance:
+    if: github.event_name == 'push'
+    needs: [verify, macos_arm64, linux_x64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+      - name: Verify build receipts
+        shell: bash
+        env:
+          MACOS_ARM64_SHA: ${{ needs.macos_arm64.outputs.sha256 }}
+          LINUX_X64_SHA: ${{ needs.linux_x64.outputs.sha256 }}
+        run: |
+          shopt -s nullglob dotglob
+          files=(dist/*)
+          test "${#files[@]}" -eq 2
+          [[ "$MACOS_ARM64_SHA" =~ ^[0-9a-f]{64}$ && "$LINUX_X64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          for file in dist/hibiscus-desktop-aarch64-apple-darwin.dmg dist/hibiscus-desktop-x86_64.AppImage; do
+            test -f "$file" && test ! -L "$file" || exit 1
+          done
+          printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/hibiscus-desktop-aarch64-apple-darwin.dmg | sha256sum -c
+          printf '%s  %s\n' "$LINUX_X64_SHA" dist/hibiscus-desktop-x86_64.AppImage | sha256sum -c
+      - name: Sign desktop files
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/hibiscus-desktop-*
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate: '{"buildDefinition":{"buildType":"https://actions.github.io/buildtypes/workflow/v1","externalParameters":{"workflow":{"ref":"${{ github.ref }}","repository":"${{ github.server_url }}/${{ github.repository }}","path":".github/workflows/release-desktop.yml"}},"resolvedDependencies":[{"uri":"git+${{ github.server_url }}/${{ github.repository }}@${{ github.ref }}","digest":{"gitCommit":"${{ needs.verify.outputs.source_commit }}"}}]},"runDetails":{"builder":{"id":"${{ github.server_url }}/${{ github.workflow_ref }}"},"metadata":{"invocationId":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}"}}}'
+      - name: Write checksums and signature
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          (cd dist && sha256sum hibiscus-desktop-* > SHA256SUMS-desktop)
+          cp "$BUNDLE_PATH" dist/hibiscus-desktop-provenance.sigstore.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-release
+          path: |
+            dist/hibiscus-desktop-aarch64-apple-darwin.dmg
+            dist/hibiscus-desktop-x86_64.AppImage
+            dist/SHA256SUMS-desktop
+            dist/hibiscus-desktop-provenance.sigstore.json
+          if-no-files-found: error
+          retention-days: 5
+
+  publish:
+    if: github.event_name == 'push'
+    needs: provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-release
+          path: dist
+      - name: Add desktop files to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          shopt -s nullglob dotglob
+          files=(dist/*)
+          test "${#files[@]}" -eq 4
+          # release.yml creates the draft; wait for it rather than racing it.
+          for attempt in $(seq 1 60); do
+            if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+              break
+            fi
+            test "$attempt" -lt 60 || { echo "No release for $RELEASE_TAG after 30 minutes"; exit 1; }
+            sleep 30
+          done
+          # Never add files to a release that is already published.
+          test "$draft" = true || { echo "$RELEASE_TAG is already published; desktop files were not added"; exit 1; }
+          gh release upload "$RELEASE_TAG" dist/* --clobber
