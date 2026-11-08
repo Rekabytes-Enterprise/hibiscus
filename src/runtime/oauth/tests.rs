@@ -3,6 +3,7 @@ use protocol::tests::{access, receipt, runtime, Server};
 use std::{
     fs,
     os::unix::fs::{symlink, PermissionsExt},
+    time::Duration,
 };
 struct Temp(std::path::PathBuf);
 impl Temp {

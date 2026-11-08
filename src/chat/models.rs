@@ -1,5 +1,6 @@
 use crate::{
-    runtime::{bridge::Client, dialog::Dialogs},
+    runtime::bridge::Client,
+    ui::dialog::Dialogs,
     ui::{
         display::thinking_label,
         terminal::{self, RawMode},

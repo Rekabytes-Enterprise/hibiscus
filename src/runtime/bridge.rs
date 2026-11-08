@@ -5,8 +5,8 @@ use super::{
     transport::{self, Events, Inbox, Limits, PipeWriter, WireWrite},
 };
 use crate::{
-    runtime::dialog::Dialogs,
     ui::{
+        dialog::Dialogs,
         display::{ActiveAction, DraftSubmission, QueueMode, ScrollDisplay, SharedImage},
         input::{escape_key, Navigation},
         messages::Ui,

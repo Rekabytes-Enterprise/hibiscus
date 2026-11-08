@@ -85,7 +85,7 @@ impl Session {
         let cwd = std::env::current_dir()?.canonicalize()?;
         let path = match start {
             SessionStart::Selected(p) => Some(p.clone()),
-            SessionStart::Latest => crate::chat::sessions::list(&cwd)?
+            SessionStart::Latest => crate::chat::saved_sessions::list(&cwd)?
                 .first()
                 .map(|s| s.path.clone()),
             SessionStart::New => None,

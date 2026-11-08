@@ -4,7 +4,6 @@ pub(crate) mod catalog;
 pub(crate) mod config;
 mod context;
 pub(crate) mod diagnostics;
-pub(crate) mod dialog;
 mod engine;
 pub(crate) mod error;
 pub(crate) mod logout;
@@ -18,7 +17,7 @@ mod tools;
 pub(crate) mod transport;
 
 mod event;
-mod oauth;
+pub(crate) mod oauth;
 mod policy;
 
 /// Quota derives from the actual native catalog, including extension authoring tools.

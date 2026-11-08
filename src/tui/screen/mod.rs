@@ -27,7 +27,7 @@ use super::{
     picker::{Picker, Tabs},
 };
 use crate::{
-    commands,
+    chat::commands,
     ui::{format::compact_tokens, text::base64},
     Result,
 };

@@ -1,18 +1,22 @@
+pub(crate) mod commands;
 mod extension_commands;
+mod login;
+mod logout;
 mod models;
-pub(crate) mod sessions;
-mod tool_outputs;
+pub(crate) mod saved_sessions;
+mod tool_output_command;
 
+use self::login::{sign_in, AuthOutcome};
+use self::logout::{sign_out, LogoutOutcome};
 use self::models::{choose_model, choose_thinking};
+use self::saved_sessions as sessions;
 use crate::{
     runtime::{
-        auth::{sign_in, AuthOutcome},
         bridge::{Client, SessionStart},
-        dialog::Dialogs,
         error::{local, ChatError, RecoveryAction},
-        logout::{sign_out, LogoutOutcome},
     },
     ui::{
+        dialog::Dialogs,
         display::PromptAction,
         format::compact_tokens,
         messages::Ui,
@@ -358,8 +362,8 @@ fn chat<R: BufRead>(
                     if !images.is_empty() {
                         output.restore_draft(String::new(), images.clone());
                     }
-                    use tool_outputs::Query;
-                    let query = tool_outputs::parse(message)?;
+                    use tool_output_command::Query;
+                    let query = tool_output_command::parse(message)?;
                     let list = matches!(query, Query::List);
                     let command = match query {
                         Query::List => json!({"type":"get_tool_outputs"}),
@@ -639,7 +643,7 @@ fn chat<R: BufRead>(
                 _ if message
                     .split_whitespace()
                     .next()
-                    .is_some_and(crate::commands::looks_like_command) =>
+                    .is_some_and(commands::looks_like_command) =>
                 {
                     return Err(
                         local("Unknown command. Use /help to see available commands.").into(),

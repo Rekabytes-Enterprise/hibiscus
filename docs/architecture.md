@@ -7,7 +7,7 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 | `src/main.rs` | Binary entry point and top-level error reporting |
 | `src/lib.rs` | Private module graph, CLI modes and shared startup |
 | `src/runtime/config.rs` | Validate provider/model configuration, private atomic storage |
-| `src/runtime/provider.rs` | HTTPS/SSE adapters for Responses, Chat Completions and Anthropic |
+| `src/runtime/provider/` | Provider requests for Responses, Chat Completions and Anthropic: request bodies (`wire.rs`), sending (`http.rs`), SSE framing (`sse.rs`) and stream parsing (`stream.rs`) |
 | `src/runtime/session.rs` | Typed messages, versioned sessions, resume and interrupted-call recovery |
 | `src/runtime/tools.rs` | Native file, shell and checklist tools |
 | `src/runtime/engine.rs` | Model/tool loop, queueing, cancellation and compaction |
@@ -15,14 +15,13 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 | `src/runtime/event.rs` | Typed lifecycle events encoded for presentation |
 | `src/runtime/bridge.rs` | In-process worker lifecycle and the existing terminal adapter |
 | `src/runtime/transport.rs` | Bounded local event ingress and controlled writes |
-| `src/runtime/auth.rs`, `logout.rs`, `oauth/` | Masked API keys, native Codex browser login, locked token refresh and local logout |
+| `src/runtime/auth.rs`, `logout.rs`, `oauth/` | API-key storage, Codex browser sign-in steps and locked token refresh, credential removal. No terminal UI |
 | `src/extensions/` | Agent creation/inspection/reload tools, shared catalog snapshots, manifest validation and executable protocol |
 | `src/process.rs` | Bounded stdin/stdout/stderr, deadlines and process-group cancellation shared by shell tools and extensions |
-| `src/commands.rs` | Native command catalog shared by routing, completion and extension collision checks |
-| `src/chat/` | Slash-command workflows and workspace session selection |
+| `src/chat/` | Slash-command workflows, the `/login` and `/logout` prompts, saved-session selection, and the native command catalog (`commands.rs`) shared by routing, completion and extension collision checks |
 | `src/cli/` | Inline rendering, multiline editor, tool rows and CLI styling |
 | `src/tui/` | Fullscreen composer, modal, activity, Markdown, clipboard and painting |
-| `src/ui/` | Shared terminal services, display contracts and frontend handover |
+| `src/ui/` | Shared terminal services, display contracts, extension dialogs and frontend handover |
 | `src/update.rs` | Hibiscus update checks and checksum-verified installation |
 
 The [presentation module map](development/presentation-architecture.md) explains CLI/TUI ownership, the shared frontend and regression coverage.

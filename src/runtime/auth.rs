@@ -1,19 +1,13 @@
-use crate::{ui::Frontend, Result};
+use crate::Result;
 use std::{
     collections::HashMap,
     fs,
     io::Read,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
-    sync::mpsc::Receiver,
 };
 
 const MAX_AUTH_BYTES: usize = 128 * 1024;
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum AuthOutcome {
-    Success,
-    Cancelled,
-}
 pub(super) fn keys() -> Result<HashMap<String, String>> {
     keys_at(&crate::paths::home()?.join("auth.json"))
 }
@@ -73,18 +67,9 @@ fn save_at(path: &Path, keys: &HashMap<String, String>) -> Result<()> {
     }
     super::config::atomic(path, &bytes)
 }
-pub(crate) fn sign_in(
-    output: &mut Frontend,
-    events: &Receiver<u8>,
-    provider: &str,
-    auth_type: &str,
-) -> Result<AuthOutcome> {
-    if auth_type == "oauth" && provider == "openai-codex" {
-        return super::oauth::sign_in(output, events);
-    }
-    if auth_type != "api_key" {
-        return Err("This provider requires a supported native authentication flow. Use a configured API-key provider.".into());
-    }
+
+/// Fails unless `provider` is a configured API-key provider.
+pub(crate) fn known_api_key_provider(provider: &str) -> Result<()> {
     let config = super::config::load()?;
     if !config
         .providers
@@ -93,26 +78,18 @@ pub(crate) fn sign_in(
     {
         return Err("Unknown provider".into());
     }
-    let answer = match super::catalog::key_page(provider) {
-        Some(page) => output.auth_prompt(
-            events,
-            &format!("{provider} API key · create one at {page}"),
-            "Enter API key",
-            true,
-            || Ok(false),
-        )?,
-        None => output.auth_input(events, true, || Ok(false))?,
-    };
-    let Some(answer) = answer else {
-        return Ok(AuthOutcome::Cancelled);
-    };
-    if answer.trim().is_empty() || answer.len() > 8192 || answer.chars().any(char::is_control) {
+    Ok(())
+}
+
+/// Validates and stores an API key for a configured API-key provider.
+pub(crate) fn save_api_key(provider: &str, key: String) -> Result<()> {
+    known_api_key_provider(provider)?;
+    if key.trim().is_empty() || key.len() > 8192 || key.chars().any(char::is_control) {
         return Err("API key must be nonempty and contain no control characters".into());
     }
     let mut keys = keys()?;
-    keys.insert(provider.into(), answer);
-    save(&keys)?;
-    Ok(AuthOutcome::Success)
+    keys.insert(provider.into(), key);
+    save(&keys)
 }
 
 #[cfg(test)]

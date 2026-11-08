@@ -2,7 +2,6 @@
 mod chat;
 mod checkpoints;
 mod cli;
-mod commands;
 mod extensions;
 mod paths;
 mod process;
@@ -18,11 +17,9 @@ use std::env;
 use std::error::Error;
 use std::io::{self, IsTerminal};
 
-use chat::{sessions, start_chat};
-use runtime::{
-    bridge::{Client, SessionStart},
-    dialog::Dialogs,
-};
+use chat::{saved_sessions as sessions, start_chat};
+use runtime::bridge::{Client, SessionStart};
+use ui::dialog::Dialogs;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 

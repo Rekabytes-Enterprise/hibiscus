@@ -1,4 +1,4 @@
-use crate::ui::{
+use super::{
     display::ScrollDisplay,
     terminal::{self, RawMode},
 };
@@ -22,11 +22,11 @@ impl Dialogs {
         interactive: bool,
     ) -> Result<()> {
         if event["type"] == "extension_error" || event["type"] == "provider_error" {
-            let error = super::error::ChatError::new(
+            let error = crate::runtime::error::ChatError::new(
                 if event["type"] == "provider_error" {
-                    super::error::ErrorSource::Local
+                    crate::runtime::error::ErrorSource::Local
                 } else {
-                    super::error::ErrorSource::Extension
+                    crate::runtime::error::ErrorSource::Extension
                 },
                 event["error"].as_str().unwrap_or("Extension failed"),
             );
@@ -45,7 +45,9 @@ impl Dialogs {
             writeln!(
                 display,
                 "[runtime: {}]",
-                super::error::safe_message(event["message"].as_str().unwrap_or("notification"))
+                crate::runtime::error::safe_message(
+                    event["message"].as_str().unwrap_or("notification")
+                )
             )?;
             return Ok(());
         }
@@ -94,8 +96,8 @@ impl Dialogs {
                 reply[field] = value.clone();
             }
         }
-        writeln!(input, "{reply}").map_err(super::error::transport)?;
-        input.flush().map_err(super::error::transport)?;
+        writeln!(input, "{reply}").map_err(crate::runtime::error::transport)?;
+        input.flush().map_err(crate::runtime::error::transport)?;
         Ok(())
     }
 }

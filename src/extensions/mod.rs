@@ -279,7 +279,7 @@ impl Registry {
         let mut commands = std::collections::HashSet::new();
         for command in &manifest.commands {
             let name = command.public_name(&manifest.id);
-            if crate::commands::reserved(&name)
+            if crate::chat::commands::reserved(&name)
                 || self.commands.contains_key(name.trim_start_matches('/'))
                 || !commands.insert(name)
             {
