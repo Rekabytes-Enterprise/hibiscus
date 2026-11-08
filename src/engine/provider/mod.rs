@@ -53,6 +53,7 @@ pub async fn request(
         None
     };
     let (route, mut body) = request_body(provider, model, conversation, system, thinking, tools);
+    super::privacy::apply(&provider.id, super::privacy::training_denied(), &mut body);
     let url = format!("{}/{}", provider.base_url.trim_end_matches('/'), route);
     let mut continuation = Continuation::default();
     let mut state = loop {

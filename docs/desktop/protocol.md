@@ -22,6 +22,7 @@ engine.shutdown();
 - `desktop::save_api_key(provider, key)` stores a key in `auth.json` (`0600`) after the same checks as `/login`. Start a new engine afterwards, as the TUI reconnects after `/login`.
 - `desktop::key_page(provider)` gives the page where a built-in provider's key is created.
 - `desktop::sign_out(provider)` removes a stored API key, or the Codex login for `openai-codex`.
+- `desktop::training_denied()` / `desktop::set_training_denied(deny)` read and save the "don't let providers train on my prompts" choice in `privacy.json` in the Hibiscus home. While it is on, OpenRouter requests carry `"provider": {"data_collection": "deny"}`. Engines read it on every request, in the terminal app too, so no restart is needed.
 - `desktop::CodexSignIn::start()` listens on `localhost:1455` and builds the Codex sign-in link (`url()`). Open it in the browser, then await `finish()`. `paste()` takes the redirect URL by hand when the browser cannot reach the app. Dropping `finish()` cancels and frees the port; a failed or cancelled sign-in keeps the previous login. It times out after 10 minutes.
 - `desktop::sessions(workspace)` lists saved sessions (path, title, modified time), newest first.
 

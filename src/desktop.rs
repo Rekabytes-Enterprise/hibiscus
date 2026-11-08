@@ -17,6 +17,16 @@ pub fn sign_out(provider: &str) -> Result<()> {
     crate::engine::logout::remove(provider)
 }
 
+/// Whether OpenRouter requests ask for providers that don't store or train on prompts.
+pub fn training_denied() -> bool {
+    crate::engine::privacy::training_denied()
+}
+
+/// Saves the training choice. Engines read it on every request, so no restart is needed.
+pub fn set_training_denied(deny: bool) -> Result<()> {
+    crate::engine::privacy::set_training_denied(deny)
+}
+
 /// Where to create an API key for a built-in provider, e.g. `openrouter.ai/settings/keys`.
 pub fn key_page(provider: &str) -> Option<&'static str> {
     crate::engine::catalog::key_page(provider)

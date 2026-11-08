@@ -89,6 +89,9 @@ export const listProviders = () => invoke<ProviderInfo[]>("providers");
 export const saveApiKey = (provider: string, key: string) =>
   invoke<void>("save_api_key", { provider, key });
 export const signOut = (provider: string) => invoke<void>("sign_out", { provider });
+/** Whether OpenRouter requests ask for providers that don't store or train on prompts. */
+export const trainingDenied = () => invoke<boolean>("training_denied");
+export const setTrainingDenied = (deny: boolean) => invoke<void>("set_training_denied", { deny });
 /** Opens the Codex sign-in page; returns its link. Watch `onCodexLogin` for the result. */
 export const codexStart = () => invoke<string>("codex_start");
 export const codexPaste = (url: string) => invoke<void>("codex_paste", { url });

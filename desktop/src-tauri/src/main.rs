@@ -160,6 +160,16 @@ async fn sign_out(provider: String) -> Result<(), String> {
     desktop::sign_out(&provider).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn training_denied() -> bool {
+    desktop::training_denied()
+}
+
+#[tauri::command]
+async fn set_training_denied(deny: bool) -> Result<(), String> {
+    desktop::set_training_denied(deny).map_err(|e| e.to_string())
+}
+
 /// The pending Codex sign-in: where pasted redirects go, and the task waiting for it.
 #[derive(Default)]
 struct Codex(
@@ -416,6 +426,8 @@ fn main() {
             providers,
             save_api_key,
             sign_out,
+            training_denied,
+            set_training_denied,
             codex_start,
             codex_paste,
             codex_cancel,
