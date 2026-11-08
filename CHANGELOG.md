@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.30] - 2026-11-08
+
+### Added
+
+- Codex models now come from the signed-in plan's own list at startup and when opening `/models`, in the TUI and CLI. Each model shows the context window, image support and thinking levels Codex reports, and `/thinking` offers exactly those levels (up to `xhigh` and `max` where listed). Hidden models are left out. `gpt-6.1-sol` remains the fallback before the first fetch or if it fails, and listing `openai-codex` models in `config.json` turns discovery off.
+- The list request carries the current official Codex release, looked up from npm once per run, because Codex lists a model only to clients at least as new as its minimum version. Without npm, Hibiscus uses the last release seen, then a pinned one. Other providers' thinking levels are unchanged.
+
 ## [0.3.29] - 2026-11-08
 
 ### Added
