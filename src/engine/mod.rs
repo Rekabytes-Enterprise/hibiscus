@@ -9,6 +9,7 @@ mod event;
 pub(crate) mod logout;
 pub(crate) mod oauth;
 mod policy;
+pub(crate) mod privacy;
 mod provider;
 mod rooxcode;
 pub(crate) mod session;
