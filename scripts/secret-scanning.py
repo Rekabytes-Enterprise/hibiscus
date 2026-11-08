@@ -83,13 +83,34 @@ def download(request, limit, error):
         time.sleep(delays[attempt])
 
 
+def release_asset(repo, tag, name, limit, error):
+    """A pinned GitHub release file; the caller verifies its checksum, so either route is safe.
+    The github.com download address can return 504 for minutes while the API route works."""
+    agent = {"User-Agent": "hibiscus-ci"}
+    direct = urllib.request.Request(f"https://github.com/{repo}/releases/download/{tag}/{name}", headers=agent)
+    try:
+        return download(direct, limit, error)
+    except error as first:
+        try:
+            listing = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+                                             headers={**agent, "Accept": "application/vnd.github+json"})
+            assets = json.loads(download(listing, 4 * 1024 * 1024, error))["assets"]
+            url = next(a["url"] for a in assets if a["name"] == name)
+            if not url.startswith(f"https://api.github.com/repos/{repo}/releases/assets/"):
+                raise first
+            asset = urllib.request.Request(url, headers={**agent, "Accept": "application/octet-stream"})
+            return download(asset, limit, error)
+        except (error, StopIteration, KeyError, TypeError, ValueError):
+            raise first
+
+
 def install(directory):
     selection = ARCHIVES.get((platform.system(), platform.machine()))
     if selection is None:
         raise ScanError("Unsupported scanner platform")
     target, digest = selection
-    url = f"https://github.com/gitleaks/gitleaks/releases/download/v{VERSION}/gitleaks_{VERSION}_{target}.tar.gz"
-    data = download(url, 32 * 1024 * 1024, ScanError)
+    data = release_asset("gitleaks/gitleaks", f"v{VERSION}", f"gitleaks_{VERSION}_{target}.tar.gz",
+                         32 * 1024 * 1024, ScanError)
     return unpack_verified(data, digest, directory)
 
 
