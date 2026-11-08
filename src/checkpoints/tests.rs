@@ -476,7 +476,7 @@ fn full_checkpoint_store_refuses_a_new_write_without_changing_the_project() {
             id: Id::new(),
             workspace: store.workspace.clone(),
             session_id: "s".into(),
-            created_at: crate::runtime::config::unique().to_string(),
+            created_at: crate::engine::config::unique().to_string(),
             files: BTreeMap::new(),
         };
         store.save(&record).unwrap();

@@ -12,9 +12,9 @@ macro_rules! target {
 }
 target!(extension_manifest, crate::extensions::fuzzing::manifest);
 target!(extension_reply, crate::extensions::fuzzing::reply);
-target!(rpc_record, crate::runtime::fuzzing::rpc);
-target!(provider_stream, crate::runtime::fuzzing::provider);
-target!(oauth_callback, crate::runtime::fuzzing::oauth);
+target!(rpc_record, crate::client::fuzzing::rpc);
+target!(provider_stream, crate::engine::fuzzing::provider);
+target!(oauth_callback, crate::engine::fuzzing::oauth);
 
 pub fn relative_paths(bytes: &[u8]) {
     if bytes.len() <= MAX_INPUT {

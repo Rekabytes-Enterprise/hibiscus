@@ -207,7 +207,7 @@ impl Store {
                 id: request.id.clone(),
                 workspace: self.workspace.clone(),
                 session_id: request.session_id.clone(),
-                created_at: crate::runtime::config::unique().to_string(),
+                created_at: crate::engine::config::unique().to_string(),
                 files: BTreeMap::new(),
             };
             self.save(&record)?;
@@ -357,7 +357,7 @@ impl Store {
                 diff.push_str(&format!("--- before/{}\n+++ result/{}\n", path.0, path.0));
                 match (std::str::from_utf8(&old), std::str::from_utf8(&new)) {
                     (Ok(a), Ok(b)) if a.len() + b.len() <= 131072 => {
-                        diff.push_str(&crate::runtime::edit_diff(a, b).0)
+                        diff.push_str(&crate::engine::edit_diff(a, b).0)
                     }
                     _ if old != new => diff.push_str("[Binary or large file content changed]\n"),
                     _ => {}

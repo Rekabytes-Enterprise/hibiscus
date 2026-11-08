@@ -199,7 +199,7 @@ fn command_block(command: &str, color: bool, width: usize, limit: Option<usize>)
 }
 
 pub(crate) fn saved_list(
-    entries: &[crate::runtime::tool_output::Summary],
+    entries: &[crate::engine::tool_output::Summary],
     color: bool,
     width: usize,
 ) -> String {
@@ -235,7 +235,7 @@ pub(crate) fn saved_list(
     out
 }
 pub(crate) fn saved_output(
-    entry: Option<&crate::runtime::tool_output::Output>,
+    entry: Option<&crate::engine::tool_output::Output>,
     color: bool,
     width: usize,
 ) -> String {
