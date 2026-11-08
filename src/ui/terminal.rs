@@ -97,7 +97,7 @@ impl Terminal {
                                 return;
                             }
                         }
-                        crate::runtime::transport::signal_activity();
+                        crate::client::transport::signal_activity();
                     }
                     Err(error)
                         if matches!(

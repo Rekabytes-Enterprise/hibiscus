@@ -1,0 +1,26 @@
+[package]
+name = "hibiscus-desktop"
+version = "0.3.29"
+edition = "2021"
+description = "Hibiscus desktop app"
+license = "MIT"
+publish = false
+
+[dependencies]
+hibiscus = { path = "../.." }
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
+# Separate from the CLI crate: own lockfile, Tauri never enters its dependency tree.
+[workspace]

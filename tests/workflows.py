@@ -293,6 +293,57 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', source)
 
 
+class DesktopReleasePolicy(unittest.TestCase):
+    """release-desktop.yml adds the desktop app to release.yml's draft without changing it."""
+    source = (ROOT / '.github/workflows/release-desktop.yml').read_text()
+
+    def test_only_tags_from_main_publish_and_builds_cannot_write(self):
+        authorize = job(self.source, 'verify')
+        self.assertIn('if [ -n "$RELEASE_TAG" ]; then branches=main; else branches="main dev"; fi', authorize)
+        self.assertIn('\npermissions:\n  contents: read\n', self.source)
+        self.assertEqual(self.source.count('contents: write'), 1)
+        self.assertIn('contents: write', job(self.source, 'publish'))
+        self.assertEqual(self.source.count('id-token: write'), 1)
+        self.assertIn('id-token: write', job(self.source, 'provenance'))
+        for name in ['verify', 'macos_arm64', 'linux_x64']:
+            block = job(self.source, name)
+            self.assertNotIn(': write', block)
+            if name != 'verify':
+                self.assertNotIn('GH_TOKEN', block)
+        for name in ['provenance', 'publish']:
+            self.assertIn("if: github.event_name == 'push'\n", job(self.source, name))
+        # The build checks out only the commit that triggered the run, never a computed ref.
+        self.assertNotIn('inputs.', self.source)
+        self.assertNotIn('ref: ${{', self.source)
+        for unsafe in ['pull_request', 'secrets.', 'secrets: inherit']:
+            self.assertNotIn(unsafe, self.source)
+
+    def test_builds_use_the_authorized_commit_and_pinned_toolchains(self):
+        for name in ['macos_arm64', 'linux_x64']:
+            block = job(self.source, name)
+            self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', block)
+            self.assertIn('toolchain: 1.99.1', block)
+            self.assertIn('npm ci', block)
+        self.assertIn('--bundles dmg', job(self.source, 'macos_arm64'))
+        self.assertIn('--bundles appimage', job(self.source, 'linux_x64'))
+        self.assertNotIn('cargo ', job(self.source, 'publish'))
+
+    def test_signed_files_are_receipt_checked_and_published_only_into_a_draft(self):
+        signer = job(self.source, 'provenance')
+        self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign desktop files'))
+        self.assertIn('test "${#files[@]}" -eq 2', signer)
+        publisher = job(self.source, 'publish')
+        self.assertIn('test "$draft" = true', publisher)
+        self.assertNotIn('gh release create', publisher)
+        self.assertNotIn('actions/checkout@', publisher)
+        self.assertLess(publisher.index('test "$draft" = true'), publisher.index('gh release upload'))
+
+    def test_app_version_follows_the_release_version(self):
+        config = json.loads((ROOT / 'desktop/src-tauri/tauri.conf.json').read_text())
+        self.assertEqual(config['version'], '../../package.json')
+        self.assertEqual(config['identifier'], 'com.rooxcode.hibiscus')
+
+
 class ReleaseShell(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='hibiscus-workflow-')

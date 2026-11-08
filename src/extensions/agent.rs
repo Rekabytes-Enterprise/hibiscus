@@ -257,7 +257,7 @@ pub(super) fn create_at(root: &Path, args: &Value, registry: &Registry) -> Resul
         output.write_all(file.content.as_bytes())?;
     }
     // The manifest is last: discovery never loads a half-written declaration.
-    crate::runtime::config::atomic(&directory.join("extension.json"), &bytes)?;
+    crate::engine::config::atomic(&directory.join("extension.json"), &bytes)?;
     Ok(directory)
 }
 pub(crate) fn definitions() -> Vec<Value> {

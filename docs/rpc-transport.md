@@ -1,6 +1,6 @@
 # Local runtime transport
 
-The TUI and native agent worker live in one process. A private Unix socket carries control and presentation records; no agent subprocess or external RPC server is started. `src/runtime/bridge.rs` translates native lifecycle events into the existing TUI behavior, while provider formats stay in `provider.rs`.
+The TUI and native agent worker live in one process. A private Unix socket carries control and presentation records; no agent subprocess or external RPC server is started. `src/client/bridge/` translates native lifecycle events into the existing TUI behavior, while provider formats stay in `src/engine/provider/`.
 
 The ingress mailbox is bounded by bytes and record count. `HIBISCUS_RPC_BUFFER_MIB` and `HIBISCUS_RPC_MAX_RECORDS` retain their existing names for the local adapter. Oversize, malformed or overloaded input fails explicitly rather than blocking on an unbounded queue. Writes use deadlines and service cancellation while waiting for readiness.
 

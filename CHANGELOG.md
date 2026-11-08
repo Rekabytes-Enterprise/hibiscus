@@ -4,6 +4,20 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-11-08
+
+### Added
+
+- Desktop app for macOS (Apple Silicon) and Linux (x86_64), in `desktop/` (Tauri v2 + Svelte). It has a sidebar of sessions by folder, chat with Markdown, highlighted code blocks and copy buttons, grouped tool calls with edit diffs, a session details panel, a branch diff view, image attachments, and a Settings page for providers with Codex browser sign-in and sign-out.
+- Release tags now also build `hibiscus-desktop-aarch64-apple-darwin.dmg` and `hibiscus-desktop-x86_64.AppImage`, with their own `SHA256SUMS-desktop` and signed provenance, in the same draft release. The builds are unsigned; see `docs/desktop/release.md` for how to open them.
+- Privacy and Terms of Use pages in the desktop app's Settings.
+- A "Don't let providers train on my prompts" setting. While it is on, OpenRouter requests ask for providers that don't store or train on prompts. It is stored in `privacy.json` in the Hibiscus home, applies to the terminal app too, and is off by default.
+- `hibiscus::desktop` library API used by the app: start engines per project folder, send commands, read events, save or remove credentials, sign in to Codex through the browser, list sessions, and read or set the training preference.
+
+### Changed
+
+- Internal restructuring with no behaviour change: the engine (`src/engine/`) and the terminal's side of the connection (`src/client/`) are now separate, the login screens moved out of the engine, and the largest files were split.
+
 ## [0.3.30] - 2026-11-08
 
 ### Added

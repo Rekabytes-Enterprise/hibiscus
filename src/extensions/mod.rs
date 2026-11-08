@@ -112,7 +112,7 @@ impl Registry {
                     .unwrap_or("unnamed");
                 registry.issues.push(format!(
                     "{name}: {}",
-                    super::runtime::error::safe_message(&e.to_string())
+                    super::client::error::safe_message(&e.to_string())
                 ));
             }
         }
@@ -133,7 +133,7 @@ impl Registry {
                 Err(error) => {
                     self.issues.push(format!(
                         "{id}: source update rejected; active version retained: {}",
-                        crate::runtime::error::safe_message(&error.to_string())
+                        crate::client::error::safe_message(&error.to_string())
                     ));
                     false
                 }
@@ -170,7 +170,7 @@ impl Registry {
                 }
                 self.issues.push(format!(
                     "{id}: source update rejected; active version retained: {}",
-                    crate::runtime::error::safe_message(&error.to_string())
+                    crate::client::error::safe_message(&error.to_string())
                 ));
             }
         }
@@ -264,7 +264,7 @@ impl Registry {
         if self.extensions.contains_key(&manifest.id) {
             return Err("An extension with this ID already exists".into());
         }
-        if self.tools.len() + manifest.tools.len() + crate::runtime::native_tool_count() > 128 {
+        if self.tools.len() + manifest.tools.len() + crate::engine::native_tool_count() > 128 {
             return Err("Combined native/extension catalog exceeds 128 tools".into());
         }
         if self.commands.len() + manifest.commands.len() > 128 {
@@ -279,7 +279,7 @@ impl Registry {
         let mut commands = std::collections::HashSet::new();
         for command in &manifest.commands {
             let name = command.public_name(&manifest.id);
-            if crate::commands::reserved(&name)
+            if crate::chat::commands::reserved(&name)
                 || self.commands.contains_key(name.trim_start_matches('/'))
                 || !commands.insert(name)
             {
@@ -294,7 +294,7 @@ impl Registry {
         Self {
             issues: vec![format!(
                 "Extension discovery failed: {}",
-                crate::runtime::error::safe_message(message)
+                crate::client::error::safe_message(message)
             )],
             ..Self::default()
         }

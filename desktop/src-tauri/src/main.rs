@@ -1,0 +1,526 @@
+//! Thin glue between the window and `hibiscus::desktop`. The engine runs in
+//! this process on its own thread; the frontend only sees JSON records.
+
+use hibiscus::desktop::{self, CodexSignIn, Engine, Start};
+use serde::Serialize;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::Mutex;
+use std::thread::JoinHandle;
+use std::time::{Duration, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+type Reply = Sender<Result<String, String>>;
+
+/// The running engine. Its thread owns the `Engine`, so sends never wait
+/// behind a blocking event read for longer than one short poll.
+struct Running {
+    commands: Sender<(Value, Reply)>,
+    thread: JoinHandle<()>,
+}
+
+#[derive(Default)]
+struct App(Mutex<Option<Running>>);
+
+impl App {
+    /// Stops the engine (if any) and waits for its tools to stop.
+    fn stop(&self) {
+        if let Some(running) = self.0.lock().unwrap().take() {
+            drop(running.commands);
+            let _ = running.thread.join();
+        }
+    }
+}
+
+fn pump(mut engine: Engine, commands: Receiver<(Value, Reply)>, app: AppHandle) {
+    loop {
+        loop {
+            match commands.try_recv() {
+                Ok((command, reply)) => {
+                    let _ = reply.send(engine.send(command).map_err(|e| e.to_string()));
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return engine.shutdown(),
+            }
+        }
+        match engine.next_event(Duration::from_millis(25)) {
+            Ok(Some(event)) => {
+                let _ = app.emit("engine", event);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = app.emit("engine-stopped", error.to_string());
+                return;
+            }
+        }
+    }
+}
+
+/// Starts an engine for `folder`: a new session, the latest one, or `session`.
+#[tauri::command]
+async fn open_project(
+    app: AppHandle,
+    state: State<'_, App>,
+    folder: PathBuf,
+    latest: bool,
+    session: Option<PathBuf>,
+) -> Result<(), String> {
+    state.stop();
+    let start = match session {
+        Some(path) => Start::Selected(path),
+        None if latest => Start::Latest,
+        None => Start::New,
+    };
+    let engine = Engine::start(start, &folder).map_err(|e| e.to_string())?;
+    let (commands, receiver) = mpsc::channel();
+    let thread = std::thread::spawn(move || pump(engine, receiver, app));
+    *state.0.lock().unwrap() = Some(Running { commands, thread });
+    Ok(())
+}
+
+/// Sends a command; returns its id. The answer arrives as a `response` event.
+#[tauri::command]
+async fn send(state: State<'_, App>, command: Value) -> Result<String, String> {
+    let (reply, answer) = mpsc::channel();
+    state
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("No project is open.")?
+        .commands
+        .send((command, reply))
+        .map_err(|_| "The engine has stopped.")?;
+    answer.recv().map_err(|_| "The engine has stopped.")?
+}
+
+#[tauri::command]
+async fn close_project(state: State<'_, App>) -> Result<(), String> {
+    state.stop();
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct Saved {
+    path: PathBuf,
+    title: String,
+    /// Milliseconds since the Unix epoch.
+    modified: u64,
+}
+
+#[tauri::command]
+async fn sessions(folder: PathBuf) -> Result<Vec<Saved>, String> {
+    Ok(desktop::sessions(&folder)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| Saved {
+            modified: s
+                .modified
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64),
+            path: s.path,
+            title: s.title,
+        })
+        .collect())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Provider {
+    id: String,
+    api_key: bool,
+    browser: bool,
+    signed_in: bool,
+    key_page: Option<&'static str>,
+}
+
+#[tauri::command]
+async fn providers() -> Result<Vec<Provider>, String> {
+    Ok(desktop::providers()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|p| Provider {
+            id: p.id,
+            api_key: p.api_key,
+            browser: p.browser,
+            signed_in: p.signed_in,
+            key_page: p.key_page,
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn save_api_key(provider: String, key: String) -> Result<(), String> {
+    desktop::save_api_key(&provider, &key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn sign_out(provider: String) -> Result<(), String> {
+    desktop::sign_out(&provider).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn training_denied() -> bool {
+    desktop::training_denied()
+}
+
+#[tauri::command]
+async fn set_training_denied(deny: bool) -> Result<(), String> {
+    desktop::set_training_denied(deny).map_err(|e| e.to_string())
+}
+
+/// The pending Codex sign-in: where pasted redirects go, and the task waiting for it.
+#[derive(Default)]
+struct Codex(
+    Mutex<
+        Option<(
+            tauri::async_runtime::Sender<String>,
+            tauri::async_runtime::JoinHandle<()>,
+        )>,
+    >,
+);
+
+impl Codex {
+    /// Stops the pending sign-in; its port closes and the stored login is untouched.
+    fn cancel(&self) {
+        if let Some((_, task)) = self.0.lock().unwrap().take() {
+            task.abort();
+        }
+    }
+}
+
+/// Opens the Codex sign-in page and returns its link. The result arrives as a
+/// `codex-login` event: `null` once signed in, else the error.
+#[tauri::command]
+async fn codex_start(app: AppHandle, codex: State<'_, Codex>) -> Result<String, String> {
+    codex.cancel();
+    let sign_in = CodexSignIn::start().map_err(|e| e.to_string())?;
+    let url = sign_in.url().to_owned();
+    let paste = sign_in.paste();
+    let done = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let error = sign_in.finish().await.err().map(|e| e.to_string());
+        let _ = done.emit("codex-login", error);
+    });
+    *codex.0.lock().unwrap() = Some((paste, task));
+    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| e.to_string())?;
+    Ok(url)
+}
+
+#[tauri::command]
+async fn codex_paste(codex: State<'_, Codex>, url: String) -> Result<(), String> {
+    let paste = codex
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(paste, _)| paste.clone());
+    paste
+        .ok_or("No Codex sign-in is waiting.")?
+        .try_send(url)
+        .map_err(|_| "Codex sign-in is no longer waiting for a link.".into())
+}
+
+#[tauri::command]
+async fn codex_cancel(codex: State<'_, Codex>) -> Result<(), String> {
+    codex.cancel();
+    Ok(())
+}
+
+/// Diff text sent to the window at most; a huge diff would freeze it.
+const MAX_DIFF: usize = 4 << 20;
+/// Untracked files shown at most; each costs a `git diff` call.
+const MAX_UNTRACKED: usize = 200;
+
+#[derive(Serialize)]
+struct Changes {
+    /// The branch compared with, e.g. `main`; `None` when there is none.
+    base: Option<String>,
+    branch: Option<String>,
+    /// Unified diff of the working tree against where the branch left `base`,
+    /// plus untracked files, as Claude and Codex show a branch's changes.
+    diff: String,
+    truncated: bool,
+}
+
+/// The session folder's changes for the session panel; `None` outside a git repository.
+#[tauri::command]
+async fn git_changes(folder: PathBuf) -> Option<Changes> {
+    changes(&folder)
+}
+
+/// Runs git in `folder`; `ok` lists the exit codes that still mean success.
+fn git(folder: &Path, args: &[&str], ok: &[i32]) -> Option<Vec<u8>> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(folder)
+        .args(args)
+        .output()
+        .ok()?;
+    ok.contains(&out.status.code()?).then_some(out.stdout)
+}
+
+fn line(folder: &Path, args: &[&str]) -> Option<String> {
+    let out = String::from_utf8(git(folder, args, &[0])?).ok()?;
+    Some(out.trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+fn changes(folder: &Path) -> Option<Changes> {
+    line(folder, &["rev-parse", "--is-inside-work-tree"])?;
+    let branch = line(folder, &["branch", "--show-current"]);
+    // The repository's default branch: origin's HEAD, else a local main or master.
+    let default = line(folder, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
+        .and_then(|r| r.strip_prefix("origin/").map(str::to_owned))
+        .or_else(|| {
+            ["main", "master"].into_iter().map(str::to_owned).find(|b| {
+                line(
+                    folder,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{b}"),
+                    ],
+                )
+                .is_some()
+            })
+        });
+    let fork = default.as_ref().and_then(|name| {
+        [name.clone(), format!("origin/{name}")]
+            .iter()
+            .find_map(|r| line(folder, &["merge-base", "HEAD", r]))
+    });
+    // No shared history (or no commits yet): compare with HEAD, or with nothing.
+    const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+    let from = fork
+        .clone()
+        .or_else(|| line(folder, &["rev-parse", "--verify", "--quiet", "HEAD"]))
+        .unwrap_or_else(|| EMPTY_TREE.into());
+    let mut diff = git(
+        folder,
+        &["diff", "--no-color", "--no-ext-diff", "--relative", &from],
+        &[0],
+    )
+    .unwrap_or_default();
+    let untracked = git(
+        folder,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        &[0],
+    )
+    .unwrap_or_default();
+    for path in untracked
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .take(MAX_UNTRACKED)
+    {
+        if diff.len() > MAX_DIFF {
+            break;
+        }
+        let path = String::from_utf8_lossy(path);
+        // --no-index exits 1 when the files differ, which they always do here.
+        let args = [
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-index",
+            "--",
+            "/dev/null",
+            &path,
+        ];
+        diff.extend(git(folder, &args, &[0, 1]).unwrap_or_default());
+    }
+    let truncated = diff.len() > MAX_DIFF;
+    if truncated {
+        // Cut at a line end so no half line is shown.
+        let end = diff[..MAX_DIFF]
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |i| i + 1);
+        diff.truncate(end);
+    }
+    Some(Changes {
+        base: default.filter(|_| fork.is_some()),
+        branch,
+        diff: String::from_utf8_lossy(&diff).into_owned(),
+        truncated,
+    })
+}
+
+/// Opens a file the session wrote with its default app. Only files inside the
+/// session folder: the path comes from model-written tool arguments.
+#[tauri::command]
+async fn open_file(folder: PathBuf, path: PathBuf) -> Result<(), String> {
+    let file = inside(&folder, &path).ok_or("That file is outside the session folder.")?;
+    tauri_plugin_opener::open_path(file, None::<&str>).map_err(|e| e.to_string())
+}
+
+fn inside(folder: &Path, path: &Path) -> Option<PathBuf> {
+    let folder = folder.canonicalize().ok()?;
+    let file = folder.join(path).canonicalize().ok()?;
+    (file.starts_with(&folder) && file.is_file()).then_some(file)
+}
+
+/// A Dock- or menu-launched app gets a minimal environment, so tools would
+/// miss the user's PATH and provider keys set in their shell profile. Copy
+/// the login shell's environment, as a terminal launch would have it.
+fn import_login_environment() {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    let Ok(mut child) = std::process::Command::new(&shell)
+        .args(["-ilc", "printf '\\0__HIBISCUS_ENV__\\0'; env -0"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    // A shell profile that waits for input must not hang the app.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while child.try_wait().ok().flatten().is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let Ok(output) = child.wait_with_output() else {
+        return;
+    };
+    apply_environment(&output.stdout);
+}
+
+fn apply_environment(output: &[u8]) {
+    let marker = b"\0__HIBISCUS_ENV__\0";
+    let Some(start) = output.windows(marker.len()).position(|w| w == marker) else {
+        return;
+    };
+    for entry in output[start + marker.len()..].split(|&b| b == 0) {
+        let Ok(entry) = std::str::from_utf8(entry) else {
+            continue;
+        };
+        if let Some((name, value)) = entry.split_once('=') {
+            if !name.is_empty() && !matches!(name, "PWD" | "OLDPWD" | "SHLVL" | "_") {
+                std::env::set_var(name, value);
+            }
+        }
+    }
+}
+
+fn main() {
+    // Before any thread starts: set_var is not thread-safe.
+    if std::env::var_os("HIBISCUS_DESKTOP_KEEP_ENV").is_none() {
+        import_login_environment();
+    }
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .manage(App::default())
+        .manage(Codex::default())
+        .invoke_handler(tauri::generate_handler![
+            open_project,
+            send,
+            close_project,
+            sessions,
+            providers,
+            save_api_key,
+            sign_out,
+            training_denied,
+            set_training_denied,
+            codex_start,
+            codex_paste,
+            codex_cancel,
+            git_changes,
+            open_file
+        ])
+        .build(tauri::generate_context!())
+        .expect("failed to start Hibiscus")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Quit like the TUI: stop the run and wait for tools to stop.
+                app.state::<App>().stop();
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changes_cover_the_branch_since_main_and_untracked_files() {
+        let repo = std::env::temp_dir().join(format!("hibiscus-changes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "base"]);
+        run(&["switch", "-qc", "work"]);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        run(&["commit", "-qam", "on the branch"]);
+        std::fs::write(repo.join("b.txt"), "uncommitted\n").unwrap();
+        run(&["add", "b.txt"]);
+        std::fs::write(repo.join("new file.txt"), "untracked\n").unwrap();
+
+        let c = changes(&repo).unwrap();
+        assert_eq!(c.base.as_deref(), Some("main"));
+        assert_eq!(c.branch.as_deref(), Some("work"));
+        assert!(!c.truncated);
+        for expected in ["-one", "+two", "+uncommitted", "+untracked", "new file.txt"] {
+            assert!(
+                c.diff.contains(expected),
+                "{expected} missing from:\n{}",
+                c.diff
+            );
+        }
+        assert!(changes(&std::env::temp_dir().join("hibiscus-not-a-repo-xyz")).is_none());
+        std::fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn only_files_inside_the_folder_open() {
+        let root = std::env::temp_dir().join(format!("hibiscus-inside-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("project")).unwrap();
+        std::fs::write(root.join("project/a.txt"), "a").unwrap();
+        std::fs::write(root.join("secret.txt"), "s").unwrap();
+        let project = root.join("project");
+        assert!(inside(&project, Path::new("a.txt")).is_some());
+        assert!(inside(&project, &project.join("a.txt")).is_some());
+        assert!(inside(&project, Path::new("../secret.txt")).is_none());
+        assert!(inside(&project, &root.join("secret.txt")).is_none());
+        assert!(inside(&project, Path::new(".")).is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn login_environment_is_read_after_the_marker_only() {
+        let mut output = b"motd PATH=/evil\n".to_vec();
+        output.extend_from_slice(b"\0__HIBISCUS_ENV__\0");
+        output.extend_from_slice(b"HIBISCUS_GLUE_TEST=a=b\0PWD=/nope\0broken\0");
+        apply_environment(&output);
+        assert_eq!(std::env::var("HIBISCUS_GLUE_TEST").unwrap(), "a=b");
+        assert_ne!(std::env::var("PWD").ok().as_deref(), Some("/nope"));
+        apply_environment(b"no marker HIBISCUS_GLUE_OTHER=x");
+        assert!(std::env::var("HIBISCUS_GLUE_OTHER").is_err());
+    }
+}
