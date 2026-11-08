@@ -31,7 +31,8 @@ impl ReasoningEffort {
 
 pub(super) enum Policy<'a> {
     Rooxcode(&'a [ReasoningEffort]),
-    Responses,
+    /// Efforts Codex lists for the model; empty means low, medium and high.
+    Responses(&'a [ReasoningEffort]),
     Disabled,
 }
 
@@ -44,7 +45,12 @@ impl<'a> Policy<'a> {
                 &[]
             })
         } else if model.reasoning && provider.api == Api::Responses {
-            Self::Responses
+            // Only Codex discovery lists efforts; configured models keep low/medium/high.
+            Self::Responses(if provider.authentication == Authentication::Codex {
+                &model.reasoning_efforts
+            } else {
+                &[]
+            })
         } else {
             Self::Disabled
         }
@@ -55,7 +61,10 @@ impl<'a> Policy<'a> {
             Self::Rooxcode(efforts) => std::iter::once("default")
                 .chain(efforts.iter().map(|effort| effort.as_str()))
                 .collect(),
-            Self::Responses => vec!["off", "low", "medium", "high"],
+            Self::Responses([]) => vec!["off", "low", "medium", "high"],
+            Self::Responses(efforts) => std::iter::once("off")
+                .chain(efforts.iter().map(|effort| effort.as_str()))
+                .collect(),
             Self::Disabled => vec!["off"],
         }
     }
@@ -64,7 +73,7 @@ impl<'a> Policy<'a> {
         level == "off"
             || match self {
                 Self::Rooxcode(efforts) => efforts.iter().any(|effort| effort.as_str() == level),
-                Self::Responses => matches!(level, "low" | "medium" | "high"),
+                Self::Responses(_) => self.levels().contains(&level),
                 Self::Disabled => false,
             }
     }
@@ -97,9 +106,15 @@ mod tests {
         assert_eq!(policy.rooxcode_effort("none"), Some(ReasoningEffort::None));
         assert!(!policy.supports_stored("high"));
         assert_eq!(Policy::Rooxcode(&[]).levels(), ["default"]);
-        assert_eq!(Policy::Responses.levels(), ["off", "low", "medium", "high"]);
-        assert!(Policy::Responses.supports_stored("high"));
-        assert!(!Policy::Responses.supports_stored("none"));
+        assert_eq!(
+            Policy::Responses(&[]).levels(),
+            ["off", "low", "medium", "high"]
+        );
+        assert!(Policy::Responses(&[]).supports_stored("high"));
+        assert!(!Policy::Responses(&[]).supports_stored("none"));
+        let listed = Policy::Responses(&[ReasoningEffort::Low, ReasoningEffort::Max]);
+        assert_eq!(listed.levels(), ["off", "low", "max"]);
+        assert!(listed.supports_stored("max") && !listed.supports_stored("high"));
         assert_eq!(Policy::Disabled.levels(), ["off"]);
         assert!(!Policy::Disabled.supports_stored("high"));
         for (wire, effort) in [

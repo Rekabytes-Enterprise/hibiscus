@@ -165,3 +165,7 @@ active history only after a usable final summary. No completed tools are replaye
 See runtime/context.rs and the native Rooxcode bounded-history/failure regressions.
 This budget policy is scoped to Rooxcode; Codex and other providers retain their
 existing compaction paths.
+
+## Codex model discovery
+
+The Codex subscription endpoint lists the plan's models at GET {RESOURCE}/models?client_version=X with the Codex bearer token and chatgpt-account-id. client_version is required (400 without it) and a model is listed only when X >= its minimal_client_version (0.144-0.155 in 2026-11), so an old or Hibiscus-own version returns no models. Hibiscus sends the current official Codex release from npm (@openai/codex latest), looked up once per engine run; codex-client-version in the Hibiscus home is only the offline fallback, then a pinned release. Only visibility "list" models are kept. supported_reasoning_levels become the model's efforts, and only Codex uses listed efforts: configured non-Rooxcode Responses models keep low/medium/high (guarded by non_roox_thinking_wire_behavior_is_unchanged). A user-written openai-codex entry in config.json disables discovery. Evidence: catalog.rs tests.

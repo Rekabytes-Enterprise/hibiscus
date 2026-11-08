@@ -256,6 +256,44 @@ class ReleasePolicy(unittest.TestCase):
             run.assert_not_called()
         self.assertFalse(directory.exists())
 
+    def test_tool_download_retries_server_errors_and_reports_the_real_failure(self):
+        import urllib.error
+        busy = lambda: urllib.error.HTTPError('https://github.com/x', 504, 'Gateway Time-out', {}, None)
+        with mock.patch.object(policy.time, 'sleep') as sleep, \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[busy(), busy(), io.BytesIO(b'archive')]):
+            self.assertEqual(policy.download('https://github.com/x', 100, policy.InvalidProvenance), b'archive')
+        self.assertEqual(sleep.call_count, 2)
+        with mock.patch.object(policy.time, 'sleep') as sleep, \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[busy() for _ in range(5)]):
+            with self.assertRaisesRegex(policy.InvalidProvenance, 'Download failed: HTTP 504 from github.com'):
+                policy.download('https://github.com/x', 100, policy.InvalidProvenance)
+        self.assertEqual(sleep.call_count, 4)
+        missing = urllib.error.HTTPError('https://github.com/x', 404, 'Not Found', {}, None)
+        with mock.patch.object(policy.time, 'sleep') as sleep, \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[missing]):
+            with self.assertRaisesRegex(policy.InvalidProvenance, 'HTTP 404'):
+                policy.download('https://github.com/x', 100, policy.InvalidProvenance)
+        sleep.assert_not_called()
+
+    def test_tool_download_falls_back_to_the_api_route_when_github_com_keeps_failing(self):
+        import urllib.error
+        busy = lambda: urllib.error.HTTPError('https://github.com/x', 504, 'Gateway Time-out', {}, None)
+        listing = json.dumps({'assets': [{'name': 'tool.zip',
+                                          'url': 'https://api.github.com/repos/cli/cli/releases/assets/7'}]}).encode()
+        calls = [busy() for _ in range(5)] + [io.BytesIO(listing), io.BytesIO(b'archive')]
+        with mock.patch.object(policy.time, 'sleep'), \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=calls) as urlopen:
+            self.assertEqual(policy.release_asset('cli/cli', 'v1', 'tool.zip', 100, policy.InvalidProvenance), b'archive')
+        asset = urlopen.call_args_list[-1].args[0]
+        self.assertEqual(asset.full_url, 'https://api.github.com/repos/cli/cli/releases/assets/7')
+        self.assertEqual(asset.get_header('Accept'), 'application/octet-stream')
+        # An asset outside the expected API path is refused; the original failure is reported.
+        odd = json.dumps({'assets': [{'name': 'tool.zip', 'url': 'https://example.com/tool.zip'}]}).encode()
+        with mock.patch.object(policy.time, 'sleep'), \
+             mock.patch.object(policy.urllib.request, 'urlopen', side_effect=[busy() for _ in range(5)] + [io.BytesIO(odd)]):
+            with self.assertRaisesRegex(policy.InvalidProvenance, 'HTTP 504 from github.com'):
+                policy.release_asset('cli/cli', 'v1', 'tool.zip', 100, policy.InvalidProvenance)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
