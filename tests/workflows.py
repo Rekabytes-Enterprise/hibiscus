@@ -332,6 +332,8 @@ class DesktopReleasePolicy(unittest.TestCase):
         signer = job(self.source, 'provenance')
         self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign desktop files'))
         self.assertIn('test "${#files[@]}" -eq 2', signer)
+        # GitHub's attestation API rejects SLSA provenance without internalParameters.
+        self.assertIn('"internalParameters":{"github":{"event_name":', signer)
         publisher = job(self.source, 'publish')
         self.assertIn('test "$draft" = true', publisher)
         self.assertNotIn('gh release create', publisher)
