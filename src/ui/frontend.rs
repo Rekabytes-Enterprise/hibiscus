@@ -5,7 +5,7 @@ use super::{
     mode::Mode,
     terminal,
 };
-use crate::{cli, runtime::diagnostics::Diagnostics, tui, Result};
+use crate::{cli, client::diagnostics::Diagnostics, tui, Result};
 use serde_json::Value;
 use std::{
     env,
@@ -166,7 +166,7 @@ impl Frontend {
     }
     pub(crate) fn saved_tool_outputs(
         &mut self,
-        entries: &[crate::runtime::tool_output::Summary],
+        entries: &[crate::engine::tool_output::Summary],
     ) -> io::Result<()> {
         let color = matches!(&self.view, View::Cli(s) if s.styled());
         self.write_all(cli::saved_list(entries, color, terminal::size().0).as_bytes())?;
@@ -174,7 +174,7 @@ impl Frontend {
     }
     pub(crate) fn saved_tool_output(
         &mut self,
-        entry: Option<&crate::runtime::tool_output::Output>,
+        entry: Option<&crate::engine::tool_output::Output>,
     ) -> io::Result<()> {
         let color = matches!(&self.view, View::Cli(s) if s.styled());
         self.write_all(cli::saved_output(entry, color, terminal::size().0).as_bytes())?;

@@ -3,10 +3,11 @@ mod args;
 mod chat;
 mod checkpoints;
 mod cli;
+mod client;
+mod engine;
 mod extensions;
 mod paths;
 mod process;
-mod runtime;
 mod tui;
 mod ui;
 mod update;
@@ -20,7 +21,7 @@ use std::io::{self, IsTerminal};
 
 use args::{parse_args, Start};
 use chat::{saved_sessions as sessions, start_chat};
-use runtime::bridge::{Client, SessionStart};
+use client::bridge::{Client, SessionStart};
 use ui::dialog::Dialogs;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;

@@ -1,6 +1,6 @@
 //! Folds one API's streamed events into text, tool calls, usage and the final reply.
 use super::Reply;
-use crate::runtime::{
+use crate::engine::{
     config::Api,
     session::{Block, Message},
 };

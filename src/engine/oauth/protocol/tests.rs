@@ -8,14 +8,14 @@ use std::{
     thread,
 };
 
-pub(in crate::runtime::oauth) fn access(account: &str) -> String {
+pub(in crate::engine::oauth) fn access(account: &str) -> String {
     let claims = serde_json::json!({"https://api.openai.com/auth":{"chatgpt_account_id":account}});
     format!(
         "e30.{}.synthetic",
         URL_SAFE_NO_PAD.encode(claims.to_string())
     )
 }
-pub(in crate::runtime::oauth) struct Server {
+pub(in crate::engine::oauth) struct Server {
     pub endpoint: Endpoints,
     pub requests: Arc<Mutex<Vec<HashMap<String, String>>>>,
     stop: Arc<AtomicBool>,
@@ -101,11 +101,11 @@ impl Drop for Server {
         }
     }
 }
-pub(in crate::runtime::oauth) fn receipt(account: &str, refresh: &str) -> String {
+pub(in crate::engine::oauth) fn receipt(account: &str, refresh: &str) -> String {
     serde_json::json!({"access_token":access(account),"refresh_token":refresh,"expires_in":3600})
         .to_string()
 }
-pub(in crate::runtime::oauth) fn runtime() -> tokio::runtime::Runtime {
+pub(in crate::engine::oauth) fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

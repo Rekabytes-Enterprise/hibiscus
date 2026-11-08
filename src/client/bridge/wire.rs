@@ -27,7 +27,7 @@ pub(super) fn receive_record(
 
 #[cfg(test)]
 pub(super) fn read_record<R: BufRead>(output: &mut R) -> Result<Option<Value>> {
-    crate::runtime::transport::read_frame(output, 64 * 1024 * 1024)
+    crate::client::transport::read_frame(output, 64 * 1024 * 1024)
         .map_err(error::transport)?
         .map(|frame| {
             serde_json::from_slice(&frame)

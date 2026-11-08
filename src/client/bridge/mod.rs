@@ -34,12 +34,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-#[derive(Clone)]
-pub(crate) enum SessionStart {
-    New,
-    Latest,
-    Selected(PathBuf),
-}
+pub(crate) use crate::engine::SessionStart;
 
 pub(crate) struct Client {
     worker: Option<JoinHandle<()>>,
@@ -61,14 +56,14 @@ impl Client {
         start: SessionStart,
         diagnostic_feed: Option<Diagnostics>,
     ) -> Result<Self> {
-        let config = super::config::load()?;
-        let session = super::session::Session::open(&start, &config)?;
+        let config = crate::engine::config::load()?;
+        let session = crate::engine::session::Session::open(&start, &config)?;
         let (client, worker_socket) = UnixStream::pair()?;
         let control = client.try_clone()?;
         let output = Inbox::start(SocketReader(client.try_clone()?), Limits::from_env()?);
         let input = output.writer(client)?;
         let worker = thread::spawn(move || {
-            if let Err(error) = super::engine::serve(worker_socket, config, session) {
+            if let Err(error) = crate::engine::agent::serve(worker_socket, config, session) {
                 if let Some(feed) = diagnostic_feed {
                     feed.record(error.to_string().as_bytes(), false);
                 }

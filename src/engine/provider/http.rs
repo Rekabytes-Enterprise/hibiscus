@@ -4,7 +4,7 @@ use super::{
     sse::{Decoder, Frame},
     stream::Stream,
 };
-use crate::runtime::{
+use crate::engine::{
     config::{Api, Provider},
     event::Event,
 };
@@ -16,16 +16,16 @@ use tokio::sync::mpsc::Sender;
 /// Sends one request and streams it to its completion event.
 pub(super) async fn exchange(
     provider: &Provider,
-    conversation: &crate::runtime::session::Session,
+    conversation: &crate::engine::session::Session,
     url: &str,
     body: &Value,
-    codex: Option<&crate::runtime::oauth::Token>,
+    codex: Option<&crate::engine::oauth::Token>,
     tools: Option<&[Value]>,
     out: &Sender<Value>,
 ) -> Result<Stream> {
-    let anonymous = provider.authentication == crate::runtime::config::Authentication::Rooxcode;
+    let anonymous = provider.authentication == crate::engine::config::Authentication::Rooxcode;
     let req = if anonymous {
-        crate::runtime::rooxcode::chat_request(provider, body, &conversation.rooxcode_session)?
+        crate::engine::rooxcode::chat_request(provider, body, &conversation.rooxcode_session)?
     } else {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -35,7 +35,7 @@ pub(super) async fn exchange(
         let key = if let Some(token) = codex {
             token.access.clone()
         } else {
-            crate::runtime::config::key(provider)?
+            crate::engine::config::key(provider)?
         };
         authenticated_request(&client, url, body.clone(), &key, codex)?
     };
@@ -49,7 +49,7 @@ pub(super) async fn exchange(
     })?;
     if !response.status().is_success() {
         if anonymous {
-            return Err(crate::runtime::rooxcode::response_error(response)
+            return Err(crate::engine::rooxcode::response_error(response)
                 .await
                 .into());
         }
@@ -81,12 +81,12 @@ pub(super) async fn exchange(
             let event: Value =
                 serde_json::from_str(&frame).map_err(|_| "Malformed provider streaming event")?;
             if anonymous && event["error"].is_object() {
-                return Err(crate::runtime::rooxcode::stream_error(&event).into());
+                return Err(crate::engine::rooxcode::stream_error(&event).into());
             }
             let delta = state.observe(&provider.api, &event)?;
             if anonymous
                 && capacity != Capacity::Started
-                && crate::runtime::rooxcode::model_output(&event)
+                && crate::engine::rooxcode::model_output(&event)
             {
                 if capacity == Capacity::Waiting {
                     emit(out, Event::ProviderWaiting(false).wire()).await?;
@@ -121,12 +121,12 @@ pub(super) fn authenticated_request(
     url: &str,
     mut body: Value,
     key: &str,
-    codex: Option<&crate::runtime::oauth::Token>,
+    codex: Option<&crate::engine::oauth::Token>,
 ) -> Result<reqwest::RequestBuilder> {
     let Some(token) = codex else {
         return Ok(client.post(url).bearer_auth(key).json(&body));
     };
-    if url != format!("{}/responses", crate::runtime::oauth::RESOURCE) {
+    if url != format!("{}/responses", crate::engine::oauth::RESOURCE) {
         return Err(
             "Refusing to send Codex subscription credentials outside the Codex endpoint".into(),
         );

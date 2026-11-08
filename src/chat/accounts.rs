@@ -26,7 +26,7 @@ pub(super) fn inline_login<R: BufRead>(
     )?;
     // Login is a provider choice, not a property of the current model. A
     // logged-out Runtime can select another model or have no model at all.
-    let providers = crate::runtime::config::load()?.providers;
+    let providers = crate::engine::config::load()?.providers;
     let keys = &events
         .as_ref()
         .ok_or("terminal events unavailable")?
@@ -40,7 +40,7 @@ pub(super) fn inline_login<R: BufRead>(
     } else {
         providers
             .iter()
-            .filter(|p| p.authentication == crate::runtime::config::Authentication::ApiKey)
+            .filter(|p| p.authentication == crate::engine::config::Authentication::ApiKey)
             .map(|p| p.id.clone())
             .collect::<Vec<_>>()
     };
@@ -72,7 +72,7 @@ pub(super) fn inline_login<R: BufRead>(
                 .map(SessionStart::Selected)
                 .unwrap_or(SessionStart::New);
             rpc.reconnect(start)?;
-            let configured = crate::runtime::config::load()?;
+            let configured = crate::engine::config::load()?;
             let configured = configured.providers.iter().find(|p| p.id == provider);
             if configured.is_some_and(|p| p.models.is_empty()) {
                 // Catalog providers load their models at runtime; let the user pick one.

@@ -1,6 +1,6 @@
 use super::http::authenticated_request;
 use super::*;
-use crate::runtime::session::Block;
+use crate::engine::session::Block;
 #[test]
 fn codex_done_requires_completed_status_before_accepting_tools() {
     for status in ["incomplete", "failed", "in_progress", "completed"] {

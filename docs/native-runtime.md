@@ -155,7 +155,7 @@ Native tools execute directly, including shell commands in interactive and piped
 
 ## Implementation and verification
 
-`src/runtime/` owns configuration, credentials, sessions, providers, tools, typed lifecycle events and the agent loop. The existing terminal adapter consumes bounded presentation records over a local in-process socket. It does not start another executable. Queued steering is inserted at a tool boundary; followups wait for the current turn. Settlement follows tool results and queue delivery.
+`src/engine/` owns configuration, credentials, sessions, providers, tools, typed lifecycle events and the agent loop, and never imports terminal code. `src/client/` is the terminal's side of the connection: the worker client, bounded transport, run state and user-facing errors. The existing terminal adapter consumes bounded presentation records over a local in-process socket. It does not start another executable. Queued steering is inserted at a tool boundary; followups wait for the current turn. Settlement follows tool results and queue delivery.
 
 The former Pi-only integration fixtures were retired. Their history remains in Git. Current native integration tests use local HTTP fixtures to exercise the actual CLI, all three provider protocols, file/shell tools, direct shell execution, cancellation, sessions, compaction, queues and masked credentials. Existing TUI/transport unit coverage remains active. Mock success is not real-provider verification.
 

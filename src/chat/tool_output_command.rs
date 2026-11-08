@@ -1,4 +1,4 @@
-use crate::{runtime::error::local, Result};
+use crate::{client::error::local, Result};
 use std::num::NonZeroUsize;
 
 pub(super) enum Query {

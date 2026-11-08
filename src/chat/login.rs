@@ -1,6 +1,6 @@
 //! The /login prompts. Credential storage stays in the runtime (auth, oauth).
 use crate::{
-    runtime::{auth, oauth},
+    engine::{auth, oauth},
     ui::Frontend,
     Result,
 };
@@ -25,7 +25,7 @@ pub(crate) fn sign_in(
         return Err("This provider requires a supported native authentication flow. Use a configured API-key provider.".into());
     }
     auth::known_api_key_provider(provider)?;
-    let answer = match crate::runtime::catalog::key_page(provider) {
+    let answer = match crate::engine::catalog::key_page(provider) {
         Some(page) => output.auth_prompt(
             events,
             &format!("{provider} API key · create one at {page}"),

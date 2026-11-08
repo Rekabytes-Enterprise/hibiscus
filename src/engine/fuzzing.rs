@@ -1,6 +1,3 @@
-pub(crate) fn rpc(bytes: &[u8]) {
-    super::transport::fuzz_record(bytes);
-}
 pub(crate) fn provider(bytes: &[u8]) {
     super::provider::fuzz_stream(bytes);
 }

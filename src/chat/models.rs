@@ -1,5 +1,5 @@
 use crate::{
-    runtime::bridge::Client,
+    client::bridge::Client,
     ui::dialog::Dialogs,
     ui::{
         display::thinking_label,

@@ -1,7 +1,4 @@
-use super::{
-    bridge::SessionStart,
-    config::{self, Config, Model, Provider},
-};
+use super::config::{self, Config, Model, Provider};
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -10,6 +7,14 @@ use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
 };
+
+/// Which session an engine opens.
+#[derive(Clone)]
+pub(crate) enum SessionStart {
+    New,
+    Latest,
+    Selected(PathBuf),
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]

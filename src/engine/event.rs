@@ -51,7 +51,7 @@ impl Event<'_> {
                 json!({"type":"tool_execution_end","toolCallId":id,"toolName":name,"isError":failed,"result":result,"durationMs":duration_ms})
             }
             Self::Failed(message) => {
-                json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":super::error::safe_message(message)}})
+                json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":super::safe_message(message)}})
             }
             Self::Settled => json!({"type":"agent_settled"}),
         }

@@ -6,16 +6,17 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 | --- | --- |
 | `src/main.rs` | Binary entry point and top-level error reporting |
 | `src/lib.rs`, `src/args.rs` | Private module graph and shared startup; command-line arguments and `--help` text |
-| `src/runtime/config.rs` | Validate provider/model configuration, private atomic storage |
-| `src/runtime/provider/` | Provider requests for Responses, Chat Completions and Anthropic: request bodies (`wire.rs`), sending (`http.rs`), SSE framing (`sse.rs`) and stream parsing (`stream.rs`) |
-| `src/runtime/session.rs` | Typed messages, versioned sessions, resume and interrupted-call recovery |
-| `src/runtime/tools.rs` | Native file, shell and checklist tools |
-| `src/runtime/engine.rs` | Model/tool loop, queueing, cancellation and compaction |
-| `src/runtime/policy.rs` | Project/personal instructions, project skill catalog and writing guidance |
-| `src/runtime/event.rs` | Typed lifecycle events encoded for presentation |
-| `src/runtime/bridge/` | In-process worker lifecycle and the terminal adapter: `Client` (`mod.rs`), one turn (`turn.rs`), transcript rendering (`display.rs`), keys during a run (`live_input.rs`) and JSONL records (`wire.rs`) |
-| `src/runtime/transport.rs` | Bounded local event ingress and controlled writes |
-| `src/runtime/auth.rs`, `logout.rs`, `oauth/` | API-key storage, Codex browser sign-in steps and locked token refresh, credential removal. No terminal UI |
+| `src/engine/config.rs` | Validate provider/model configuration, private atomic storage |
+| `src/engine/provider/` | Provider requests for Responses, Chat Completions and Anthropic: request bodies (`wire.rs`), sending (`http.rs`), SSE framing (`sse.rs`) and stream parsing (`stream.rs`) |
+| `src/engine/session.rs` | Typed messages, versioned sessions, resume and interrupted-call recovery |
+| `src/engine/tools.rs` | Native file, shell and checklist tools |
+| `src/engine/agent.rs` | Model/tool loop, queueing, cancellation and compaction |
+| `src/engine/policy.rs` | Project/personal instructions, project skill catalog and writing guidance |
+| `src/engine/event.rs` | Typed lifecycle events encoded for presentation |
+| `src/client/bridge/` | In-process worker lifecycle and the terminal adapter: `Client` (`mod.rs`), one turn (`turn.rs`), transcript rendering (`display.rs`), keys during a run (`live_input.rs`) and JSONL records (`wire.rs`) |
+| `src/client/transport.rs` | Bounded local event ingress and controlled writes |
+| `src/client/error.rs`, `run.rs`, `diagnostics.rs` | User-facing error categories and recovery hints, run settlement state, diagnostic capture |
+| `src/engine/auth.rs`, `logout.rs`, `oauth/` | API-key storage, Codex browser sign-in steps and locked token refresh, credential removal. No terminal UI |
 | `src/extensions/` | Agent creation/inspection/reload tools, shared catalog snapshots, manifest validation and executable protocol |
 | `src/process.rs` | Bounded stdin/stdout/stderr, deadlines and process-group cancellation shared by shell tools and extensions |
 | `src/chat/` | Slash-command workflows, the `/login` and `/logout` prompts, saved-session selection, and the native command catalog (`commands.rs`) shared by routing, completion and extension collision checks |

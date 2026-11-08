@@ -1,6 +1,6 @@
 //! Complete version bundles and one atomic commit point. No process execution.
 use super::{manifest, Registry};
-use crate::{runtime::config, Result};
+use crate::{engine::config, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -443,7 +443,7 @@ impl Store {
             if old != new {
                 match (std::str::from_utf8(&old), std::str::from_utf8(&new)) {
                     (Ok(old), Ok(new)) if old.len() + new.len() <= 131072 => {
-                        let (preview, _, _) = crate::runtime::edit_diff(old, new);
+                        let (preview, _, _) = crate::engine::edit_diff(old, new);
                         text.push_str(&preview);
                     }
                     _ => text.push_str("[Binary or large file content changed]\n"),
@@ -571,7 +571,7 @@ impl Candidate {
             self.record.files = files;
         }
         self.record.validation = Validation::Failed {
-            message: crate::runtime::error::safe_message(message),
+            message: crate::client::error::safe_message(message),
             checks,
         };
         self.save()

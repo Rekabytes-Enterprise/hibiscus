@@ -243,7 +243,7 @@ pub(super) async fn run(
             text: if text.is_empty() {
                 String::new()
             } else {
-                crate::runtime::error::safe_message(&text)
+                crate::client::error::safe_message(&text)
             },
             duration_millis: start.elapsed().as_millis().min(u64::MAX as u128) as u64,
         });

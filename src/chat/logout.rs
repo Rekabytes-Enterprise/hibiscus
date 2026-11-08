@@ -1,5 +1,5 @@
 //! The /logout prompts. Credential removal stays in runtime/logout.rs.
-use crate::{runtime::logout, ui::Frontend, Result};
+use crate::{engine::logout, ui::Frontend, Result};
 use std::sync::mpsc::Receiver;
 
 pub(crate) enum LogoutOutcome {

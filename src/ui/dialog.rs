@@ -22,11 +22,11 @@ impl Dialogs {
         interactive: bool,
     ) -> Result<()> {
         if event["type"] == "extension_error" || event["type"] == "provider_error" {
-            let error = crate::runtime::error::ChatError::new(
+            let error = crate::client::error::ChatError::new(
                 if event["type"] == "provider_error" {
-                    crate::runtime::error::ErrorSource::Local
+                    crate::client::error::ErrorSource::Local
                 } else {
-                    crate::runtime::error::ErrorSource::Extension
+                    crate::client::error::ErrorSource::Extension
                 },
                 event["error"].as_str().unwrap_or("Extension failed"),
             );
@@ -45,7 +45,7 @@ impl Dialogs {
             writeln!(
                 display,
                 "[runtime: {}]",
-                crate::runtime::error::safe_message(
+                crate::client::error::safe_message(
                     event["message"].as_str().unwrap_or("notification")
                 )
             )?;
@@ -96,8 +96,8 @@ impl Dialogs {
                 reply[field] = value.clone();
             }
         }
-        writeln!(input, "{reply}").map_err(crate::runtime::error::transport)?;
-        input.flush().map_err(crate::runtime::error::transport)?;
+        writeln!(input, "{reply}").map_err(crate::client::error::transport)?;
+        input.flush().map_err(crate::client::error::transport)?;
         Ok(())
     }
 }

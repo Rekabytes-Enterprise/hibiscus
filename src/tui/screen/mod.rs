@@ -211,7 +211,7 @@ pub(crate) struct Screen {
     suspended: bool,
     color: bool,
     painter: Painter,
-    diagnostics: crate::runtime::diagnostics::Diagnostics,
+    diagnostics: crate::client::diagnostics::Diagnostics,
     diagnostic_revision: u64,
     last_paint: Option<Instant>,
     paint_pending: bool,
@@ -273,14 +273,14 @@ impl Screen {
         Self::with_diagnostics(
             interactive,
             false,
-            crate::runtime::diagnostics::Diagnostics::default(),
+            crate::client::diagnostics::Diagnostics::default(),
         )
     }
 
     pub(crate) fn with_diagnostics(
         interactive: bool,
         color: bool,
-        diagnostics: crate::runtime::diagnostics::Diagnostics,
+        diagnostics: crate::client::diagnostics::Diagnostics,
     ) -> io::Result<Self> {
         let out = io::stdout();
         // Capability selection belongs to ui::Frontend. Once selected, a

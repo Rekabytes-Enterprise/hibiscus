@@ -218,47 +218,7 @@ fn classify(message: &str) -> ErrorCategory {
     }
 }
 
-/// Bounded, single-line terminal-safe detail. Drop URLs and common credential
-/// representations; never retain the raw provider error in recovery state.
-pub(crate) fn safe_message(message: &str) -> String {
-    let cleaned: String = message
-        .chars()
-        .take(4096)
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let mut redact_next = false;
-    let mut words = Vec::new();
-    for word in cleaned.split_whitespace() {
-        let lower = word.to_lowercase();
-        let credential = [
-            "authorization",
-            "bearer",
-            "api_key",
-            "apikey",
-            "api-key",
-            "access_token",
-            "refresh_token",
-            "password",
-            "secret",
-        ]
-        .iter()
-        .any(|key| lower.contains(key));
-        let redact = redact_next
-            || credential
-            || lower.contains("http://")
-            || lower.contains("https://")
-            || lower.contains("sk-")
-            || word.len() > 120;
-        words.push(if redact { "[redacted]" } else { word });
-        redact_next = credential;
-    }
-    let text = words.join(" ");
-    if text.is_empty() {
-        "Unknown Runtime error".into()
-    } else {
-        text.chars().take(600).collect()
-    }
-}
+pub(crate) use crate::engine::safe_message;
 
 #[cfg(test)]
 mod tests {

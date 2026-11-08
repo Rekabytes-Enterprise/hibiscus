@@ -181,11 +181,11 @@ pub(super) fn chat<R: BufRead>(
                         interactive,
                     )?;
                     if list {
-                        let entries: Vec<crate::runtime::tool_output::Summary> =
+                        let entries: Vec<crate::engine::tool_output::Summary> =
                             serde_json::from_value(data["outputs"].clone())?;
                         output.saved_tool_outputs(&entries)?;
                     } else {
-                        let entry: Option<crate::runtime::tool_output::Output> =
+                        let entry: Option<crate::engine::tool_output::Output> =
                             serde_json::from_value(data["output"].clone())?;
                         output.saved_tool_output(entry.as_ref())?;
                     }

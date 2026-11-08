@@ -393,7 +393,7 @@ impl ScrollDisplay for Screen {
         };
         self.input_notice = Some(format!(
             "{label}: {} · /restore after run",
-            crate::runtime::error::safe_message(error)
+            crate::client::error::safe_message(error)
         ));
         self.render()
     }

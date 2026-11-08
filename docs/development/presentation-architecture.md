@@ -51,7 +51,8 @@ src/
 │   ├── format.rs           Token count formatting
 │   ├── text.rs             Clipboard encoding helper
 │   └── welcome.rs          Welcome metadata and command hints
-└── runtime/                Native agent, providers, tools and persistence
+├── client/                Worker client, transport, run state and user-facing errors
+└── engine/                Native agent, providers, tools and persistence
 ```
 
 `tests/native_runtime.rs` retains the shared fixture and runtime integration tests. Its `native_runtime/cli.rs`, `tui.rs` and `presentation.rs` children cover each view and their shared behavior in the same integration binary. PTY support remains in `tests/support/`. Benchmarks point at their actual source modules.

@@ -89,7 +89,7 @@ fn response(id: &str, data: Value) -> Value {
     json!({"type":"response","id":id,"success":true,"data":data})
 }
 fn failure(id: &str, message: &str) -> Value {
-    json!({"type":"response","id":id,"success":false,"error":super::error::safe_message(message)})
+    json!({"type":"response","id":id,"success":false,"error":super::safe_message(message)})
 }
 fn queued(q: &Queue) -> Value {
     json!({"type":"queue_update","steering":q.items.iter().filter(|p|p.steer).map(|p|&p.text).collect::<Vec<_>>(),"followUp":q.items.iter().filter(|p|!p.steer).map(|p|&p.text).collect::<Vec<_>>()})
@@ -404,7 +404,7 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                         Err(error) => Some(error.to_string()),
                     };
                 }
-                match Session::open(&super::bridge::SessionStart::New, &config) {
+                match Session::open(&super::session::SessionStart::New, &config) {
                     Ok(mut next) => {
                         select_rooxcode(&mut next, &config);
                         *session.lock().unwrap() = next;
@@ -418,7 +418,7 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
             }
             Command::SwitchSession { session_path } if !busy => {
                 match Session::open(
-                    &super::bridge::SessionStart::Selected(session_path),
+                    &super::session::SessionStart::Selected(session_path),
                     &config,
                 ) {
                     Ok(next) => {

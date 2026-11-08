@@ -17,7 +17,7 @@ use self::logout::{sign_out, LogoutOutcome};
 use self::models::{choose_model, choose_thinking};
 use self::saved_sessions as sessions;
 use crate::{
-    runtime::{
+    client::{
         bridge::{Client, SessionStart},
         error::{local, ChatError, RecoveryAction},
     },

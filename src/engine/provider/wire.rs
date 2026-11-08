@@ -1,5 +1,5 @@
 //! Builds each API's request body from the stored conversation.
-use crate::runtime::{
+use crate::engine::{
     config::{Api, Model, Provider},
     session::{Block, Message},
 };
@@ -107,15 +107,15 @@ fn wire_messages(messages: &[Message], provider: &Provider, model: &Model) -> Ve
     }
     wire
 }
-pub(in crate::runtime) fn request_body(
+pub(in crate::engine) fn request_body(
     provider: &Provider,
     model: &Model,
-    conversation: &crate::runtime::session::Session,
+    conversation: &crate::engine::session::Session,
     system: &str,
     thinking: &str,
     tools: Option<&[Value]>,
 ) -> (&'static str, Value) {
-    let anonymous = provider.authentication == crate::runtime::config::Authentication::Rooxcode;
+    let anonymous = provider.authentication == crate::engine::config::Authentication::Rooxcode;
     let definitions = tools.unwrap_or_default();
     let mut wire = wire_messages(&conversation.messages, provider, model);
     let (route, mut body) = match provider.api {
@@ -140,7 +140,7 @@ pub(in crate::runtime) fn request_body(
     }
     if anonymous {
         if let Some(effort) =
-            crate::runtime::thinking::Policy::for_model(provider, model).rooxcode_effort(thinking)
+            crate::engine::thinking::Policy::for_model(provider, model).rooxcode_effort(thinking)
         {
             body["reasoning_effort"] = json!(effort);
         }
