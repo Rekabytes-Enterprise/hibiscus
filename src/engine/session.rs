@@ -75,7 +75,7 @@ impl Message {
 #[derive(Clone)]
 pub struct Session {
     pub id: String,
-    pub rooxcode_session: super::rooxcode::SessionId,
+    pub(super) rooxcode_session: super::rooxcode::SessionId,
     pub path: PathBuf,
     pub cwd: PathBuf,
     pub model: Option<(String, String)>,

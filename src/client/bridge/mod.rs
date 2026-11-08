@@ -29,7 +29,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::os::{fd::AsRawFd, unix::net::UnixStream};
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
