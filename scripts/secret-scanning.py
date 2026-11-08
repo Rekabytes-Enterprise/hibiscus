@@ -11,6 +11,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 
 VERSION = "8.30.1"
@@ -61,14 +64,53 @@ def unpack_verified(data, expected, directory):
     return executable
 
 
+def download(request, limit, error):
+    """Fetches a pinned tool archive; the caller verifies its checksum. GitHub release
+    downloads sometimes fail with 5xx or time out on CI runners, so retry first."""
+    delays = (5, 10, 20, 40)
+    for attempt in range(len(delays) + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read(limit + 1)
+        except urllib.error.HTTPError as failure:
+            if failure.code < 500 or attempt == len(delays):
+                host = urllib.parse.urlsplit(failure.url or "").netloc or "the download host"
+                raise error(f"Download failed: HTTP {failure.code} from {host}") from failure
+        except OSError as failure:
+            if attempt == len(delays):
+                reason = getattr(failure, "reason", failure)
+                raise error(f"Download failed: {type(reason).__name__}") from failure
+        time.sleep(delays[attempt])
+
+
+def release_asset(repo, tag, name, limit, error):
+    """A pinned GitHub release file; the caller verifies its checksum, so either route is safe.
+    The github.com download address can return 504 for minutes while the API route works."""
+    agent = {"User-Agent": "hibiscus-ci"}
+    direct = urllib.request.Request(f"https://github.com/{repo}/releases/download/{tag}/{name}", headers=agent)
+    try:
+        return download(direct, limit, error)
+    except error as first:
+        try:
+            listing = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+                                             headers={**agent, "Accept": "application/vnd.github+json"})
+            assets = json.loads(download(listing, 4 * 1024 * 1024, error))["assets"]
+            url = next(a["url"] for a in assets if a["name"] == name)
+            if not url.startswith(f"https://api.github.com/repos/{repo}/releases/assets/"):
+                raise first
+            asset = urllib.request.Request(url, headers={**agent, "Accept": "application/octet-stream"})
+            return download(asset, limit, error)
+        except (error, StopIteration, KeyError, TypeError, ValueError):
+            raise first
+
+
 def install(directory):
     selection = ARCHIVES.get((platform.system(), platform.machine()))
     if selection is None:
         raise ScanError("Unsupported scanner platform")
     target, digest = selection
-    url = f"https://github.com/gitleaks/gitleaks/releases/download/v{VERSION}/gitleaks_{VERSION}_{target}.tar.gz"
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read(32 * 1024 * 1024 + 1)
+    data = release_asset("gitleaks/gitleaks", f"v{VERSION}", f"gitleaks_{VERSION}_{target}.tar.gz",
+                         32 * 1024 * 1024, ScanError)
     return unpack_verified(data, digest, directory)
 
 
