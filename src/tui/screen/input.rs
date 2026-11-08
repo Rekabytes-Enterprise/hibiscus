@@ -52,7 +52,7 @@ impl Screen {
         self.file_matches.clear();
     }
 
-    fn command_matches(&self) -> Vec<commands::Command<'_>> {
+    pub(super) fn command_matches(&self) -> Vec<commands::Command<'_>> {
         commands::matches(&self.draft, &self.extension_commands)
             .into_iter()
             .filter(|cmd| (!self.has_credentials || cmd.name != "/login") && cmd.name != "/tui")
