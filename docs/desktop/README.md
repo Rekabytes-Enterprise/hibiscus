@@ -9,7 +9,7 @@ Hibiscus gets a desktop app for **macOS Apple Silicon** and **Linux x86_64**. Wi
 | Phase | Doc | Result | Users see a change? |
 |---|---|---|---|
 | 0 | [Library API](phase-0-library.md) (done) | The engine can be driven from code other than the terminal UI | No |
-| 1 | [Desktop MVP](phase-1-mvp.md) | Tauri app, `.dmg` and `.AppImage`/`.deb` in the release, desktop install script | Yes |
+| 1 | [Desktop MVP](phase-1-mvp.md) | Tauri app, `.dmg` and `.AppImage` in the release ([Desktop release](release.md)), desktop install script | Yes |
 | 2 | [Updates and polish](phase-2-updates.md) | Signed auto-updates, window state, notifications | Yes |
 | Later | [Windows](later-windows.md) | Native Windows port and `.msi`/`.exe` | Yes |
 
@@ -19,7 +19,7 @@ Each phase ships on its own and leaves `main` releasable.
 
 - **Framework:** Tauri v2. The engine runs inside the app process, the same way the TUI runs it today. No sidecar binary, no local server, no open port.
 - **Platforms:** `aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`. Intel Mac and Linux ARM are not in the first release.
-- **Signing:** no Apple Developer or Windows accounts for now. macOS builds get a free ad-hoc signature. Every file is listed in `SHA256SUMS` and covered by the existing sigstore provenance. The updater uses its own Tauri signing key. See [Unsigned distribution](#unsigned-distribution).
+- **Signing:** no Apple Developer or Windows accounts for now. macOS builds get a free ad-hoc signature. Desktop files get their own `SHA256SUMS-desktop` and sigstore provenance in the same release ([Desktop release](release.md)). The updater uses its own Tauri signing key. See [Unsigned distribution](#unsigned-distribution).
 - **Products:** this is Hibiscus work only. It does not change the Rooxcode Gateway's code, behaviour or tests; the gateway stays one provider inside the engine.
 
 ## Running from source
