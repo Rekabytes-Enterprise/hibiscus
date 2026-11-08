@@ -85,14 +85,7 @@ pub(crate) fn sign_in(
     if auth_type != "api_key" {
         return Err("This provider requires a supported native authentication flow. Use a configured API-key provider.".into());
     }
-    let config = super::config::load()?;
-    if !config
-        .providers
-        .iter()
-        .any(|p| p.id == provider && p.authentication == super::config::Authentication::ApiKey)
-    {
-        return Err("Unknown provider".into());
-    }
+    known_api_key_provider(provider)?;
     let answer = match super::catalog::key_page(provider) {
         Some(page) => output.auth_prompt(
             events,
@@ -106,13 +99,31 @@ pub(crate) fn sign_in(
     let Some(answer) = answer else {
         return Ok(AuthOutcome::Cancelled);
     };
-    if answer.trim().is_empty() || answer.len() > 8192 || answer.chars().any(char::is_control) {
+    save_api_key(provider, answer)?;
+    Ok(AuthOutcome::Success)
+}
+
+fn known_api_key_provider(provider: &str) -> Result<()> {
+    let config = super::config::load()?;
+    if !config
+        .providers
+        .iter()
+        .any(|p| p.id == provider && p.authentication == super::config::Authentication::ApiKey)
+    {
+        return Err("Unknown provider".into());
+    }
+    Ok(())
+}
+
+/// Validates and stores an API key for a configured API-key provider.
+pub(crate) fn save_api_key(provider: &str, key: String) -> Result<()> {
+    known_api_key_provider(provider)?;
+    if key.trim().is_empty() || key.len() > 8192 || key.chars().any(char::is_control) {
         return Err("API key must be nonempty and contain no control characters".into());
     }
     let mut keys = keys()?;
-    keys.insert(provider.into(), answer);
-    save(&keys)?;
-    Ok(AuthOutcome::Success)
+    keys.insert(provider.into(), key);
+    save(&keys)
 }
 
 #[cfg(test)]

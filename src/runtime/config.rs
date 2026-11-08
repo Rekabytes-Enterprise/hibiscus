@@ -69,6 +69,9 @@ pub struct Config {
     /// Providers whose models come from their own catalog at runtime.
     #[serde(skip)]
     pub(super) discovered: std::collections::HashSet<String>,
+    /// Codex release sent when listing Codex models; looked up once per engine run.
+    #[serde(skip)]
+    pub(super) codex_version: Option<String>,
 }
 fn default_steps() -> usize {
     64
@@ -126,11 +129,13 @@ pub fn load() -> Result<Config> {
             api: Api::Responses,
             authentication: Authentication::Codex,
             api_key_env: None,
+            // Fallback until the plan's own list is fetched (catalog::refresh).
             models: vec![Model {
                 reasoning: true,
                 ..model("gpt-6.1-sol")
             }],
         });
+        config.discovered.insert("openai-codex".into());
     }
     super::rooxcode::install(&mut config);
     super::catalog::install(&mut config);

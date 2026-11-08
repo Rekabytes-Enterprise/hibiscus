@@ -124,6 +124,64 @@ pub(super) fn sign_in(
     Ok(super::auth::AuthOutcome::Success)
 }
 
+/// Codex browser sign-in for the desktop app; the TUI uses `sign_in` instead.
+pub struct CodexSignIn {
+    pending: protocol::Pending,
+    url: String,
+    paste: tokio::sync::mpsc::Sender<String>,
+    pasted: tokio::sync::mpsc::Receiver<String>,
+}
+impl CodexSignIn {
+    /// Listens on `localhost:1455` and builds the sign-in link. Open it with `url`.
+    pub fn start() -> Result<Self> {
+        Self::with(
+            protocol::Pending::bind()?,
+            &protocol::Endpoints::production(),
+        )
+    }
+    fn with(pending: protocol::Pending, endpoints: &protocol::Endpoints) -> Result<Self> {
+        let url = pending.url(endpoints)?.to_string();
+        let (paste, pasted) = tokio::sync::mpsc::channel(1);
+        Ok(Self {
+            pending,
+            url,
+            paste,
+            pasted,
+        })
+    }
+    /// The fixed-origin authorization URL to open in the browser.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    /// Sends a redirect URL pasted by the user, for when the browser cannot reach the app.
+    pub fn paste(&self) -> tokio::sync::mpsc::Sender<String> {
+        self.paste.clone()
+    }
+    /// Waits for the browser (or a pasted redirect), then saves the login.
+    /// Dropping the future cancels and frees the port; failures keep the previous login.
+    pub async fn finish(self) -> Result<()> {
+        self.finish_at(&store::Store::app()?, &protocol::Endpoints::production())
+            .await
+    }
+    async fn finish_at(self, store: &store::Store, endpoints: &protocol::Endpoints) -> Result<()> {
+        let Self {
+            pending,
+            paste,
+            pasted,
+            ..
+        } = self;
+        let _paste = paste; // keeps the paste channel open while the caller holds no sender
+        let token = tokio::time::timeout(
+            Duration::from_secs(600),
+            pending.complete(pasted, endpoints),
+        )
+        .await
+        .map_err(|_| "Codex sign-in timed out. Try again.")??;
+        let _lock = store.try_lock()?;
+        store.write(&token)
+    }
+}
+
 #[cfg(test)]
 mod tests;
 

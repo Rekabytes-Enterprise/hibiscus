@@ -404,7 +404,8 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                         Err(error) => Some(error.to_string()),
                     };
                 }
-                match Session::open(&super::bridge::SessionStart::New, &config) {
+                let cwd = session.lock().unwrap().cwd.clone();
+                match Session::open(&super::bridge::SessionStart::New, &cwd, &config) {
                     Ok(mut next) => {
                         select_rooxcode(&mut next, &config);
                         *session.lock().unwrap() = next;
@@ -417,8 +418,10 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                 }
             }
             Command::SwitchSession { session_path } if !busy => {
+                let cwd = session.lock().unwrap().cwd.clone();
                 match Session::open(
                     &super::bridge::SessionStart::Selected(session_path),
+                    &cwd,
                     &config,
                 ) {
                     Ok(next) => {

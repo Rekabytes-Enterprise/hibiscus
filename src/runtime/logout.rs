@@ -10,7 +10,7 @@ pub(crate) fn sign_out(
     events: &Receiver<u8>,
     before_remove: impl FnOnce() -> Result<()>,
 ) -> Result<LogoutOutcome> {
-    let mut keys = super::auth::keys()?;
+    let keys = super::auth::keys()?;
     let mut providers = keys.keys().cloned().collect::<Vec<_>>();
     providers.sort();
     if super::oauth::stored_access_token().is_ok() {
@@ -28,11 +28,18 @@ pub(crate) fn sign_out(
         return Ok(LogoutOutcome::Cancelled);
     }
     before_remove()?;
+    remove(&provider)?;
+    Ok(LogoutOutcome::Removed { provider })
+}
+
+/// Removes the stored API key, or the Codex login for `openai-codex`.
+pub(crate) fn remove(provider: &str) -> Result<()> {
     if provider == "openai-codex" {
-        super::oauth::remove()?;
-    } else {
-        keys.remove(&provider);
+        return super::oauth::remove();
+    }
+    let mut keys = super::auth::keys()?;
+    if keys.remove(provider).is_some() {
         super::auth::save(&keys)?;
     }
-    Ok(LogoutOutcome::Removed { provider })
+    Ok(())
 }

@@ -1,13 +1,15 @@
 # Current state
 
-## v0.3.28 release preparation
+## Desktop app (macOS Apple Silicon and Linux x86_64)
 
-The owner requested a new release after local Rooxcode thinking implementation. Prepare the patch through dev and main in Rekabytes-Enterprise/hibiscus, then verify and publish the signed GitHub Release. This request supersedes the preceding local-only scope. No registry publication or gateway deployment is included.
+Plan and status live in docs/desktop/ (README, phase docs, protocol). The owner chose a Tauri v2 app with a real Svelte 5 + TypeScript GUI, a Rooxcode-branded bundle ID, Linux x86_64 only at first, and unsigned builds (no Apple/Windows developer accounts). Windows is deferred.
 
-The patch validates advertised per-model reasoning efforts, exposes Default plus supported levels in CLI/TUI, and sends reasoning_effort only for explicit Rooxcode choices. Default omits the field and does not imply disabled upstream reasoning; advertised none remains distinct. Selection survives tool/length continuation, compaction and resume. Successful catalog/model changes reset unsupported choices with a durable reset and short notice; failed discovery preserves the choice and blocks unavailable inference. Existing providers and anonymous credential isolation remain unchanged.
+Phase 0 is done: public hibiscus::desktop (Engine per workspace, save_api_key, sign_out, CodexSignIn, key_page, sessions, providers); Session::open takes the workspace explicitly.
 
-Local implementation verification passed 227 unit tests, 107 native integration fixtures and the evaluation test, strict all-target Clippy with fuzzing, formatting and diff checks. Real CLI/TUI PTYs and captured request bodies cover selectors, headers, resets, lifecycle, cancellation and other-provider behavior. The v0.3.28 version-sensitive Rust suite, strict Clippy, parser corpus, installer/version/npm checks and formatting/diff checks passed. Hosted checks and signed archive verification remain pending.
+Phase 1 is mostly implemented in desktop/ and on its way to dev as one PR: a Claude-style three-column window (frosted sidebar and overlay title bar on macOS), chat with sanitized Markdown, highlight.js code blocks and copy buttons, grouped tool rows with edit/write diffs, a session details panel, a branch diff pane (against origin/HEAD or main), image attachments (paperclip, paste, drop), in-app dropdowns, and Settings > Providers with API keys, Codex browser sign-in and sign-out. Codex models are discovered from the plan for every frontend (see MEMORY).
 
-The adjacent gateway contract/source was read without changes. Production must advertise reasoning:true with per-model reasoning_efforts and accept matching request values. No live upstream inference or deployment verification is claimed.
+Verified: 236 unit tests, 110 native fixtures, tests/desktop_api.rs, strict Clippy and fmt; desktop glue 3 tests and Clippy; frontend svelte-check, 19 Vitest tests and a production build; live Codex model listing and one prompt to a discovered model. Not verified by hand: the window's look (screenshots came from the owner), light mode, Linux, and a full Codex browser sign-in from the app.
 
-Previous v0.3.27 remains published latest until this release is verified and published. It fixed startup for retired codexContextWindow configs while preserving native settings, original files and credentials. PR114/115/116 passed; main9cc88ab and dev428201a had matching trees and correct ancestry. Its four signed archives, public downloads, installer and isolated old-updater flow were verified. The old v0.3.25 intermediate tag/draft remains immutable and unpublished; its changes shipped in v0.3.26. Security-score/age eligibility and unrelated tasks remain deferred.
+Next: release.yml desktop jobs into the same draft release (SHA256SUMS + provenance), install-desktop.sh with tests, a desktop CI job, a docs/installation.md section, confirming the bundle ID domain (placeholder com.rooxcode.hibiscus), and image tools (read images for vision models, an image-generation extension, inline display).
+
+Release notes: v0.3.29 is published latest. Old v0.3.25 and v0.3.12 drafts remain unpublished. main is one empty merge commit ahead of dev.

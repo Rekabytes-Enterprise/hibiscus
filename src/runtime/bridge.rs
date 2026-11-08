@@ -43,6 +43,24 @@ pub(crate) struct Client {
     stats_supported: bool,
 }
 
+/// Opens the session for `workspace` and runs the native engine on a worker
+/// thread. Returns the thread and the client end of its socket.
+pub(super) fn spawn_engine(
+    start: &SessionStart,
+    workspace: &std::path::Path,
+    on_error: impl FnOnce(String) + Send + 'static,
+) -> Result<(JoinHandle<()>, UnixStream)> {
+    let config = super::config::load()?;
+    let session = super::session::Session::open(start, workspace, &config)?;
+    let (client, worker_socket) = UnixStream::pair()?;
+    let worker = thread::spawn(move || {
+        if let Err(error) = super::engine::serve(worker_socket, config, session) {
+            on_error(error.to_string());
+        }
+    });
+    Ok((worker, client))
+}
+
 impl Client {
     pub(crate) fn start(start: SessionStart) -> Result<Self> {
         Self::start_with_diagnostics(start, None)
@@ -52,19 +70,14 @@ impl Client {
         start: SessionStart,
         diagnostic_feed: Option<Diagnostics>,
     ) -> Result<Self> {
-        let config = super::config::load()?;
-        let session = super::session::Session::open(&start, &config)?;
-        let (client, worker_socket) = UnixStream::pair()?;
+        let (worker, client) = spawn_engine(&start, &std::env::current_dir()?, move |error| {
+            if let Some(feed) = diagnostic_feed {
+                feed.record(error.as_bytes(), false);
+            }
+        })?;
         let control = client.try_clone()?;
         let output = Inbox::start(SocketReader(client.try_clone()?), Limits::from_env()?);
         let input = output.writer(client)?;
-        let worker = thread::spawn(move || {
-            if let Err(error) = super::engine::serve(worker_socket, config, session) {
-                if let Some(feed) = diagnostic_feed {
-                    feed.record(error.to_string().as_bytes(), false);
-                }
-            }
-        });
         Ok(Self {
             worker: Some(worker),
             control,
@@ -1472,7 +1485,7 @@ fn check_record(event: &Value) -> Result<()> {
 
 // A cloned Unix socket shares O_NONBLOCK with its writer. Poll readiness in
 // the dedicated ingress thread rather than interpreting WouldBlock as EOF.
-struct SocketReader(UnixStream);
+pub(super) struct SocketReader(pub(super) UnixStream);
 impl std::io::Read for SocketReader {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         loop {

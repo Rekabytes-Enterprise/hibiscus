@@ -3,6 +3,7 @@ mod chat;
 mod checkpoints;
 mod cli;
 mod commands;
+pub mod desktop;
 mod extensions;
 mod paths;
 mod process;

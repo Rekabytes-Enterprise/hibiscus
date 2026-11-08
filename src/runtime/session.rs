@@ -81,8 +81,13 @@ pub struct Session {
     pub context: Option<u64>,
 }
 impl Session {
-    pub fn open(start: &SessionStart, config: &Config) -> Result<Self> {
-        let cwd = std::env::current_dir()?.canonicalize()?;
+    /// Opens a session for `workspace`, the folder its tools work in.
+    pub fn open(
+        start: &SessionStart,
+        workspace: &std::path::Path,
+        config: &Config,
+    ) -> Result<Self> {
+        let cwd = workspace.canonicalize()?;
         let path = match start {
             SessionStart::Selected(p) => Some(p.clone()),
             SessionStart::Latest => crate::chat::sessions::list(&cwd)?
@@ -141,7 +146,7 @@ impl Session {
         {
             return Err("Not a supported Hibiscus session for this workspace. Original sessions are never modified.".into());
         }
-        let mut session = Self::open(&SessionStart::New, config)?;
+        let mut session = Self::open(&SessionStart::New, cwd, config)?;
         session.path = path;
         session.id = head["id"].as_str().ok_or("Invalid session ID")?.into();
         if let Some(value) = head.get("rooxcodeSession") {
