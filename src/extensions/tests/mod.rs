@@ -372,8 +372,5 @@ fn authoring_cannot_displace_loaded_extensions_at_the_directory_limit() {
     assert_eq!(fs::read_dir(&home.0).unwrap().count(), 32);
 }
 
-#[path = "version_tests.rs"]
-mod versioning;
-
-#[path = "output_schema_tests.rs"]
 mod output_schemas;
+mod versioning;

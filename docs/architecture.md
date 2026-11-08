@@ -5,7 +5,7 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 | Module | Responsibility |
 | --- | --- |
 | `src/main.rs` | Binary entry point and top-level error reporting |
-| `src/lib.rs` | Private module graph, CLI modes and shared startup |
+| `src/lib.rs`, `src/args.rs` | Private module graph and shared startup; command-line arguments and `--help` text |
 | `src/runtime/config.rs` | Validate provider/model configuration, private atomic storage |
 | `src/runtime/provider/` | Provider requests for Responses, Chat Completions and Anthropic: request bodies (`wire.rs`), sending (`http.rs`), SSE framing (`sse.rs`) and stream parsing (`stream.rs`) |
 | `src/runtime/session.rs` | Typed messages, versioned sessions, resume and interrupted-call recovery |
@@ -13,7 +13,7 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 | `src/runtime/engine.rs` | Model/tool loop, queueing, cancellation and compaction |
 | `src/runtime/policy.rs` | Project/personal instructions, project skill catalog and writing guidance |
 | `src/runtime/event.rs` | Typed lifecycle events encoded for presentation |
-| `src/runtime/bridge.rs` | In-process worker lifecycle and the existing terminal adapter |
+| `src/runtime/bridge/` | In-process worker lifecycle and the terminal adapter: `Client` (`mod.rs`), one turn (`turn.rs`), transcript rendering (`display.rs`), keys during a run (`live_input.rs`) and JSONL records (`wire.rs`) |
 | `src/runtime/transport.rs` | Bounded local event ingress and controlled writes |
 | `src/runtime/auth.rs`, `logout.rs`, `oauth/` | API-key storage, Codex browser sign-in steps and locked token refresh, credential removal. No terminal UI |
 | `src/extensions/` | Agent creation/inspection/reload tools, shared catalog snapshots, manifest validation and executable protocol |

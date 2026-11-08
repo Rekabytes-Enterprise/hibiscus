@@ -1,6 +1,8 @@
 //! Fullscreen state and session presentation.
 mod events;
 mod input;
+mod picker;
+mod prompt;
 mod render;
 use crate::ui::{
     display::*,
