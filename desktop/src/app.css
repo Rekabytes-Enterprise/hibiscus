@@ -295,3 +295,10 @@ table.hunks tr.gap td { padding: 4px 16px; color: var(--muted); background: var(
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 55%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .modal input { background: var(--panel); }
+
+/* Settings: privacy switch and legal text. */
+.toggle { display: flex; align-items: center; gap: 14px; cursor: pointer; }
+.toggle .grow { display: flex; flex-direction: column; gap: 2px; }
+.toggle input[type="checkbox"] { width: auto; flex: none; }
+.settings h3 { margin: 28px 0 10px; font-size: 15px; }
+.legal { font-size: 13.5px; line-height: 1.65; margin-top: 12px; }
