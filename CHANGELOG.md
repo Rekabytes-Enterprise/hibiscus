@@ -4,6 +4,19 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.33] - 2026-11-10
+
+### Changed
+
+- Desktop app: switching to another session in the same folder no longer restarts the engine or downloads the model lists again. The conversation shows as soon as its messages load, and the session details, git changes and session list then load in parallel. In our measurements a switch went from about 600 ms (up to 1.9 s on a cold start) to about 35 ms.
+- The changes pane compares the branch with its nearest base branch, such as `dev`, instead of always using the repository's default branch, so unreleased work on the base no longer shows as the branch's own. The base label is now a menu for picking another branch, and the app remembers the pick per folder.
+- `docs/desktop/release.md` explains how to open the unsigned desktop app on macOS 15 with System Settings' "Open Anyway".
+- Dependency updates: `sha2` 0.11, plus GitHub Actions updates including `actions/setup-node` 7.1.0.
+
+### Fixed
+
+- Desktop app: edit diffs no longer squeeze the code into a third of the width when they start partway through a file. Long lines wrap between words, durations under 0.1 s are hidden, back-to-back goal updates show as one row, and paths inside the session folder show as relative paths in command rows.
+
 ## [0.3.32] - 2026-11-09
 
 ### Fixed
