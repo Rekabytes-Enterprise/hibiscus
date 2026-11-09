@@ -83,6 +83,15 @@
     }
   }
 
+  // The branch the diff pane compares with, per folder; unset means the nearest base.
+  const baseKey = (f: string) => `hibiscus.diffBase:${f}`;
+  const pickedBase = (f: string) => localStorage.getItem(baseKey(f));
+  async function pickBase(base: string) {
+    if (!folder) return;
+    localStorage.setItem(baseKey(folder), base);
+    changes = await gitChanges(folder, base).catch(() => null);
+  }
+
   async function refresh() {
     if (!folder) return;
     try {
@@ -95,7 +104,7 @@
       // Both fail while no model is selected; that is not an error to show.
       levels = await request({ type: "get_available_thinking_levels" }).then((r) => r.levels ?? [], () => []);
       stats = await request({ type: "get_session_stats" }).then((r) => r, () => null);
-      changes = await gitChanges(folder).catch(() => null);
+      changes = await gitChanges(folder, pickedBase(folder)).catch(() => null);
       await loadSessions(folder);
     } catch (e) {
       notice(message(e));
@@ -238,11 +247,13 @@
   {#if active && panelOpen && side === "diff"}
     <DiffPane
       base={changes?.base ?? null}
+      bases={changes?.bases ?? []}
       branch={changes?.branch ?? null}
       files={diff}
       truncated={changes?.truncated ?? false}
       {wide}
       onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
+      onbase={pickBase}
       onwide={() => (wide = !wide)}
       onclose={() => { side = "details"; wide = false; }}
     />

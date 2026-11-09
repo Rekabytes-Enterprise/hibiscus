@@ -235,8 +235,10 @@ const MAX_UNTRACKED: usize = 200;
 
 #[derive(Serialize)]
 struct Changes {
-    /// The branch compared with, e.g. `main`; `None` when there is none.
+    /// The branch compared with, e.g. `dev`; `None` when there is none.
     base: Option<String>,
+    /// Branches the user can compare with instead, for the pane's dropdown.
+    bases: Vec<String>,
     branch: Option<String>,
     /// Unified diff of the working tree against where the branch left `base`,
     /// plus untracked files, as Claude and Codex show a branch's changes.
@@ -245,9 +247,10 @@ struct Changes {
 }
 
 /// The session folder's changes for the session panel; `None` outside a git repository.
+/// `base` is the branch the user picked; `None` picks the nearest one.
 #[tauri::command]
-async fn git_changes(folder: PathBuf) -> Option<Changes> {
-    changes(&folder)
+async fn git_changes(folder: PathBuf, base: Option<String>) -> Option<Changes> {
+    changes(&folder, base.as_deref())
 }
 
 /// Runs git in `folder`; `ok` lists the exit codes that still mean success.
@@ -266,31 +269,91 @@ fn line(folder: &Path, args: &[&str]) -> Option<String> {
     Some(out.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
-fn changes(folder: &Path) -> Option<Changes> {
+/// Branch names that usually hold work in progress, nearest first when tied.
+const KNOWN_BASES: [&str; 6] = ["dev", "develop", "development", "staging", "main", "master"];
+
+/// Local and `origin` branch names, without duplicates or `current`.
+fn branches(folder: &Path, current: Option<&str>) -> Vec<String> {
+    let refs = line(
+        folder,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+            "refs/remotes/origin",
+        ],
+    )
+    .unwrap_or_default();
+    let mut names: Vec<String> = Vec::new();
+    for name in refs.lines().map(|r| r.strip_prefix("origin/").unwrap_or(r)) {
+        // `origin/HEAD` lists as plain `origin`.
+        if name != "origin"
+            && name != "HEAD"
+            && Some(name) != current
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
+/// Where HEAD left `name` (local or `origin/`), and how many commits HEAD has since.
+/// The nearer of the two wins: a stale local branch forks further back.
+fn fork_point(folder: &Path, name: &str) -> Option<(String, u64)> {
+    [name.to_owned(), format!("origin/{name}")]
+        .iter()
+        .filter_map(|r| {
+            let fork = line(folder, &["merge-base", "HEAD", r])?;
+            let ahead = line(folder, &["rev-list", "--count", &format!("{fork}..HEAD")])?;
+            Some((fork, ahead.parse().ok()?))
+        })
+        .min_by_key(|(_, ahead)| *ahead)
+}
+
+/// The branch to compare with: `picked` when it exists, else the nearest of the
+/// upstream, the default branch and the usual base names. A branch made from `dev`
+/// compares with `dev`, so unreleased `dev` work does not show as its own.
+fn pick_base(
+    folder: &Path,
+    current: Option<&str>,
+    bases: &[String],
+    picked: Option<&str>,
+) -> Option<(String, String)> {
+    if let Some(name) = picked.filter(|p| bases.iter().any(|b| b == p)) {
+        if let Some((fork, _)) = fork_point(folder, name) {
+            return Some((name.to_owned(), fork));
+        }
+    }
+    // The upstream counts only when it is another branch, not this one's push target.
+    let upstream = line(folder, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+        .map(|r| r.strip_prefix("origin/").map(str::to_owned).unwrap_or(r));
+    let default = line(folder, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
+        .and_then(|r| r.strip_prefix("origin/").map(str::to_owned));
+    let mut candidates: Vec<String> = Vec::new();
+    for name in upstream
+        .into_iter()
+        .chain(default)
+        .chain(KNOWN_BASES.iter().map(|b| b.to_string()))
+    {
+        if Some(name.as_str()) != current && bases.contains(&name) && !candidates.contains(&name) {
+            candidates.push(name);
+        }
+    }
+    // min_by_key keeps the first of equals, so ties go to the upstream, then the default.
+    candidates
+        .into_iter()
+        .filter_map(|name| fork_point(folder, &name).map(|(fork, ahead)| (name, fork, ahead)))
+        .min_by_key(|(_, _, ahead)| *ahead)
+        .map(|(name, fork, _)| (name, fork))
+}
+
+fn changes(folder: &Path, picked: Option<&str>) -> Option<Changes> {
     line(folder, &["rev-parse", "--is-inside-work-tree"])?;
     let branch = line(folder, &["branch", "--show-current"]);
-    // The repository's default branch: origin's HEAD, else a local main or master.
-    let default = line(folder, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
-        .and_then(|r| r.strip_prefix("origin/").map(str::to_owned))
-        .or_else(|| {
-            ["main", "master"].into_iter().map(str::to_owned).find(|b| {
-                line(
-                    folder,
-                    &[
-                        "rev-parse",
-                        "--verify",
-                        "--quiet",
-                        &format!("refs/heads/{b}"),
-                    ],
-                )
-                .is_some()
-            })
-        });
-    let fork = default.as_ref().and_then(|name| {
-        [name.clone(), format!("origin/{name}")]
-            .iter()
-            .find_map(|r| line(folder, &["merge-base", "HEAD", r]))
-    });
+    let bases = branches(folder, branch.as_deref());
+    let chosen = pick_base(folder, branch.as_deref(), &bases, picked);
+    let fork = chosen.as_ref().map(|(_, fork)| fork.clone());
     // No shared history (or no commits yet): compare with HEAD, or with nothing.
     const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
     let from = fork
@@ -340,7 +403,8 @@ fn changes(folder: &Path) -> Option<Changes> {
         diff.truncate(end);
     }
     Some(Changes {
-        base: default.filter(|_| fork.is_some()),
+        base: chosen.map(|(name, _)| name),
+        bases,
         branch,
         diff: String::from_utf8_lossy(&diff).into_owned(),
         truncated,
@@ -482,8 +546,9 @@ mod tests {
         run(&["add", "b.txt"]);
         std::fs::write(repo.join("new file.txt"), "untracked\n").unwrap();
 
-        let c = changes(&repo).unwrap();
+        let c = changes(&repo, None).unwrap();
         assert_eq!(c.base.as_deref(), Some("main"));
+        assert_eq!(c.bases, ["main"]);
         assert_eq!(c.branch.as_deref(), Some("work"));
         assert!(!c.truncated);
         for expected in ["-one", "+two", "+uncommitted", "+untracked", "new file.txt"] {
@@ -493,7 +558,65 @@ mod tests {
                 c.diff
             );
         }
-        assert!(changes(&std::env::temp_dir().join("hibiscus-not-a-repo-xyz")).is_none());
+        assert!(changes(&std::env::temp_dir().join("hibiscus-not-a-repo-xyz"), None).is_none());
+        std::fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn changes_compare_with_the_nearest_base_or_the_picked_one() {
+        let repo = std::env::temp_dir().join(format!("hibiscus-bases-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "base"]);
+        // Unreleased work on dev, then a docs branch made from dev.
+        run(&["switch", "-qc", "dev"]);
+        std::fs::write(repo.join("ci.yml"), "unreleased\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "dev work"]);
+        run(&["switch", "-qc", "docs"]);
+        std::fs::write(repo.join("README.md"), "docs\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "docs"]);
+
+        let c = changes(&repo, None).unwrap();
+        assert_eq!(c.base.as_deref(), Some("dev"));
+        assert_eq!(c.bases, ["dev", "main"]);
+        assert!(
+            c.diff.contains("+docs") && !c.diff.contains("unreleased"),
+            "{}",
+            c.diff
+        );
+
+        let main = changes(&repo, Some("main")).unwrap();
+        assert_eq!(main.base.as_deref(), Some("main"));
+        assert!(main.diff.contains("+docs") && main.diff.contains("+unreleased"));
+
+        // A branch that no longer exists falls back to the nearest one.
+        assert_eq!(
+            changes(&repo, Some("gone")).unwrap().base.as_deref(),
+            Some("dev")
+        );
         std::fs::remove_dir_all(&repo).unwrap();
     }
 

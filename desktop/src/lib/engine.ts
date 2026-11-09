@@ -99,6 +99,7 @@ export const codexCancel = () => invoke<void>("codex_cancel");
 /** `null` once signed in, else the error. */
 export const onCodexLogin = (listener: (error: string | null) => void) =>
   listen<string | null>("codex-login", (e) => listener(e.payload));
-export type Changes = { base: string | null; branch: string | null; diff: string; truncated: boolean };
-export const gitChanges = (folder: string) => invoke<Changes | null>("git_changes", { folder });
+export type Changes = { base: string | null; bases: string[]; branch: string | null; diff: string; truncated: boolean };
+/** `base` is the branch the user picked; `null` lets the app pick the nearest one. */
+export const gitChanges = (folder: string, base: string | null = null) => invoke<Changes | null>("git_changes", { folder, base });
 export const openFile = (folder: string, path: string) => invoke<void>("open_file", { folder, path });
