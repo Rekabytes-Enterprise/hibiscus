@@ -35,7 +35,7 @@
     {#if view.target}<span class="target ellipsis" class:mono={view.command} title={view.target}>{view.target}</span>{/if}
     {#if foldable}<Icon name={open ? "chevron-down" : "chevron-right"} size={12} />{/if}
     <span class="grow"></span>
-    {#if tool.ms != null}<span class="ms">{(tool.ms / 1000).toFixed(1)}s</span>{/if}
+    {#if tool.ms != null && tool.ms >= 100}<span class="ms">{(tool.ms / 1000).toFixed(1)}s</span>{/if}
   </button>
   {#if open && foldable}
     <div class="toolbody">
