@@ -132,6 +132,20 @@ describe("tool calls", () => {
     expect(relative("/other/x", "/w")).toBe("/other/x");
   });
 
+  it("shortens session folder paths in commands", () => {
+    const ran = (command: string) => toolView(tool("bash", { command }), "/w/app").target;
+    expect(ran("rg foo /w/app/src /w/app")).toBe("rg foo src .");
+    expect(ran("cd '/w/app' && ls /w/apple")).toBe("cd '.' && ls /w/apple");
+  });
+
+  it("merges back-to-back goal updates into the latest one", () => {
+    const last = tool("goal", { n: 3 });
+    const shown = entries([tool("goal", { n: 1 }), tool("goal", { n: 2 }), last]);
+    expect(shown).toEqual([last]);
+    const mixed = entries([tool("goal", { n: 1 }), tool("read", { path: "a" }), last]);
+    expect(mixed[0].kind === "tools" && mixed[0].tools.length).toBe(3);
+  });
+
   it("shows an edit's diff and a write as added lines", () => {
     const edit = tool("edit", { path: "a" }, { diff: "@@ -1,2 +1,2 @@\n a\n-b\n+c\n" });
     expect(toolHunks(edit)[0].lines.map((l) => l.kind)).toEqual(["ctx", "del", "add"]);

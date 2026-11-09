@@ -263,8 +263,9 @@ aside.diff .files { overflow: auto; flex: 1; }
 .filehead .name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: none; background: none; padding: 4px 0; text-align: left; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 aside.diff .note { padding: 8px 16px; color: var(--muted); font-size: 12px; }
 table.hunks { width: 100%; border-collapse: collapse; font: 12px/1.6 ui-monospace, Menlo, monospace; table-layout: fixed; }
-table.hunks td.no { width: 44px; padding: 0 8px 0 0; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; vertical-align: top; }
-table.hunks td.code { padding: 0 12px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+table.hunks col.no { width: 44px; }
+table.hunks td.no { padding: 0 8px 0 0; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; vertical-align: top; }
+table.hunks td.code { padding: 0 12px 0 10px; white-space: pre-wrap; overflow-wrap: break-word; }
 table.hunks tr.add td { background: color-mix(in srgb, var(--ok) 14%, transparent); }
 table.hunks tr.del td { background: color-mix(in srgb, var(--error) 14%, transparent); }
 table.hunks tr.add td.code { box-shadow: inset 3px 0 var(--ok); }

@@ -230,7 +230,9 @@ export function entries(items: Item[]): Entry[] {
     run = [];
   };
   for (const item of items) {
-    if (item.kind === "tool") run.push(item);
+    // Back-to-back goal updates show as one row: the latest checklist.
+    if (item.kind === "tool" && item.name === "goal" && run.at(-1)?.name === "goal") run[run.length - 1] = item;
+    else if (item.kind === "tool") run.push(item);
     else {
       flush();
       out.push(item);
@@ -255,12 +257,20 @@ export function relative(path: string, folder: string | null): string {
   return root && path.startsWith(root + "/") ? path.slice(root.length + 1) : path;
 }
 
+/** `command` with paths inside the session folder written relative to it, and the folder itself as `.`. */
+function shorten(command: string, folder: string | null): string {
+  const root = folder?.replace(/\/$/, "");
+  if (!root) return command;
+  const at = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return command.replace(new RegExp(at + "/", "g"), "").replace(new RegExp(at + "(?=$|[\\s'\"])", "g"), ".");
+}
+
 /** One tool call as a sentence: "Read src/main.rs", "Ran npm test". */
 export function toolView(tool: Tool, folder: string | null) {
   const [running, done, icon] = VERBS[tool.name] ?? ["Using", "Used", "cpu"];
   const a = tool.args ?? {};
   const command = tool.name === "bash";
-  const raw = command ? String(a.command ?? "").split("\n")[0] : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
+  const raw = command ? shorten(String(a.command ?? "").split("\n")[0], folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
   const target = raw.length > 120 ? raw.slice(0, 119) + "…" : raw;
   return { verb: tool.running ? running : done, target, icon, command };
 }
