@@ -256,15 +256,18 @@ aside.diff { flex: 0 0 50%; min-width: 0; display: flex; flex-direction: column;
 aside.diff.wide { flex: 1; }
 .body:has(aside.diff.wide) .center { display: none; }
 aside.diff header { display: flex; align-items: center; gap: 4px; padding: 6px 10px 6px 16px; border-bottom: 1px solid var(--line); flex: none; }
-aside.diff .refs { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+aside.diff .refs { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+/* The pane's header is at the top, so its branch menu opens downwards. */
+aside.diff .popover { top: calc(100% + 6px); bottom: auto; }
 aside.diff .files { overflow: auto; flex: 1; }
 .file { border-bottom: 1px solid var(--line); }
 .filehead { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .filehead .name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: none; background: none; padding: 4px 0; text-align: left; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 aside.diff .note { padding: 8px 16px; color: var(--muted); font-size: 12px; }
 table.hunks { width: 100%; border-collapse: collapse; font: 12px/1.6 ui-monospace, Menlo, monospace; table-layout: fixed; }
-table.hunks td.no { width: 44px; padding: 0 8px 0 0; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; vertical-align: top; }
-table.hunks td.code { padding: 0 12px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+table.hunks col.no { width: 44px; }
+table.hunks td.no { padding: 0 8px 0 0; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; vertical-align: top; }
+table.hunks td.code { padding: 0 12px 0 10px; white-space: pre-wrap; overflow-wrap: break-word; }
 table.hunks tr.add td { background: color-mix(in srgb, var(--ok) 14%, transparent); }
 table.hunks tr.del td { background: color-mix(in srgb, var(--error) 14%, transparent); }
 table.hunks tr.add td.code { box-shadow: inset 3px 0 var(--ok); }

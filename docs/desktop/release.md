@@ -28,11 +28,37 @@ To try the build without releasing, run the workflow by hand on `main` or `dev`.
 
 The app is not signed with an Apple Developer ID or notarised.
 
-- **macOS:** open the `.dmg` and drag Hibiscus to Applications. On first launch, right-click the app and choose Open, then Open again.
-- **Linux:** make the AppImage executable, then run it:
+### macOS
 
-  ```bash
-  chmod +x hibiscus-desktop-x86_64.AppImage && ./hibiscus-desktop-x86_64.AppImage
-  ```
+Open the `.dmg` and drag Hibiscus to Applications. The first time you open it, macOS says "Hibiscus" Not Opened, because Apple could not verify it. Click **Done**, not "Move to Trash", then:
 
-Check a download against `SHA256SUMS-desktop` with `shasum -a 256 -c SHA256SUMS-desktop --ignore-missing`.
+1. Open **System Settings → Privacy & Security**.
+2. Scroll down to **Security**. Next to "Hibiscus" was blocked to protect your Mac, click **Open Anyway**.
+3. Confirm with your password or Touch ID.
+4. Open Hibiscus again and click **Open Anyway** in the dialog.
+
+macOS remembers this, so later launches open normally. The **Open Anyway** button in Settings only appears for about an hour after the blocked launch; if it's gone, open Hibiscus once more and go back to Settings.
+
+Since macOS 15 (Sequoia), right-clicking the app and choosing Open no longer skips this check.
+
+If you prefer the terminal, removing the download mark has the same effect:
+
+```bash
+xattr -d com.apple.quarantine /Applications/Hibiscus.app
+```
+
+### Linux
+
+Make the AppImage executable, then run it:
+
+```bash
+chmod +x hibiscus-desktop-x86_64.AppImage && ./hibiscus-desktop-x86_64.AppImage
+```
+
+### Checking a download
+
+Check a download against `SHA256SUMS-desktop` from the same release:
+
+```bash
+shasum -a 256 -c SHA256SUMS-desktop --ignore-missing
+```

@@ -6,6 +6,8 @@
 </script>
 
 <table class="hunks">
+  <!-- Fixed layout sizes columns from the first row, which can be a full-width gap row. -->
+  <colgroup><col class="no" /><col class="no" /><col /></colgroup>
   <tbody>
     {#each hunks as h, i}
       {@const gap = gapBefore(hunks, i)}

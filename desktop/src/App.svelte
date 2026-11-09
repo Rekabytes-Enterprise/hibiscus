@@ -68,6 +68,12 @@
 
   const message = (e: unknown) => String(e instanceof Error ? e.message : e);
 
+  /** Logs how long each step of `what` took since it began, to the dev console (#145). */
+  function timer(what: string) {
+    const start = performance.now();
+    return (step: string) => console.debug(`[timing] ${what}: ${step} after ${Math.round(performance.now() - start)} ms`);
+  }
+
   function notice(text: string) {
     chat = { ...chat, items: [...chat.items, { kind: "notice", text, error: true }] };
   }
@@ -83,38 +89,66 @@
     }
   }
 
-  async function refresh() {
+  // The branch the diff pane compares with, per folder; unset means the nearest base.
+  const baseKey = (f: string) => `hibiscus.diffBase:${f}`;
+  const pickedBase = (f: string) => localStorage.getItem(baseKey(f));
+  async function pickBase(base: string) {
     if (!folder) return;
-    try {
-      const state = await request({ type: "get_state" });
-      model = state.model;
-      hasAccess = state.hasAccess;
-      thinking = state.thinkingLevel;
-      sessionFile = state.sessionFile;
-      extensions = state.extensionCommands ?? [];
-      // Both fail while no model is selected; that is not an error to show.
-      levels = await request({ type: "get_available_thinking_levels" }).then((r) => r.levels ?? [], () => []);
-      stats = await request({ type: "get_session_stats" }).then((r) => r, () => null);
-      changes = await gitChanges(folder).catch(() => null);
-      await loadSessions(folder);
-    } catch (e) {
-      notice(message(e));
-    }
+    localStorage.setItem(baseKey(folder), base);
+    changes = await gitChanges(folder, base).catch(() => null);
   }
 
-  /** Opens `path`: a new session, or a saved `session`. */
-  async function open(path: string, session?: string) {
+  /** Reloads the session details, stats, changes and session list, all at once. */
+  async function refresh() {
+    if (!folder) return;
+    const path = folder;
+    const t = timer("refresh");
+    // None of these depends on another; each fills in its part when it arrives.
+    await Promise.all([
+      request({ type: "get_state" }).then((state) => {
+        model = state.model;
+        hasAccess = state.hasAccess;
+        thinking = state.thinkingLevel;
+        sessionFile = state.sessionFile;
+        extensions = state.extensionCommands ?? [];
+        t("get_state");
+      }, (e) => notice(message(e))),
+      // Both fail while no model is selected; that is not an error to show.
+      request({ type: "get_available_thinking_levels" }).then((r) => r.levels ?? [], () => []).then((l) => { levels = l; t("thinking levels"); }),
+      request({ type: "get_session_stats" }).then((r) => r, () => null).then((r) => { stats = r; t("session stats"); }),
+      gitChanges(path, pickedBase(path)).catch(() => null).then((c) => { changes = c; t("git changes"); }),
+      loadSessions(path).then(() => t("session list")),
+    ]);
+  }
+
+  /**
+   * Opens `path`: a new session, or a saved `session`. In the folder already open,
+   * the running engine switches sessions; `restart` forces a new engine instead.
+   */
+  async function open(path: string, session?: string, restart = false) {
     opening = true;
     side = "details";
     wide = false;
     error = null;
+    const t = timer(`open ${session ? "session" : "folder"}`);
     try {
-      await openProject(path, false, session);
+      if (path === folder && session && !restart) {
+        // No restart, so no model-list downloads either.
+        await request({ type: "switch_session", sessionPath: session });
+        t("switch_session");
+      } else {
+        await openProject(path, false, session);
+        t("engine start");
+      }
       folder = path;
       recent = [path, ...recent.filter((p) => p !== path)].slice(0, 8);
       localStorage.setItem(RECENT, JSON.stringify(recent));
       chat = session ? fromMessages((await request({ type: "get_messages" })).messages ?? []) : empty();
+      t("conversation shown");
+      opening = false;
+      // Details fill in after the conversation is on screen.
       await refresh();
+      t("details loaded");
     } catch (e) {
       error = message(e);
     } finally {
@@ -163,7 +197,7 @@
 
   /** Keys are read when an engine starts, as the TUI reconnects after /login. */
   async function signedIn() {
-    if (folder) await open(folder, sessionFile ?? undefined);
+    if (folder) await open(folder, sessionFile ?? undefined, true);
   }
 
 </script>
@@ -238,11 +272,13 @@
   {#if active && panelOpen && side === "diff"}
     <DiffPane
       base={changes?.base ?? null}
+      bases={changes?.bases ?? []}
       branch={changes?.branch ?? null}
       files={diff}
       truncated={changes?.truncated ?? false}
       {wide}
       onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
+      onbase={pickBase}
       onwide={() => (wide = !wide)}
       onclose={() => { side = "details"; wide = false; }}
     />
