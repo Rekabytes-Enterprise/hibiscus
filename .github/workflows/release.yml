@@ -200,7 +200,7 @@ jobs:
         run: python3 tests/workflows.py
       - run: sh -n install.sh && sh -n scripts/bump-version.sh && sh tests/install.sh && sh tests/bump-version.sh
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
       - run: node tests/npm-install.mjs
