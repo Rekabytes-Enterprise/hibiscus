@@ -2,23 +2,29 @@
   import type { FileDiff } from "./diff";
   import Hunks from "./Hunks.svelte";
   import Icon from "./Icon.svelte";
+  import Menu from "./Menu.svelte";
 
   let {
     base,
+    bases,
     branch,
     files,
     truncated,
     wide,
     onopenfile,
+    onbase,
     onwide,
     onclose,
   }: {
     base: string | null;
+    bases: string[];
     branch: string | null;
     files: FileDiff[];
     truncated: boolean;
     wide: boolean;
     onopenfile: (path: string) => void;
+    /** The user picked another branch to compare with. */
+    onbase: (base: string) => void;
     onwide: () => void;
     onclose: () => void;
   } = $props();
@@ -31,9 +37,15 @@
 
 <aside class="diff" class:wide>
   <header>
-    <span class="grow ellipsis refs">
-      {#if base}<span class="muted">{base}</span> <Icon name="arrow-right" size={12} />{/if}
-      {branch ?? "Detached HEAD"}
+    <!-- The menu sits outside the clipped branch name so its list can open. -->
+    <span class="grow refs">
+      {#if base}
+        <Menu options={bases.map((b) => ({ value: b, label: b }))} value={base} label="Compare with" title="Branch to compare with" onpick={onbase}>
+          {#snippet trigger()}<span class="muted">{base}</span>{/snippet}
+        </Menu>
+        <Icon name="arrow-right" size={12} />
+      {/if}
+      <span class="ellipsis">{branch ?? "Detached HEAD"}</span>
     </span>
     <button class="iconbtn" onclick={onwide} title={wide ? "Shrink" : "Expand"} aria-label={wide ? "Shrink" : "Expand"}><Icon name={wide ? "minimize" : "maximize"} size={14} /></button>
     <button class="iconbtn" onclick={onclose} title="Close" aria-label="Close changes"><Icon name="x" size={14} /></button>
