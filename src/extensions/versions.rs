@@ -3,7 +3,6 @@ use super::{manifest, Registry};
 use crate::{engine::config, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -187,7 +186,7 @@ fn tree(directory: &Path) -> Result<(Inventory, BTreeMap<String, Vec<u8>>)> {
                 files.insert(
                     rel.into(),
                     Fingerprint {
-                        sha256: format!("{:x}", Sha256::digest(&bytes)),
+                        sha256: crate::sha256_hex(&bytes),
                         bytes: bytes.len(),
                         executable: metadata.permissions().mode() & 0o111 != 0,
                     },
@@ -203,7 +202,7 @@ fn tree(directory: &Path) -> Result<(Inventory, BTreeMap<String, Vec<u8>>)> {
     Ok((files, data))
 }
 fn digest(files: &Inventory) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(files)?)))
+    Ok(crate::sha256_hex(&serde_json::to_vec(files)?))
 }
 fn changes(before: &Inventory, after: &Inventory) -> Vec<Change> {
     before

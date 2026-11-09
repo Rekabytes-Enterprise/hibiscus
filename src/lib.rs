@@ -27,6 +27,15 @@ use ui::dialog::Dialogs;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
+/// Lowercase hex SHA-256 of `bytes`. sha2 0.11 digests no longer implement `LowerHex`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 pub fn run() -> Result<()> {
     let start = parse_args(env::args().skip(1))?;
     match start {

@@ -21,7 +21,7 @@ pub(super) fn directory(path: &Path) -> Result<()> {
     Ok(())
 }
 pub(super) fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::sha256_hex(bytes)
 }
 pub(super) fn hash(value: &str) -> bool {
     value.len() == 64
