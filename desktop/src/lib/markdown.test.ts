@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it } from "vitest";
-import { markdown } from "./markdown";
+import { cachedMarkdown, markdown } from "./markdown";
 
 it("renders common Markdown", () => {
   const html = markdown("# Title\n\n- **bold** and `code`\n\n```rust\nfn main() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |");
@@ -23,4 +23,10 @@ it("strips anything that could run or phone home", () => {
 it("escapes code in unknown or missing languages", () => {
   expect(markdown("```nope\n<b>x</b>\n```")).toContain('<code class="hljs">&lt;b&gt;x&lt;/b&gt;');
   expect(markdown("```\na < b\n```")).toContain("a &lt; b");
+});
+
+it("remembers rendered text with the same result", () => {
+  const text = "**cached** `once`";
+  expect(cachedMarkdown(text)).toBe(markdown(text));
+  expect(cachedMarkdown(text)).toBe(markdown(text));
 });

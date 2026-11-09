@@ -4,13 +4,33 @@
   import { entries, summary, type Chat } from "./chat";
   import Icon from "./Icon.svelte";
   import ToolCall from "./ToolCall.svelte";
-  import { markdown } from "./markdown";
+  import { cachedMarkdown, markdown } from "./markdown";
 
   let { chat, folder, onresend }: { chat: Chat; folder: string | null; onresend: (text: string) => void } = $props();
   /** Groups the user opened, by the id of their first tool call. */
   let opened = $state<{ [id: string]: boolean }>({});
   let scroller: HTMLDivElement;
   let pinned = true;
+
+  // A long session renders its newest entries first and the older ones as the
+  // user scrolls up (#159). Keys are positions in the whole list, so adding
+  // older entries above keeps the rows already on screen.
+  const PAGE = 50;
+  let shown = $state(PAGE);
+  let loading = false;
+  const all = $derived(entries(chat.items));
+  const start = $derived(Math.max(0, all.length - shown));
+
+  async function older() {
+    if (loading || start === 0) return;
+    loading = true;
+    const height = scroller.scrollHeight;
+    shown += PAGE;
+    await tick();
+    // Keep the entry the user was reading in place.
+    scroller.scrollTop += scroller.scrollHeight - height;
+    loading = false;
+  }
 
   // Follow new output unless the user scrolled up to read.
   $effect(() => {
@@ -38,16 +58,20 @@
 
   function onscroll() {
     pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
+    if (scroller.scrollTop < 200) void older();
   }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="chat" bind:this={scroller} {onscroll} {onclick}>
-  {#each entries(chat.items) as item}
+  {#if start > 0}
+    <button class="link earlier" onclick={older}>Show earlier messages</button>
+  {/if}
+  {#each all.slice(start) as item, i (start + i)}
     {#if item.kind === "user"}
       <div class="user">{item.text}{#if item.images}<span class="muted small"> · {item.images} image{item.images > 1 ? "s" : ""}</span>{/if}</div>
     {:else if item.kind === "assistant"}
-      <div class="assistant md" class:streaming={item.streaming}>{@html markdown(item.text)}</div>
+      <div class="assistant md" class:streaming={item.streaming}>{@html item.streaming ? markdown(item.text) : cachedMarkdown(item.text)}</div>
     {:else if item.kind === "tool"}
       <ToolCall tool={item} {folder} />
     {:else if item.kind === "tools"}
