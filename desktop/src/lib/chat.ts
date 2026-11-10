@@ -309,3 +309,33 @@ export function toolHunks(tool: Tool): Hunk[] {
   if (!body) return [];
   return parseDiff("diff --git a/f b/f\n" + body)[0]?.hunks ?? [];
 }
+
+/**
+ * Conversations opened during this run, by session file, so going back to one
+ * shows it at once (#159). Holds the most recent `limit`; nothing is preloaded.
+ */
+export class ChatCache {
+  #chats = new Map<string, Chat>();
+  constructor(private limit = 20) {}
+
+  get(path: string): Chat | undefined {
+    return this.#chats.get(path);
+  }
+
+  keep(path: string, chat: Chat) {
+    this.#chats.delete(path);
+    this.#chats.set(path, chat);
+    if (this.#chats.size > this.limit) this.#chats.delete(this.#chats.keys().next().value!);
+  }
+}
+
+// What the session file holds: notices and tool timings only exist while the app watches a run.
+const saved = (chat: Chat) =>
+  JSON.stringify(
+    chat.items.flatMap((i) =>
+      i.kind === "tool" ? [[i.id, i.output, i.error]] : i.kind === "notice" ? [] : [[i.kind, i.text]],
+    ),
+  );
+
+/** `cached` if the saved conversation is unchanged, so its rows stay as they are; else `fresh`. */
+export const newer = (cached: Chat, fresh: Chat): Chat => (saved(cached) === saved(fresh) ? cached : fresh);

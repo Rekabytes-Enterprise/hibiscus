@@ -1,8 +1,8 @@
 <script lang="ts">
   import { homeDir } from "@tauri-apps/api/path";
   import { open as pickFolder } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
-  import { apply, empty, fromMessages, type Chat } from "./lib/chat";
+  import { onMount, tick } from "svelte";
+  import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
   import { gitChanges, listSessions, onEvent, openFile, openProject, post, request, type Changes, type SavedSession } from "./lib/engine";
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
@@ -41,6 +41,8 @@
   let page = $state<"chat" | "settings">("chat");
   let error = $state<string | null>(null);
   let opening = $state(false);
+  // Conversations opened this run, so going back to one shows it at once.
+  const chats = new ChatCache();
 
   const busy = $derived(chat.running || opening);
   const diff = $derived(changes ? parseDiff(changes.diff) : []);
@@ -74,6 +76,14 @@
     return (step: string) => console.debug(`[timing] ${what}: ${step} after ${Math.round(performance.now() - start)} ms`);
   }
 
+  /** Logs `step` once the browser has drawn the current state. */
+  const painted = (t: (step: string) => void, step: string) => tick().then(() => requestAnimationFrame(() => t(step)));
+
+  /** Keeps the conversation on screen for a later return to its session. */
+  function remember() {
+    if (sessionFile && chat.items.length && !chat.running) chats.keep(sessionFile, chat);
+  }
+
   function notice(text: string) {
     chat = { ...chat, items: [...chat.items, { kind: "notice", text, error: true }] };
   }
@@ -98,8 +108,12 @@
     changes = await gitChanges(folder, base).catch(() => null);
   }
 
-  /** Reloads the session details, stats, changes and session list, all at once. */
-  async function refresh() {
+  /**
+   * Reloads the session details and stats, and with `folderData` the folder's
+   * changes and session list, all at once. Switching sessions within a folder
+   * changes neither of those, so it skips them.
+   */
+  async function refresh(folderData = true) {
     if (!folder) return;
     const path = folder;
     const t = timer("refresh");
@@ -116,8 +130,8 @@
       // Both fail while no model is selected; that is not an error to show.
       request({ type: "get_available_thinking_levels" }).then((r) => r.levels ?? [], () => []).then((l) => { levels = l; t("thinking levels"); }),
       request({ type: "get_session_stats" }).then((r) => r, () => null).then((r) => { stats = r; t("session stats"); }),
-      gitChanges(path, pickedBase(path)).catch(() => null).then((c) => { changes = c; t("git changes"); }),
-      loadSessions(path).then(() => t("session list")),
+      folderData && gitChanges(path, pickedBase(path)).catch(() => null).then((c) => { changes = c; t("git changes"); }),
+      folderData && loadSessions(path).then(() => t("session list")),
     ]);
   }
 
@@ -131,8 +145,18 @@
     wide = false;
     error = null;
     const t = timer(`open ${session ? "session" : "folder"}`);
+    const inPlace = path === folder && !!session && !restart;
+    const before = { chat, sessionFile };
+    remember();
+    // A session opened before shows at once; the engine's copy replaces it below if the file changed.
+    const cached = session ? chats.get(session) : undefined;
+    if (cached) {
+      sessionFile = session!;
+      chat = cached;
+      painted(t, "cached conversation painted");
+    }
     try {
-      if (path === folder && session && !restart) {
+      if (inPlace) {
         // No restart, so no model-list downloads either.
         await request({ type: "switch_session", sessionPath: session });
         t("switch_session");
@@ -143,14 +167,20 @@
       folder = path;
       recent = [path, ...recent.filter((p) => p !== path)].slice(0, 8);
       localStorage.setItem(RECENT, JSON.stringify(recent));
-      chat = session ? fromMessages((await request({ type: "get_messages" })).messages ?? []) : empty();
-      t("conversation shown");
+      const fresh = session ? fromMessages((await request({ type: "get_messages" })).messages ?? []) : empty();
+      // Set together, so the chat view is rebuilt once, with the new conversation.
+      if (session) sessionFile = session;
+      chat = cached ? newer(cached, fresh) : fresh;
+      t("conversation loaded");
+      painted(t, "conversation painted");
       opening = false;
       // Details fill in after the conversation is on screen.
-      await refresh();
+      await refresh(!inPlace);
       t("details loaded");
+      painted(t, "details painted");
     } catch (e) {
       error = message(e);
+      ({ chat, sessionFile } = before);
     } finally {
       opening = false;
     }
@@ -167,6 +197,7 @@
     side = "details";
     wide = false;
     if (!folder) return open(home);
+    remember();
     try {
       await request({ type: "new_session" });
       chat = empty();
@@ -231,7 +262,7 @@
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>
       {/if}
-      <ChatView {chat} {folder} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} />
+      {#key sessionFile}<ChatView {chat} {folder} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} />{/key}
     {/if}
     {#if folder}
       <div class="dock">
