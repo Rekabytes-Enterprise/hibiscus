@@ -4,6 +4,10 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Desktop app: a browser pane that shows the page Hibi opens with [agent-browser](https://github.com/vercel-labs/agent-browser), live. It opens when Hibi first runs an `agent-browser` command, or from the globe button in the title bar. A cursor moves to each element Hibi clicks or types into, and you can click, scroll and type in the page yourself or use the address bar. agent-browser is a separate install; the pane shows how to install it when it's missing.
+
 ## [0.3.34] - 2026-11-10
 
 ### Added

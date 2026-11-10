@@ -435,6 +435,56 @@ fn inside(folder: &Path, path: &Path) -> Option<PathBuf> {
     (file.starts_with(&folder) && file.is_file()).then_some(file)
 }
 
+/// Runs one agent-browser command for the browser pane and returns its `data`.
+/// Only the few commands the pane needs are allowed, never ones that change
+/// the page's content or read its storage.
+#[tauri::command]
+async fn browser(session: Option<String>, args: Vec<String>) -> Result<Value, String> {
+    let argv = browser_args(session.as_deref(), &args)?;
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new("agent-browser")
+            .args(&argv)
+            .stdin(std::process::Stdio::null())
+            .output()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => "agent-browser is not installed".to_string(),
+        _ => e.to_string(),
+    })?;
+    let reply: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| String::from_utf8_lossy(&output.stderr).trim().to_string())?;
+    if reply["success"].as_bool() == Some(true) {
+        Ok(reply["data"].clone())
+    } else {
+        Err(reply["error"].as_str().unwrap_or("agent-browser failed").to_string())
+    }
+}
+
+fn browser_args(session: Option<&str>, args: &[String]) -> Result<Vec<String>, String> {
+    let ok = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        ["stream", "status"] | ["back"] | ["forward"] | ["reload"] => true,
+        // A leading dash would be read as a flag.
+        ["get", "box", target] => !target.starts_with('-'),
+        ["open", url] => url.starts_with("http://") || url.starts_with("https://"),
+        _ => false,
+    };
+    if !ok {
+        return Err(format!("Not allowed: agent-browser {}", args.join(" ")));
+    }
+    let mut argv = Vec::new();
+    if let Some(name) = session {
+        if !name.starts_with(char::is_alphanumeric) || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+            return Err(format!("Invalid browser session name: {name}"));
+        }
+        argv.extend(["--session".to_string(), name.to_string()]);
+    }
+    argv.extend(args.iter().cloned());
+    argv.push("--json".into());
+    Ok(argv)
+}
+
 /// A Dock- or menu-launched app gets a minimal environment, so tools would
 /// miss the user's PATH and provider keys set in their shell profile. Copy
 /// the login shell's environment, as a terminal launch would have it.
@@ -492,6 +542,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_websocket::init())
         .manage(App::default())
         .manage(Codex::default())
         .invoke_handler(tauri::generate_handler![
@@ -510,7 +561,8 @@ fn main() {
             codex_paste,
             codex_cancel,
             git_changes,
-            open_file
+            open_file,
+            browser
         ])
         .build(tauri::generate_context!())
         .expect("failed to start Hibiscus")
@@ -659,5 +711,30 @@ mod tests {
         assert_ne!(std::env::var("PWD").ok().as_deref(), Some("/nope"));
         apply_environment(b"no marker HIBISCUS_GLUE_OTHER=x");
         assert!(std::env::var("HIBISCUS_GLUE_OTHER").is_err());
+    }
+
+    #[test]
+    fn browser_pane_runs_only_its_own_commands() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            browser_args(Some("dev-1"), &args(&["get", "box", "@e3"])).unwrap(),
+            args(&["--session", "dev-1", "get", "box", "@e3", "--json"])
+        );
+        assert_eq!(
+            browser_args(None, &args(&["open", "http://localhost:5173"])).unwrap(),
+            args(&["open", "http://localhost:5173", "--json"])
+        );
+        for bad in [
+            &["eval", "1"][..],
+            &["open", "file:///etc/passwd"],
+            &["open", "--profile"],
+            &["get", "box", "--json"],
+            &["cookies"],
+            &["stream", "enable"],
+        ] {
+            assert!(browser_args(None, &args(bad)).is_err(), "{bad:?}");
+        }
+        assert!(browser_args(Some("a b"), &args(&["back"])).is_err());
+        assert!(browser_args(Some("--x"), &args(&["back"])).is_err());
     }
 }

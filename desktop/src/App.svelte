@@ -4,6 +4,8 @@
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
   import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
+  import BrowserPane from "./lib/BrowserPane.svelte";
+  import { calls, POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
@@ -34,8 +36,14 @@
   let levels = $state<string[]>([]);
   let stats = $state<any>(null);
   let changes = $state<Changes | null>(null);
-  // The right side shows session details, or the branch diff in their place.
-  let side = $state<"details" | "diff">("details");
+  // The right side shows session details, or the branch diff or browser in their place.
+  let side = $state<"details" | "diff" | "browser">("details");
+  // The agent-browser session Hibi used last, the element it acts on, and a
+  // counter bumped after each of its agent-browser calls.
+  let browserSession = $state<string | null>(null);
+  let pointer = $state<{ target: string; seq: number } | null>(null);
+  let poke = $state(0);
+  const browserCalls = new Set<string>();
   let wide = $state(false);
   let extensions = $state<{ name: string; description: string }[]>([]);
   let panelOpen = $state(true);
@@ -67,8 +75,25 @@
     onEvent((event) => {
       chat = apply(chat, event);
       if (event.type === "agent_settled") void refresh();
+      if (event.type === "tool_execution_start" && event.toolName === "bash") browsing(event.toolCallId, event.args?.command);
+      if (event.type === "tool_execution_end" && browserCalls.delete(event.toolCallId)) poke++;
     }),
   );
+
+  /** Opens the browser pane the first time Hibi uses agent-browser, and points at what it acts on. */
+  function browsing(id: string, command: unknown) {
+    const found = calls(String(command ?? ""));
+    if (!found.length) return;
+    browserCalls.add(id);
+    if (side !== "browser") {
+      side = "browser";
+      panelOpen = true;
+    }
+    for (const c of found) {
+      browserSession = c.session;
+      if (POINTING.has(c.verb) && c.target) pointer = { target: c.target, seq: (pointer?.seq ?? 0) + 1 };
+    }
+  }
 
   const message = (e: unknown) => String(e instanceof Error ? e.message : e);
 
@@ -299,6 +324,7 @@
     <div class="titlebar" data-tauri-drag-region>
       <span class="grow ellipsis" data-tauri-drag-region>{page === "settings" ? "Settings" : title}</span>
       {#if active}
+        <button class="iconbtn" class:on={panelOpen && side === "browser"} onclick={() => { side = side === "browser" ? "details" : "browser"; panelOpen = true; wide = false; }} title={side === "browser" ? "Hide browser" : "Show browser"} aria-label="Browser" aria-pressed={panelOpen && side === "browser"}><Icon name="globe" /></button>
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
     </div>
@@ -353,7 +379,16 @@
     {/if}
     </div>
   {/if}
-  {#if active && panelOpen && side === "diff"}
+  {#if active && panelOpen && side === "browser"}
+    <BrowserPane
+      session={browserSession}
+      {pointer}
+      {poke}
+      {wide}
+      onwide={() => (wide = !wide)}
+      onclose={() => { side = "details"; wide = false; }}
+    />
+  {:else if active && panelOpen && side === "diff"}
     <DiffPane
       base={changes?.base ?? null}
       bases={changes?.bases ?? []}
