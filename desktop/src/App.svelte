@@ -3,7 +3,7 @@
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
+  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
@@ -17,6 +17,7 @@
   import NewSession from "./lib/NewSession.svelte";
   import Settings from "./lib/Settings.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
+  import UpdateBanner from "./lib/UpdateBanner.svelte";
 
   const RECENT = "hibiscus.recentFolders";
 
@@ -301,6 +302,7 @@
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
     </div>
+    <UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />
     <div class="body">
   {#if page === "settings"}
     <Settings onback={() => (page = "chat")} onsaved={signedIn} />

@@ -7,22 +7,47 @@
 | File | Platform | Built on |
 |---|---|---|
 | `hibiscus-desktop-aarch64-apple-darwin.dmg` | macOS, Apple Silicon | `macos-15` |
+| `hibiscus-desktop-aarch64-apple-darwin.app.tar.gz` and `.sig` | macOS update, and its updater signature | `macos-15` |
 | `hibiscus-desktop-x86_64.AppImage` | Linux x86_64 | `ubuntu-22.04`, the oldest supported Ubuntu, so the AppImage runs on more distributions |
-| `SHA256SUMS-desktop` | checksums of the two files above | |
-| `hibiscus-desktop-provenance.sigstore.json` | signed build provenance for the two files | |
+| `hibiscus-desktop-x86_64.AppImage.sig` | updater signature for the AppImage | `ubuntu-22.04` |
+| `latest.json` | the update manifest installed apps read | |
+| `SHA256SUMS-desktop` | checksums of the files above | |
+| `hibiscus-desktop-provenance.sigstore.json` | signed build provenance for the files above | |
+
+With the CLI's files, a full release has 14 files.
 
 The app's version comes from the root `package.json` (`"version": "../../package.json"` in `tauri.conf.json`), which `scripts/bump-version.sh` already updates. The bundle ID is `com.rooxcode.hibiscus`.
 
 ## How a release runs
 
 1. **verify** takes the commit that triggered the run and accepts it only if it is on `main`. A manual build-only run may also use `dev`.
-2. **macos_arm64** and **linux_x64** check out that same triggering commit, without credentials, confirm it is the authorized one, run `npm ci`, and build with Tauri. Each records the SHA-256 of its file.
-3. **provenance** checks both files against those digests, signs them with `actions/attest`, and writes `SHA256SUMS-desktop`.
-4. **publish** waits up to 30 minutes for `release.yml` to create the draft release, then uploads the four files into it. It never creates a release and refuses one that is already published.
+2. **macos_arm64** and **linux_x64** check out that same triggering commit, without credentials, confirm it is the authorized one, run `npm ci`, and build with Tauri. The build signs the update files with the updater key and fails at once if the key secret is missing. Each job writes a receipt listing the SHA-256 of its files, and records the receipt's own digest.
+3. **provenance** checks the receipts against those digests and every file against its receipt, writes `latest.json`, signs the files with `actions/attest`, and writes `SHA256SUMS-desktop`.
+4. **publish** waits up to 30 minutes for `release.yml` to create the draft release, then uploads the eight files into it. It never creates a release and refuses one that is already published.
 
 Only `publish` can write to the repository, and only `provenance` can sign.
 
 To try the build without releasing, run the workflow by hand on `main` or `dev`. The two files are kept as run artifacts for 5 days and nothing is published. To rebuild a release, re-run the failed jobs of that tag's run; the workflow only ever builds the commit that triggered it.
+
+## Updates
+
+Installed apps check `releases/latest/download/latest.json` on launch and every 6 hours. GitHub only serves published releases there, so a draft never reaches users. When a newer version is listed, a banner offers **Update**. The app downloads the file for its platform, checks the signature against the public key in `tauri.conf.json`, installs it over itself and restarts.
+
+### Updater signing key
+
+The update files are signed with a Tauri updater key, separate from the provenance signature. It is set up once:
+
+1. Generate the key pair and pick a password:
+
+   ```bash
+   cd desktop && npm run tauri signer generate -- -w ~/.tauri/hibiscus.key
+   ```
+
+2. Add two repository secrets: `TAURI_SIGNING_PRIVATE_KEY`, the contents of `~/.tauri/hibiscus.key`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. Put the contents of `~/.tauri/hibiscus.key.pub` in `plugins.updater.pubkey` in `desktop/src-tauri/tauri.conf.json`. The public key is safe to commit.
+4. Back up the private key and its password. If they are lost, installed apps can never update again, and users have to reinstall by hand.
+
+Local builds don't sign update files. Only the release workflow turns on `createUpdaterArtifacts`, with `--config`.
 
 ## Opening the unsigned files
 

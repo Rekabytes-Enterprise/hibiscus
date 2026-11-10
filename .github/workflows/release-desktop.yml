@@ -3,6 +3,8 @@ name: Desktop release
 # Builds the desktop app (macOS .dmg, Linux .AppImage) for the same release tags
 # as release.yml, and adds the files to the draft release that release.yml
 # creates. Kept separate so the CLI release contract stays untouched.
+# The builds are also signed with the Tauri updater key, and latest.json tells
+# installed apps where the new version is, so they can update themselves.
 on:
   push:
     tags:
@@ -75,23 +77,33 @@ jobs:
           toolchain: 1.99.1
       - name: Build the app
         working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so the update files can't be signed. See docs/desktop/release.md."; exit 1; }
           npm ci
-          npm run tauri -- build --ci --bundles dmg
-      - name: Name the file and record its digest
+          npm run tauri -- build --ci --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":true}}'
+      - name: Name the files and record their digests
         id: receipt
         shell: bash
         run: |
           shopt -s nullglob
-          built=(desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          bundle=desktop/src-tauri/target/release/bundle
+          built=("$bundle"/dmg/*.dmg)
           test "${#built[@]}" -eq 1
+          update=("$bundle"/macos/*.app.tar.gz)
+          test "${#update[@]}" -eq 1 && test -f "${update[0]}.sig"
           mkdir -p dist
           cp "${built[0]}" dist/hibiscus-desktop-aarch64-apple-darwin.dmg
-          printf 'sha256=%s\n' "$(shasum -a 256 dist/hibiscus-desktop-aarch64-apple-darwin.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          cp "${update[0]}" dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz
+          cp "${update[0]}.sig" dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz.sig
+          (cd dist && shasum -a 256 hibiscus-desktop-* > receipt-macos)
+          printf 'sha256=%s\n' "$(shasum -a 256 dist/receipt-macos | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-aarch64-apple-darwin
-          path: dist/hibiscus-desktop-aarch64-apple-darwin.dmg
+          path: dist/*
           if-no-files-found: error
           retention-days: 5
 
@@ -125,23 +137,29 @@ jobs:
           toolchain: 1.99.1
       - name: Build the app
         working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so the update files can't be signed. See docs/desktop/release.md."; exit 1; }
           npm ci
-          npm run tauri -- build --ci --bundles appimage
-      - name: Name the file and record its digest
+          npm run tauri -- build --ci --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
+      - name: Name the files and record their digests
         id: receipt
         shell: bash
         run: |
           shopt -s nullglob
           built=(desktop/src-tauri/target/release/bundle/appimage/*.AppImage)
-          test "${#built[@]}" -eq 1
+          test "${#built[@]}" -eq 1 && test -f "${built[0]}.sig"
           mkdir -p dist
           cp "${built[0]}" dist/hibiscus-desktop-x86_64.AppImage
-          printf 'sha256=%s\n' "$(sha256sum dist/hibiscus-desktop-x86_64.AppImage | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          cp "${built[0]}.sig" dist/hibiscus-desktop-x86_64.AppImage.sig
+          (cd dist && sha256sum hibiscus-desktop-* > receipt-linux)
+          printf 'sha256=%s\n' "$(sha256sum dist/receipt-linux | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-x86_64-linux
-          path: dist/hibiscus-desktop-x86_64.AppImage
+          path: dist/*
           if-no-files-found: error
           retention-days: 5
 
@@ -168,18 +186,42 @@ jobs:
         run: |
           shopt -s nullglob dotglob
           files=(dist/*)
-          test "${#files[@]}" -eq 2
+          # 5 built files plus each build's receipt.
+          test "${#files[@]}" -eq 7
           [[ "$MACOS_ARM64_SHA" =~ ^[0-9a-f]{64}$ && "$LINUX_X64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
-          for file in dist/hibiscus-desktop-aarch64-apple-darwin.dmg dist/hibiscus-desktop-x86_64.AppImage; do
+          for file in "${files[@]}"; do
             test -f "$file" && test ! -L "$file" || exit 1
           done
-          printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/hibiscus-desktop-aarch64-apple-darwin.dmg | sha256sum -c
-          printf '%s  %s\n' "$LINUX_X64_SHA" dist/hibiscus-desktop-x86_64.AppImage | sha256sum -c
+          # Each receipt is the one its build recorded, and lists that build's files.
+          printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/receipt-macos "$LINUX_X64_SHA" dist/receipt-linux | sha256sum -c
+          test "$(wc -l < dist/receipt-macos)" -eq 3 && test "$(wc -l < dist/receipt-linux)" -eq 2
+          (cd dist && sha256sum -c receipt-macos && sha256sum -c receipt-linux)
+          rm dist/receipt-macos dist/receipt-linux
+      - name: Write the update manifest
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          base="https://github.com/$GH_REPO/releases/download/$RELEASE_TAG"
+          jq -n \
+            --arg version "${RELEASE_TAG#v}" \
+            --arg notes "https://github.com/$GH_REPO/releases/tag/$RELEASE_TAG" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg mac_url "$base/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz" \
+            --rawfile mac_sig dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz.sig \
+            --arg linux_url "$base/hibiscus-desktop-x86_64.AppImage" \
+            --rawfile linux_sig dist/hibiscus-desktop-x86_64.AppImage.sig \
+            '{version: $version, notes: $notes, pub_date: $date, platforms: {
+              "darwin-aarch64": {signature: $mac_sig, url: $mac_url},
+              "linux-x86_64": {signature: $linux_sig, url: $linux_url}}}' > dist/latest.json
       - name: Sign desktop files
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/hibiscus-desktop-*
+          subject-path: |
+            dist/hibiscus-desktop-*
+            dist/latest.json
           predicate-type: https://slsa.dev/provenance/v1
           predicate: '{"buildDefinition":{"buildType":"https://actions.github.io/buildtypes/workflow/v1","externalParameters":{"workflow":{"ref":"${{ github.ref }}","repository":"${{ github.server_url }}/${{ github.repository }}","path":".github/workflows/release-desktop.yml"}},"internalParameters":{"github":{"event_name":"${{ github.event_name }}","repository_id":"${{ github.repository_id }}","repository_owner_id":"${{ github.repository_owner_id }}","runner_environment":"github-hosted"}},"resolvedDependencies":[{"uri":"git+${{ github.server_url }}/${{ github.repository }}@${{ github.ref }}","digest":{"gitCommit":"${{ needs.verify.outputs.source_commit }}"}}]},"runDetails":{"builder":{"id":"${{ github.server_url }}/${{ github.workflow_ref }}"},"metadata":{"invocationId":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}"}}}'
       - name: Write checksums and signature
@@ -187,14 +229,18 @@ jobs:
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
         run: |
-          (cd dist && sha256sum hibiscus-desktop-* > SHA256SUMS-desktop)
+          (cd dist && sha256sum hibiscus-desktop-* latest.json > SHA256SUMS-desktop)
           cp "$BUNDLE_PATH" dist/hibiscus-desktop-provenance.sigstore.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-release
           path: |
             dist/hibiscus-desktop-aarch64-apple-darwin.dmg
+            dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz
+            dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz.sig
             dist/hibiscus-desktop-x86_64.AppImage
+            dist/hibiscus-desktop-x86_64.AppImage.sig
+            dist/latest.json
             dist/SHA256SUMS-desktop
             dist/hibiscus-desktop-provenance.sigstore.json
           if-no-files-found: error
@@ -221,7 +267,7 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
           shopt -s nullglob dotglob
           files=(dist/*)
-          test "${#files[@]}" -eq 4
+          test "${#files[@]}" -eq 8
           # release.yml creates the draft; wait for it rather than racing it.
           for attempt in $(seq 1 60); do
             if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
