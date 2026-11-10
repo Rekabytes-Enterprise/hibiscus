@@ -4,6 +4,8 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.34] - 2026-11-10
+
 ### Added
 
 - Desktop app: in-app updates. The app checks for a newer release when it starts and every 6 hours, shows a banner, and on request downloads the update, installs it and restarts. Updates are signed, and each release now has 14 files: the macOS `.app.tar.gz`, signatures for it and the AppImage, and `latest.json` are new. Versions before this one have to be updated by hand once.
