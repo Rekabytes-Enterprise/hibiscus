@@ -63,14 +63,35 @@ fn agent_browser() -> Option<PathBuf> {
 pub const BROWSER_SESSION: &str = "hibiscus";
 // Commands that manage agent-browser itself or reach outside its own headless Chrome.
 const BROWSER_DENIED: &[&str] = &[
-    "install", "upgrade", "doctor", "dashboard", "chat", "connect", "mcp", "profiles", "skills",
-    "stream", "session",
+    "install",
+    "upgrade",
+    "doctor",
+    "dashboard",
+    "chat",
+    "connect",
+    "mcp",
+    "profiles",
+    "skills",
+    "stream",
+    "session",
 ];
 // Flags that would attach the user's own Chrome or profile, or change which browser runs.
 const BROWSER_FLAGS: &[&str] = &[
-    "--session", "--profile", "--state", "--cdp", "--auto-connect", "--executable-path",
-    "--extension", "--provider", "-p", "--engine", "--namespace", "--config", "--headed",
-    "--allow-file-access", "--restore",
+    "--session",
+    "--profile",
+    "--state",
+    "--cdp",
+    "--auto-connect",
+    "--executable-path",
+    "--extension",
+    "--provider",
+    "-p",
+    "--engine",
+    "--namespace",
+    "--config",
+    "--headed",
+    "--allow-file-access",
+    "--restore",
 ];
 fn browser_command(bin: &Path, args: &[String], cwd: &Path) -> Command {
     let mut command = Command::new(bin);
@@ -457,7 +478,12 @@ mod tests {
     fn browser_tool_refuses_commands_outside_its_own_headless_chrome() {
         let ok = |args: Value| validate("browser", &json!({ "args": args })).is_ok();
         assert!(ok(json!(["open", "http://localhost:5173"])));
-        assert!(ok(json!(["fill", "@e2", "--", "--profile is fine as typed text"])));
+        assert!(ok(json!([
+            "fill",
+            "@e2",
+            "--",
+            "--profile is fine as typed text"
+        ])));
         assert!(ok(json!(["snapshot", "-i"])));
         assert!(!ok(json!([])));
         assert!(!ok(json!(["--headed", "open", "x"])));
