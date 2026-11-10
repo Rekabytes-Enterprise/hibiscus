@@ -320,18 +320,28 @@ class DesktopReleasePolicy(unittest.TestCase):
         self.assertIn('contents: write', job(self.source, 'publish'))
         self.assertEqual(self.source.count('id-token: write'), 1)
         self.assertIn('id-token: write', job(self.source, 'provenance'))
-        for name in ['verify', 'macos_arm64', 'linux_x64']:
+        for name in ['verify', 'macos_arm64', 'linux_x64', 'sign_updates']:
             block = job(self.source, name)
             self.assertNotIn(': write', block)
             if name != 'verify':
                 self.assertNotIn('GH_TOKEN', block)
-        for name in ['provenance', 'publish']:
+        for name in ['sign_updates', 'provenance', 'publish']:
             self.assertIn("if: github.event_name == 'push'\n", job(self.source, name))
         # The build checks out only the commit that triggered the run, never a computed ref.
         self.assertNotIn('inputs.', self.source)
         self.assertNotIn('ref: ${{', self.source)
-        for unsafe in ['pull_request', 'secrets.', 'secrets: inherit']:
+        for unsafe in ['pull_request', 'secrets: inherit']:
             self.assertNotIn(unsafe, self.source)
+
+    def test_only_the_update_signer_sees_a_secret_and_runs_no_repository_code(self):
+        signer = job(self.source, 'sign_updates')
+        self.assertEqual(sorted(set(re.findall(r'secrets\.\w+', self.source))),
+                         ['secrets.TAURI_SIGNING_PRIVATE_KEY', 'secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD'])
+        self.assertEqual(self.source.count('secrets.'), signer.count('secrets.'))
+        for unsafe in ['actions/checkout@', 'npm ci', 'cargo ', 'run build']:
+            self.assertNotIn(unsafe, signer)
+        self.assertIn('--ignore-scripts @tauri-apps/cli@2.', signer)
+        self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign the update files'))
 
     def test_builds_use_the_authorized_commit_and_pinned_toolchains(self):
         for name in ['macos_arm64', 'linux_x64']:
@@ -346,7 +356,8 @@ class DesktopReleasePolicy(unittest.TestCase):
     def test_signed_files_are_receipt_checked_and_published_only_into_a_draft(self):
         signer = job(self.source, 'provenance')
         self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign desktop files'))
-        self.assertIn('test "${#files[@]}" -eq 2', signer)
+        self.assertIn('test "${#files[@]}" -eq 9', signer)
+        self.assertIn('sign_updates', signer)
         # GitHub's attestation API rejects SLSA provenance without internalParameters.
         self.assertIn('"internalParameters":{"github":{"event_name":', signer)
         publisher = job(self.source, 'publish')

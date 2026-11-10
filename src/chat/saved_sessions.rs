@@ -227,6 +227,10 @@ fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<Str
     {
         return Ok(None);
     }
+    let named = header["name"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
     let mut title = None;
     let mut first = None;
     let mut message_count = 0;
@@ -254,7 +258,10 @@ fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<Str
         return Ok(None);
     }
     Ok(Some(
-        title.or(first).unwrap_or_else(|| "(no messages)".into()),
+        named
+            .or(title)
+            .or(first)
+            .unwrap_or_else(|| "(no messages)".into()),
     ))
 }
 
@@ -383,6 +390,32 @@ pub(crate) fn show_recent_with<W: Write>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_name_in_the_header_is_the_title() {
+        let root = std::env::temp_dir().join(format!(
+            "hibiscus-named-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        fs::write(
+            root.join("a.jsonl"),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"type":"session","id":"a","cwd":root,"name":"Named"}),
+                json!({"type":"session_info","name":"older"}),
+                json!({"type":"message","message":{"role":"user","content":"first"}})
+            ),
+        )
+        .unwrap();
+        assert_eq!(list_in_dir(&root, &root).unwrap()[0].title, "Named");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn cache_reuses_unchanged_files_and_invalidates_rename_replace_delete_and_scope() {

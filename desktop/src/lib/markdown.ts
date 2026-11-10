@@ -60,3 +60,19 @@ export function markdown(text: string): string {
   // Added after sanitizing, which strips buttons; the markup is our own constant.
   return clean.replaceAll('<div class="codeblock">', `<div class="codeblock">${COPY}`);
 }
+
+// Finished messages never change, so their HTML is kept rather than parsed on
+// every render (#159). Streaming text changes on each delta and skips this.
+const rendered = new Map<string, string>();
+const RENDERED = 1000;
+
+/** `markdown(text)`, remembered for text that has been rendered before. */
+export function cachedMarkdown(text: string): string {
+  let html = rendered.get(text);
+  if (html === undefined) {
+    html = markdown(text);
+    if (rendered.size >= RENDERED) rendered.delete(rendered.keys().next().value!);
+    rendered.set(text, html);
+  }
+  return html;
+}

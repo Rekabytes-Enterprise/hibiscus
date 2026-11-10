@@ -4,6 +4,20 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.34] - 2026-11-10
+
+### Added
+
+- Desktop app: in-app updates. The app checks for a newer release when it starts and every 6 hours, shows a banner, and on request downloads the update, installs it and restarts. Updates are signed, and each release now has 14 files: the macOS `.app.tar.gz`, signatures for it and the AppImage, and `latest.json` are new. Versions before this one have to be updated by hand once.
+- Desktop app: rename and delete saved sessions from the menu next to each session in the sidebar. Delete asks first. The name is saved in the session file.
+- Desktop app: an "Add folder" button in the sidebar and a "Remove from sidebar" item on each folder. The new-session picker can also remove folders from its list. The sidebar keeps up to 8 recent folders.
+- Desktop app: Settings has an About page with the installed version, whether a newer one is out, and the release notes for this version and earlier ones.
+
+### Changed
+
+- Desktop app: Settings pages use the full window width and keep their content centred.
+- `scripts/bump-version.sh` moves the `## [Unreleased]` entries in `CHANGELOG.md` under the new version with today's date, and refuses to bump while Unreleased is empty.
+
 ## [0.3.33] - 2026-11-10
 
 ### Changed

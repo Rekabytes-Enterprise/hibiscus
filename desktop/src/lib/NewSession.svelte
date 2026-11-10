@@ -8,6 +8,7 @@
     busy,
     onopen,
     onchoose,
+    onremove,
     onproviders,
   }: {
     folder: string | null;
@@ -15,6 +16,8 @@
     busy: boolean;
     onopen: (path: string) => void;
     onchoose: () => void;
+    /** Takes a folder out of the list; nothing on disk changes. */
+    onremove: (path: string) => void;
     /** Set while no provider is signed in. */
     onproviders?: () => void;
   } = $props();
@@ -33,10 +36,15 @@
   {/if}
   <div class="card">
     {#each folder ? [folder, ...recent.filter((p) => p !== folder).slice(0, 3)] : [] as path}
-      <button class="row" onclick={() => onopen(path)} disabled={busy || path === folder} title={path}>
-        <span class="label"><Icon name="folder" /> {name(path)}</span>
-        {#if path === folder}<span class="check"><Icon name="check" /></span>{/if}
-      </button>
+      <div class="folderrow">
+        <button class="row" onclick={() => onopen(path)} disabled={busy || path === folder} title={path}>
+          <span class="label"><Icon name="folder" /> {name(path)}</span>
+          {#if path === folder}<span class="check"><Icon name="check" /></span>{/if}
+        </button>
+        {#if path !== folder}
+          <button class="iconbtn remove" onclick={() => onremove(path)} title="Remove from list" aria-label={`Remove ${name(path)} from the list`}><Icon name="x" size={14} /></button>
+        {/if}
+      </div>
     {/each}
     <button class="row" onclick={onchoose} disabled={busy}><span class="muted">Choose folder…</span></button>
   </div>

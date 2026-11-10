@@ -1,9 +1,9 @@
 <script lang="ts">
   import { homeDir } from "@tauri-apps/api/path";
-  import { open as pickFolder } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
-  import { apply, empty, fromMessages, type Chat } from "./lib/chat";
-  import { gitChanges, listSessions, onEvent, openFile, openProject, post, request, type Changes, type SavedSession } from "./lib/engine";
+  import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
+  import { onMount, tick } from "svelte";
+  import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
+  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
@@ -11,11 +11,13 @@
   import Composer from "./lib/Composer.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
+  import { added, opened, removed } from "./lib/folders";
   import { name } from "./lib/paths";
   import Models from "./lib/Models.svelte";
   import NewSession from "./lib/NewSession.svelte";
   import Settings from "./lib/Settings.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
+  import UpdateBanner from "./lib/UpdateBanner.svelte";
 
   const RECENT = "hibiscus.recentFolders";
 
@@ -41,6 +43,8 @@
   let page = $state<"chat" | "settings">("chat");
   let error = $state<string | null>(null);
   let opening = $state(false);
+  // Conversations opened this run, so going back to one shows it at once.
+  const chats = new ChatCache();
 
   const busy = $derived(chat.running || opening);
   const diff = $derived(changes ? parseDiff(changes.diff) : []);
@@ -74,8 +78,35 @@
     return (step: string) => console.debug(`[timing] ${what}: ${step} after ${Math.round(performance.now() - start)} ms`);
   }
 
+  /** Logs `step` once the browser has drawn the current state. */
+  const painted = (t: (step: string) => void, step: string) => tick().then(() => requestAnimationFrame(() => t(step)));
+
+  /** Keeps the conversation on screen for a later return to its session. */
+  function remember() {
+    if (sessionFile && chat.items.length && !chat.running) chats.keep(sessionFile, chat);
+  }
+
   function notice(text: string) {
     chat = { ...chat, items: [...chat.items, { kind: "notice", text, error: true }] };
+  }
+
+  function saveRecent(next: string[]) {
+    recent = next;
+    localStorage.setItem(RECENT, JSON.stringify(recent));
+  }
+
+  /** Adds a folder to the list without starting a session in it. */
+  async function addFolder() {
+    const path = await pickFolder({ directory: true, multiple: false, defaultPath: folder ?? undefined });
+    if (typeof path !== "string") return;
+    saveRecent(added(recent, path));
+    void loadSessions(path);
+  }
+
+  /** Takes a folder out of the list only; its files and saved sessions stay. */
+  function removeFolder(path: string) {
+    saveRecent(removed(recent, path));
+    delete saved[path];
   }
 
   async function loadSessions(path: string) {
@@ -84,8 +115,7 @@
     } catch {
       // Moved or deleted: it can no longer be opened, so drop it from the sidebar.
       if (path === folder) return;
-      recent = recent.filter((p) => p !== path);
-      localStorage.setItem(RECENT, JSON.stringify(recent));
+      saveRecent(removed(recent, path));
     }
   }
 
@@ -98,8 +128,12 @@
     changes = await gitChanges(folder, base).catch(() => null);
   }
 
-  /** Reloads the session details, stats, changes and session list, all at once. */
-  async function refresh() {
+  /**
+   * Reloads the session details and stats, and with `folderData` the folder's
+   * changes and session list, all at once. Switching sessions within a folder
+   * changes neither of those, so it skips them.
+   */
+  async function refresh(folderData = true) {
     if (!folder) return;
     const path = folder;
     const t = timer("refresh");
@@ -116,8 +150,8 @@
       // Both fail while no model is selected; that is not an error to show.
       request({ type: "get_available_thinking_levels" }).then((r) => r.levels ?? [], () => []).then((l) => { levels = l; t("thinking levels"); }),
       request({ type: "get_session_stats" }).then((r) => r, () => null).then((r) => { stats = r; t("session stats"); }),
-      gitChanges(path, pickedBase(path)).catch(() => null).then((c) => { changes = c; t("git changes"); }),
-      loadSessions(path).then(() => t("session list")),
+      folderData && gitChanges(path, pickedBase(path)).catch(() => null).then((c) => { changes = c; t("git changes"); }),
+      folderData && loadSessions(path).then(() => t("session list")),
     ]);
   }
 
@@ -131,8 +165,18 @@
     wide = false;
     error = null;
     const t = timer(`open ${session ? "session" : "folder"}`);
+    const inPlace = path === folder && !!session && !restart;
+    const before = { chat, sessionFile };
+    remember();
+    // A session opened before shows at once; the engine's copy replaces it below if the file changed.
+    const cached = session ? chats.get(session) : undefined;
+    if (cached) {
+      sessionFile = session!;
+      chat = cached;
+      painted(t, "cached conversation painted");
+    }
     try {
-      if (path === folder && session && !restart) {
+      if (inPlace) {
         // No restart, so no model-list downloads either.
         await request({ type: "switch_session", sessionPath: session });
         t("switch_session");
@@ -141,16 +185,21 @@
         t("engine start");
       }
       folder = path;
-      recent = [path, ...recent.filter((p) => p !== path)].slice(0, 8);
-      localStorage.setItem(RECENT, JSON.stringify(recent));
-      chat = session ? fromMessages((await request({ type: "get_messages" })).messages ?? []) : empty();
-      t("conversation shown");
+      saveRecent(opened(recent, path));
+      const fresh = session ? fromMessages((await request({ type: "get_messages" })).messages ?? []) : empty();
+      // Set together, so the chat view is rebuilt once, with the new conversation.
+      if (session) sessionFile = session;
+      chat = cached ? newer(cached, fresh) : fresh;
+      t("conversation loaded");
+      painted(t, "conversation painted");
       opening = false;
       // Details fill in after the conversation is on screen.
-      await refresh();
+      await refresh(!inPlace);
       t("details loaded");
+      painted(t, "details painted");
     } catch (e) {
       error = message(e);
+      ({ chat, sessionFile } = before);
     } finally {
       opening = false;
     }
@@ -167,6 +216,9 @@
     side = "details";
     wide = false;
     if (!folder) return open(home);
+    // A folder removed from the list comes back once a new session starts in it.
+    saveRecent(opened(recent, folder));
+    remember();
     try {
       await request({ type: "new_session" });
       chat = empty();
@@ -195,6 +247,33 @@
     await refresh();
   }
 
+  /** Names a session; the open one through the engine, so its next save keeps the name. */
+  async function rename(path: string, session: string, name: string) {
+    try {
+      if (path === folder && session === sessionFile) await request({ type: "set_session_name", name });
+      else await renameSession(session, name);
+    } catch (e) {
+      notice(message(e));
+    }
+    await loadSessions(path);
+  }
+
+  async function remove(path: string, session: string) {
+    if (!(await ask("Delete this session? This can't be undone.", { title: "Delete session", kind: "warning", okLabel: "Delete" }))) return;
+    try {
+      // The open session is replaced first, so the engine never saves it again.
+      if (path === folder && session === sessionFile) {
+        await newSession();
+        if (sessionFile === session) return;
+      }
+      await deleteSession(session);
+      chats.drop(session);
+    } catch (e) {
+      notice(message(e));
+    }
+    await loadSessions(path);
+  }
+
   /** Keys are read when an engine starts, as the TUI reconnects after /login. */
   async function signedIn() {
     if (folder) await open(folder, sessionFile ?? undefined, true);
@@ -210,6 +289,10 @@
     {busy}
     onnew={newSession}
     onresume={(path, session) => { page = "chat"; void open(path, session); }}
+    onrename={rename}
+    ondelete={remove}
+    onaddfolder={addFolder}
+    onremovefolder={removeFolder}
     onsettings={() => (page = "settings")}
   />
   <main>
@@ -219,6 +302,7 @@
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
     </div>
+    <UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />
     <div class="body">
   {#if page === "settings"}
     <Settings onback={() => (page = "chat")} onsaved={signedIn} />
@@ -226,12 +310,12 @@
     <div class="center">
     {#if error}<div class="banner error">{error}</div>{/if}
     {#if !chat.items.length && !chat.running}
-      <NewSession {folder} {recent} {busy} onopen={(p) => open(p)} onchoose={choose} onproviders={hasAccess ? undefined : () => (page = "settings")} />
+      <NewSession {folder} {recent} {busy} onopen={(p) => open(p)} onchoose={choose} onremove={removeFolder} onproviders={hasAccess ? undefined : () => (page = "settings")} />
     {:else}
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>
       {/if}
-      <ChatView {chat} {folder} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} />
+      {#key sessionFile}<ChatView {chat} {folder} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} />{/key}
     {/if}
     {#if folder}
       <div class="dock">

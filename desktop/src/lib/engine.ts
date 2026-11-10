@@ -85,6 +85,9 @@ export const openProject = async (folder: string, latest: boolean, session?: str
 };
 export const closeProject = () => invoke<void>("close_project");
 export const listSessions = (folder: string) => invoke<SavedSession[]>("sessions", { folder });
+/** Names a session no engine has open; use `set_session_name` for the open one. */
+export const renameSession = (path: string, name: string) => invoke<void>("rename_session", { path, name });
+export const deleteSession = (path: string) => invoke<void>("delete_session", { path });
 export const listProviders = () => invoke<ProviderInfo[]>("providers");
 export const saveApiKey = (provider: string, key: string) =>
   invoke<void>("save_api_key", { provider, key });

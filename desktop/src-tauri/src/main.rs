@@ -110,6 +110,16 @@ struct Saved {
 }
 
 #[tauri::command]
+async fn rename_session(path: PathBuf, name: String) -> Result<(), String> {
+    desktop::rename_session(&path, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_session(path: PathBuf) -> Result<(), String> {
+    desktop::delete_session(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn sessions(folder: PathBuf) -> Result<Vec<Saved>, String> {
     Ok(desktop::sessions(&folder)
         .map_err(|e| e.to_string())?
@@ -480,6 +490,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(App::default())
         .manage(Codex::default())
         .invoke_handler(tauri::generate_handler![
@@ -487,6 +499,8 @@ fn main() {
             send,
             close_project,
             sessions,
+            rename_session,
+            delete_session,
             providers,
             save_api_key,
             sign_out,

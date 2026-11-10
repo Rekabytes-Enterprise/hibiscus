@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apply, empty, entries, fromMessages, outputs, relative, summary, toolHunks, toolLabel, toolView, type Chat, type Tool } from "./chat";
+import { apply, ChatCache, empty, entries, newer, fromMessages, outputs, relative, summary, toolHunks, toolLabel, toolView, type Chat, type Tool } from "./chat";
 
 const run = (events: any[], start: Chat = empty()) => events.reduce(apply, start);
 const delta = (d: string) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: d } });
@@ -152,5 +152,56 @@ describe("tool calls", () => {
     const write = toolHunks(tool("write", { path: "a", content: "x\ny\n" }));
     expect(write[0].lines.map((l) => [l.kind, l.new, l.text])).toEqual([["add", 1, "x"], ["add", 2, "y"]]);
     expect(toolHunks(tool("read", { path: "a" }))).toEqual([]);
+  });
+});
+
+describe("ChatCache", () => {
+  const conversation = (reply: string) =>
+    fromMessages([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "assistant", content: [{ type: "text", text: reply }] },
+    ]);
+
+  it("returns a conversation opened before", () => {
+    const cache = new ChatCache();
+    const chat = conversation("hello");
+    cache.keep("/sessions/a.jsonl", chat);
+    expect(cache.get("/sessions/a.jsonl")).toBe(chat);
+    expect(cache.get("/sessions/b.jsonl")).toBeUndefined();
+  });
+
+  it("keeps the cached rows while the session file is unchanged", () => {
+    const cached = run([{ type: "auto_retry_start" }], conversation("hello"));
+    expect(newer(cached, conversation("hello"))).toBe(cached);
+  });
+
+  it("takes the fresh conversation once the session file changed", () => {
+    const fresh = fromMessages([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "hello" }] },
+      { role: "user", content: [{ type: "text", text: "from the TUI" }] },
+    ]);
+    expect(newer(conversation("hello"), fresh)).toBe(fresh);
+  });
+
+  it("keeps sessions from different folders apart", () => {
+    const cache = new ChatCache();
+    const a = conversation("in a");
+    const b = conversation("in b");
+    cache.keep("/home/me/a/.sessions/1.jsonl", a);
+    cache.keep("/home/me/b/.sessions/1.jsonl", b);
+    expect(cache.get("/home/me/a/.sessions/1.jsonl")).toBe(a);
+    expect(cache.get("/home/me/b/.sessions/1.jsonl")).toBe(b);
+  });
+
+  it("drops the least recently kept conversation past its limit", () => {
+    const cache = new ChatCache(2);
+    cache.keep("1", empty());
+    cache.keep("2", empty());
+    cache.keep("1", empty());
+    cache.keep("3", empty());
+    expect(cache.get("2")).toBeUndefined();
+    expect(cache.get("1")).toBeDefined();
+    expect(cache.get("3")).toBeDefined();
   });
 });

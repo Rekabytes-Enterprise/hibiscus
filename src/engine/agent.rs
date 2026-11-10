@@ -62,6 +62,9 @@ enum Command {
         #[serde(rename = "sessionPath")]
         session_path: std::path::PathBuf,
     },
+    SetSessionName {
+        name: String,
+    },
     ClearQueue,
     Abort,
     Compact {
@@ -430,7 +433,12 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                             .as_ref()
                             .is_some_and(|(p, _)| p == super::rooxcode::ID);
                         *session.lock().unwrap() = next;
-                        if discover {
+                        // The catalog loaded at startup, by a new session or by /models
+                        // is enough to check this session; fetching it again would hold
+                        // up every command after the switch (#159).
+                        if discover && rooxcode_loaded(&config) {
+                            reconcile_rooxcode(&config, &session, &out).await?;
+                        } else if discover {
                             catalog_error =
                                 refresh_rooxcode(Arc::make_mut(&mut config), &session, &out)
                                     .await?;
@@ -523,6 +531,18 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                             if let Err(error) = s.save() {
                                 s.thinking = previous;
                                 return Err(error);
+                            }
+                            Ok(json!({}))
+                        }
+                        Command::SetSessionName { name } if !busy => {
+                            let previous =
+                                std::mem::replace(&mut s.name, super::session::clean_name(&name));
+                            // A session without a file yet keeps the name for its first save.
+                            if s.path.exists() {
+                                if let Err(error) = s.save() {
+                                    s.name = previous;
+                                    return Err(error);
+                                }
                             }
                             Ok(json!({}))
                         }
@@ -883,24 +903,42 @@ async fn refresh_rooxcode(
 ) -> Result<Option<String>> {
     match super::rooxcode::refresh(config).await {
         Ok(status) => {
-            let reset = {
-                let mut s = session.lock().unwrap();
-                select_rooxcode(&mut s, config);
-                let previous = s.thinking.clone();
-                let reset = s.reconcile_rooxcode_thinking(config);
-                if reset {
-                    if let Err(error) = s.save() {
-                        s.thinking = previous;
-                        return Err(error);
-                    }
-                }
-                reset
-            };
-            if reset {
-                emit(out, Event::ThinkingReset.wire()).await?;
-            }
+            reconcile_rooxcode(config, session, out).await?;
             Ok(status.warning().map(str::to_owned))
         }
         Err(error) => Ok(Some(error.to_string())),
     }
+}
+
+/// Whether a Rooxcode catalog is already loaded.
+fn rooxcode_loaded(config: &Config) -> bool {
+    config
+        .providers
+        .iter()
+        .any(|p| p.id == super::rooxcode::ID && !p.models.is_empty())
+}
+
+/// Checks the session's Rooxcode model and thinking level against the loaded catalog.
+async fn reconcile_rooxcode(
+    config: &Config,
+    session: &Mutex<Session>,
+    out: &mpsc::Sender<Value>,
+) -> Result<()> {
+    let reset = {
+        let mut s = session.lock().unwrap();
+        select_rooxcode(&mut s, config);
+        let previous = s.thinking.clone();
+        let reset = s.reconcile_rooxcode_thinking(config);
+        if reset {
+            if let Err(error) = s.save() {
+                s.thinking = previous;
+                return Err(error);
+            }
+        }
+        reset
+    };
+    if reset {
+        emit(out, Event::ThinkingReset.wire()).await?;
+    }
+    Ok(())
 }

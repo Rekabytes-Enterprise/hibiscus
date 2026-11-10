@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::{
     fs,
     io::{BufRead, BufReader},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 /// Which session an engine opens.
@@ -84,7 +84,77 @@ pub struct Session {
     pub steps: Vec<Value>,
     pub usage: Value,
     pub context: Option<u64>,
+    /// A name the user gave the session, shown in place of its first message.
+    pub name: Option<String>,
 }
+
+/// A session name as stored: one trimmed line of at most 200 characters, or
+/// `None` for an empty name, which restores the automatic title.
+pub fn clean_name(name: &str) -> Option<String> {
+    let line: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let line: String = line.trim().chars().take(200).collect();
+    let line = line.trim_end();
+    (!line.is_empty()).then(|| line.to_owned())
+}
+
+/// Where saved sessions live.
+fn sessions_dir() -> Result<PathBuf> {
+    Ok(crate::paths::home()?.join("sessions"))
+}
+
+/// Names a saved session that no engine has open, by rewriting its header.
+/// An empty name restores the automatic title.
+pub fn rename_saved(path: &Path, name: &str) -> Result<()> {
+    rename_in(&sessions_dir()?, path, name)
+}
+
+/// Deletes a saved session file.
+pub fn delete_saved(path: &Path) -> Result<()> {
+    delete_in(&sessions_dir()?, path)
+}
+
+fn delete_in(dir: &Path, path: &Path) -> Result<()> {
+    Ok(fs::remove_file(owned(dir, path)?)?)
+}
+
+/// `path`, resolved, if it is a session file directly inside `dir`.
+fn owned(dir: &Path, path: &Path) -> Result<PathBuf> {
+    let dir = dir.canonicalize()?;
+    let file = path.canonicalize()?;
+    if file.parent() != Some(dir.as_path())
+        || file.extension().is_none_or(|ext| ext != "jsonl")
+        || !file.is_file()
+    {
+        return Err("Not a saved Hibiscus session".into());
+    }
+    Ok(file)
+}
+
+fn rename_in(dir: &Path, path: &Path, name: &str) -> Result<()> {
+    let file = owned(dir, path)?;
+    let text = fs::read_to_string(&file)?;
+    let (head, rest) = text.split_once('\n').unwrap_or((&text, ""));
+    let mut head: Value = serde_json::from_str(head)?;
+    if head["type"] != "session" || head["format"] != "hibiscus" {
+        return Err("Only Hibiscus sessions can be renamed".into());
+    }
+    match clean_name(name) {
+        Some(name) => head["name"] = name.into(),
+        None => {
+            if let Some(head) = head.as_object_mut() {
+                head.remove("name");
+            }
+        }
+    }
+    let mut bytes = serde_json::to_vec(&head)?;
+    bytes.push(b'\n');
+    bytes.extend_from_slice(rest.as_bytes());
+    config::atomic(&file, &bytes)
+}
+
 impl Session {
     /// Opens a session for `workspace`, the folder its tools work in.
     pub fn open(
@@ -125,6 +195,7 @@ impl Session {
             steps: vec![],
             usage: json!({"input":0,"output":0,"cacheRead":0}),
             context: None,
+            name: None,
         };
         if session
             .model
@@ -163,6 +234,7 @@ impl Session {
         session.steps = serde_json::from_value(head["steps"].clone()).unwrap_or_default();
         session.usage = head["usage"].clone();
         session.context = head["context"].as_u64();
+        session.name = head["name"].as_str().and_then(clean_name);
         for line in lines {
             let value: Value = serde_json::from_str(&line?)?;
             if value["type"] == "message" {
@@ -203,9 +275,11 @@ impl Session {
         Ok(session)
     }
     pub fn save(&self) -> Result<()> {
-        let mut bytes = serde_json::to_vec(
-            &json!({"type":"session","format":"hibiscus","version":1,"id":self.id,"rooxcodeSession":self.rooxcode_session,"cwd":self.cwd,"model":self.model,"thinking":self.thinking,"steps":self.steps,"usage":self.usage,"context":self.context}),
-        )?;
+        let mut head = json!({"type":"session","format":"hibiscus","version":1,"id":self.id,"rooxcodeSession":self.rooxcode_session,"cwd":self.cwd,"model":self.model,"thinking":self.thinking,"steps":self.steps,"usage":self.usage,"context":self.context});
+        if let Some(name) = &self.name {
+            head["name"] = name.as_str().into();
+        }
+        let mut bytes = serde_json::to_vec(&head)?;
         bytes.push(b'\n');
         for message in &self.messages {
             serde_json::to_writer(&mut bytes, &json!({"type":"message","message":message}))?;
@@ -278,5 +352,92 @@ impl Session {
             .ok()
             .and_then(|(_, m)| m.context_window);
         json!({"tokens":self.usage,"cost":null,"contextUsage":{"tokens":self.context,"contextWindow":window,"percent":self.context.zip(window).map(|(n,w)|100.0*n as f64/w as f64)}})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("hibiscus-{name}-{:x}", config::unique()));
+        fs::create_dir(&root).unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn rename_names_a_session_and_an_empty_name_restores_its_title() {
+        let root = temp("rename");
+        let file = root.join("a.jsonl");
+        let message = json!({"type":"message","message":{"role":"user","content":"first"}});
+        fs::write(
+            &file,
+            format!(
+                "{}\n{message}\n",
+                json!({"type":"session","format":"hibiscus","version":1,"id":"a","cwd":root})
+            ),
+        )
+        .unwrap();
+        let head = |file: &Path| -> Value {
+            serde_json::from_str(fs::read_to_string(file).unwrap().lines().next().unwrap()).unwrap()
+        };
+        rename_in(&root, &file, "  My\nsession  ").unwrap();
+        assert_eq!(head(&file)["name"], "My session");
+        assert!(fs::read_to_string(&file)
+            .unwrap()
+            .ends_with(&format!("\n{message}\n")));
+        rename_in(&root, &file, "   ").unwrap();
+        assert!(head(&file).get("name").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rename_and_delete_refuse_files_outside_the_sessions_directory() {
+        let root = temp("owned");
+        let sessions = root.join("sessions");
+        fs::create_dir(&sessions).unwrap();
+        let outside = root.join("a.jsonl");
+        let header = json!({"type":"session","format":"hibiscus","version":1,"id":"a","cwd":root});
+        fs::write(&outside, format!("{header}\n")).unwrap();
+        let text = sessions.join("notes.txt");
+        fs::write(&text, "keep").unwrap();
+        let escape = sessions.join("..").join("a.jsonl");
+        for path in [&outside, &text, &escape] {
+            assert!(rename_in(&sessions, path, "x").is_err());
+            assert!(delete_in(&sessions, path).is_err());
+        }
+        assert!(outside.exists() && text.exists());
+        let inside = sessions.join("b.jsonl");
+        fs::write(&inside, format!("{header}\n")).unwrap();
+        delete_in(&sessions, &inside).unwrap();
+        assert!(!inside.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clean_name_keeps_one_short_line() {
+        assert_eq!(clean_name("  a\nb  ").as_deref(), Some("a b"));
+        assert_eq!(clean_name(" \t "), None);
+        assert_eq!(clean_name(&"x".repeat(300)).unwrap().len(), 200);
+    }
+
+    #[test]
+    fn a_saved_name_survives_save_and_load() {
+        let root = std::env::temp_dir().join(format!("hibiscus-name-{:x}", config::unique()));
+        fs::create_dir(&root).unwrap();
+        let cwd = root.canonicalize().unwrap();
+        let config: Config = serde_json::from_value(json!({"providers":[]})).unwrap();
+        let mut session = Session::open(&SessionStart::New, &cwd, &config).unwrap();
+        session.path = cwd.join("s.jsonl");
+        session.name = Some("Named".into());
+        session.save().unwrap();
+        let loaded =
+            Session::open(&SessionStart::Selected(session.path.clone()), &cwd, &config).unwrap();
+        assert_eq!(loaded.name.as_deref(), Some("Named"));
+        loaded.save().unwrap();
+        assert!(fs::read_to_string(&session.path)
+            .unwrap()
+            .contains("\"name\":\"Named\""));
+        fs::remove_dir_all(root).unwrap();
     }
 }

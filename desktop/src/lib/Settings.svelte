@@ -1,4 +1,5 @@
 <script lang="ts">
+  import About from "./About.svelte";
   import Icon from "./Icon.svelte";
   import { TERMS } from "./legal";
   import { markdown } from "./markdown";
@@ -6,7 +7,7 @@
   import Providers from "./Providers.svelte";
 
   let { onback, onsaved }: { onback: () => void; onsaved: () => Promise<void> } = $props();
-  let page = $state<"providers" | "privacy" | "terms">("providers");
+  let page = $state<"providers" | "privacy" | "terms" | "about">("providers");
 </script>
 
 <div class="settings">
@@ -16,12 +17,15 @@
     <button class="nav" class:active={page === "providers"} onclick={() => (page = "providers")}><Icon name="key" /> Providers</button>
     <button class="nav" class:active={page === "privacy"} onclick={() => (page = "privacy")}><Icon name="shield" /> Privacy</button>
     <button class="nav" class:active={page === "terms"} onclick={() => (page = "terms")}><Icon name="file-text" /> Terms of Use</button>
+    <button class="nav" class:active={page === "about"} onclick={() => (page = "about")}><Icon name="info" /> About</button>
   </nav>
   <section>
     {#if page === "providers"}
       <Providers {onsaved} />
     {:else if page === "privacy"}
       <Privacy />
+    {:else if page === "about"}
+      <About />
     {:else}
       <h2>Terms of Use</h2>
       <div class="md legal">{@html markdown(TERMS)}</div>
