@@ -48,6 +48,7 @@ Every command gets exactly one `response` with the same `id`:
 | `set_thinking_level` | `level` | Not during a run. |
 | `new_session` | | Not during a run. Same workspace. |
 | `switch_session` | `sessionPath` | Not during a run. Must belong to the same workspace. |
+| `set_session_name` | `name` | Not during a run. Names the open session; an empty name restores the automatic title. |
 | `compact` | optional `customInstructions` | Not during a run. |
 | `extension_command` | `name`, `input` | Not during a run. Output arrives as `extension_command_output`. |
 

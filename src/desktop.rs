@@ -53,6 +53,17 @@ pub fn sessions(workspace: &Path) -> Result<Vec<SavedSession>> {
     )
 }
 
+/// Names a saved session that no engine has open; an empty name restores its
+/// automatic title. Rename the open session with the `set_session_name` command.
+pub fn rename_session(path: &Path, name: &str) -> Result<()> {
+    crate::chat::saved_sessions::rename(path, name)
+}
+
+/// Deletes a saved session. Refuses files outside the sessions directory.
+pub fn delete_session(path: &Path) -> Result<()> {
+    crate::chat::saved_sessions::delete(path)
+}
+
 /// A configured provider, for the login screen.
 pub struct ProviderInfo {
     pub id: String,

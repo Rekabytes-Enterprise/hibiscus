@@ -80,6 +80,16 @@ aside.left { width: 260px; flex: none; background: var(--sidebar); border-right:
 .list button:disabled { opacity: 1; cursor: default; }
 .list button.active { background: var(--selected); opacity: 1; }
 .list .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The ... menu sits over the row's right edge; it shows on hover, on the open session and while open. */
+.list li { position: relative; }
+.list li .menu { position: absolute; right: 4px; top: 4px; opacity: 0; }
+.list li:hover .menu, .list li.active .menu, .list li .menu:focus-within { opacity: 1; }
+.list li:hover .row, .list li.active .row { padding-right: 34px; }
+.list .more { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; }
+.list .rename { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
+.list .more:disabled { opacity: 0.4; }
+.list .popover button { height: auto; }
+.popover.fixed { position: fixed; bottom: auto; z-index: 30; }
 .list .empty { padding: 4px 10px; }
 
 .titlebar { height: 46px; display: flex; align-items: center; padding: 0 20px; border-bottom: 1px solid var(--line); font-weight: 500; user-select: none; -webkit-user-select: none; cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }

@@ -22,6 +22,56 @@ fn session_dir(_cwd: &Path) -> Result<PathBuf> {
     Ok(crate::paths::home()?.join("sessions"))
 }
 
+/// Names a saved session that no engine has open, by rewriting its header.
+/// An empty name restores the automatic title.
+pub(crate) fn rename(path: &Path, name: &str) -> Result<()> {
+    rename_in(&session_dir(path)?, path, name)
+}
+
+/// Deletes a saved session file.
+pub(crate) fn delete(path: &Path) -> Result<()> {
+    delete_in(&session_dir(path)?, path)
+}
+
+fn delete_in(dir: &Path, path: &Path) -> Result<()> {
+    Ok(fs::remove_file(owned(dir, path)?)?)
+}
+
+/// `path`, resolved, if it is a session file directly inside `dir`.
+fn owned(dir: &Path, path: &Path) -> Result<PathBuf> {
+    let dir = dir.canonicalize()?;
+    let file = path.canonicalize()?;
+    if file.parent() != Some(dir.as_path())
+        || file.extension().is_none_or(|ext| ext != "jsonl")
+        || !file.is_file()
+    {
+        return Err("Not a saved Hibiscus session".into());
+    }
+    Ok(file)
+}
+
+fn rename_in(dir: &Path, path: &Path, name: &str) -> Result<()> {
+    let file = owned(dir, path)?;
+    let text = fs::read_to_string(&file)?;
+    let (head, rest) = text.split_once('\n').unwrap_or((&text, ""));
+    let mut head: Value = serde_json::from_str(head)?;
+    if head["type"] != "session" || head["format"] != "hibiscus" {
+        return Err("Only Hibiscus sessions can be renamed".into());
+    }
+    match crate::engine::session::clean_name(name) {
+        Some(name) => head["name"] = name.into(),
+        None => {
+            if let Some(head) = head.as_object_mut() {
+                head.remove("name");
+            }
+        }
+    }
+    let mut bytes = serde_json::to_vec(&head)?;
+    bytes.push(b'\n');
+    bytes.extend_from_slice(rest.as_bytes());
+    crate::engine::config::atomic(&file, &bytes)
+}
+
 pub(crate) fn list(cwd: &Path) -> Result<Vec<SessionInfo>> {
     list_cancelled(cwd, &AtomicBool::new(false))
 }
@@ -227,6 +277,10 @@ fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<Str
     {
         return Ok(None);
     }
+    let named = header["name"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
     let mut title = None;
     let mut first = None;
     let mut message_count = 0;
@@ -254,7 +308,10 @@ fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<Str
         return Ok(None);
     }
     Ok(Some(
-        title.or(first).unwrap_or_else(|| "(no messages)".into()),
+        named
+            .or(title)
+            .or(first)
+            .unwrap_or_else(|| "(no messages)".into()),
     ))
 }
 
@@ -383,6 +440,65 @@ pub(crate) fn show_recent_with<W: Write>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn temp(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "hibiscus-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn rename_names_a_session_and_an_empty_name_restores_its_title() {
+        let root = temp("rename");
+        let file = root.join("a.jsonl");
+        let message = json!({"type":"message","message":{"role":"user","content":"first"}});
+        fs::write(
+            &file,
+            format!(
+                "{}\n{message}\n",
+                json!({"type":"session","format":"hibiscus","version":1,"id":"a","cwd":root})
+            ),
+        )
+        .unwrap();
+        rename_in(&root, &file, "  My\nsession  ").unwrap();
+        assert_eq!(list_in_dir(&root, &root).unwrap()[0].title, "My session");
+        assert!(fs::read_to_string(&file)
+            .unwrap()
+            .ends_with(&format!("\n{message}\n")));
+        rename_in(&root, &file, "   ").unwrap();
+        assert_eq!(list_in_dir(&root, &root).unwrap()[0].title, "first");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rename_and_delete_refuse_files_outside_the_sessions_directory() {
+        let root = temp("owned");
+        let sessions = root.join("sessions");
+        fs::create_dir(&sessions).unwrap();
+        let outside = root.join("a.jsonl");
+        let header = json!({"type":"session","format":"hibiscus","version":1,"id":"a","cwd":root});
+        fs::write(&outside, format!("{header}\n")).unwrap();
+        let text = sessions.join("notes.txt");
+        fs::write(&text, "keep").unwrap();
+        let escape = sessions.join("..").join("a.jsonl");
+        for path in [&outside, &text, &escape] {
+            assert!(rename_in(&sessions, path, "x").is_err());
+            assert!(delete_in(&sessions, path).is_err());
+        }
+        assert!(outside.exists() && text.exists());
+        let inside = sessions.join("b.jsonl");
+        fs::write(&inside, format!("{header}\n")).unwrap();
+        delete_in(&sessions, &inside).unwrap();
+        assert!(!inside.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn cache_reuses_unchanged_files_and_invalidates_rename_replace_delete_and_scope() {

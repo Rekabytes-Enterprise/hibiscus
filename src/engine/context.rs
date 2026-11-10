@@ -174,6 +174,7 @@ mod tests {
             steps: vec![],
             usage: json!({}),
             context: None,
+            name: None,
         };
         assert!(!pressure(p, m, &session, "system", None).unwrap());
         assert!(pressure(p, m, &session, &"x".repeat(8 * 1024 * 1024), None).unwrap());
