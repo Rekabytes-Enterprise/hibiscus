@@ -349,7 +349,7 @@ class DesktopReleasePolicy(unittest.TestCase):
             self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', block)
             self.assertIn('toolchain: 1.99.1', block)
             self.assertIn('npm ci', block)
-        self.assertIn('--bundles dmg', job(self.source, 'macos_arm64'))
+        self.assertIn('--bundles app,dmg', job(self.source, 'macos_arm64'))
         self.assertIn('--bundles appimage', job(self.source, 'linux_x64'))
         self.assertNotIn('cargo ', job(self.source, 'publish'))
 
