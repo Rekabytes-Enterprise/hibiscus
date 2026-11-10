@@ -285,7 +285,10 @@
   /** Names a session; the open one through the engine, so its next save keeps the name. */
   async function rename(path: string, session: string, name: string) {
     try {
-      if (path === folder && session === sessionFile) await request({ type: "set_session_name", name });
+      // Ask the engine which session it has open: writing that one's file
+      // directly would be undone by the engine's next save of it.
+      const open = await request({ type: "get_state" }).then((s) => s.sessionFile, () => null);
+      if (open === session) await request({ type: "set_session_name", name });
       else await renameSession(session, name);
     } catch (e) {
       notice(message(e));
