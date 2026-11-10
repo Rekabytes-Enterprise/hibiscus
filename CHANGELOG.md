@@ -4,6 +4,10 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Desktop app: clicking a session that hasn't been opened yet highlights it and changes the title at once. If its conversation takes longer than 150 ms to load, grey placeholders fill the chat and the details panel, and the message box is disabled until the session is ready.
+
 ## [0.3.34] - 2026-11-10
 
 ### Added

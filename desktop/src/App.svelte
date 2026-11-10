@@ -43,6 +43,10 @@
   let page = $state<"chat" | "settings">("chat");
   let error = $state<string | null>(null);
   let opening = $state(false);
+  // A session still loading: its row and title change on the click (#171).
+  let pending = $state<string | null>(null);
+  // Set once that load is slow enough to show placeholders.
+  let loading = $state(false);
   // Conversations opened this run, so going back to one shows it at once.
   const chats = new ChatCache();
 
@@ -52,7 +56,7 @@
   // The session panel only has something to say once the session has started.
   const active = $derived(page === "chat" && !!folder && (chat.items.length > 0 || chat.running));
   const title = $derived(
-    (folder && saved[folder]?.find((s) => s.path === sessionFile)?.title) || "New session",
+    (folder && saved[folder]?.find((s) => s.path === (pending ?? sessionFile))?.title) || "New session",
   );
 
   // Like a new chat: start in the last folder, or home the first time.
@@ -170,10 +174,20 @@
     remember();
     // A session opened before shows at once; the engine's copy replaces it below if the file changed.
     const cached = session ? chats.get(session) : undefined;
+    let slow: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      clearTimeout(slow);
+      pending = null;
+      loading = false;
+    };
     if (cached) {
       sessionFile = session!;
       chat = cached;
       painted(t, "cached conversation painted");
+    } else if (session) {
+      pending = session;
+      // Fast loads skip the placeholders, so the page doesn't flicker.
+      slow = setTimeout(() => (loading = true), 150);
     }
     try {
       if (inPlace) {
@@ -190,6 +204,7 @@
       // Set together, so the chat view is rebuilt once, with the new conversation.
       if (session) sessionFile = session;
       chat = cached ? newer(cached, fresh) : fresh;
+      settle();
       t("conversation loaded");
       painted(t, "conversation painted");
       opening = false;
@@ -201,6 +216,7 @@
       error = message(e);
       ({ chat, sessionFile } = before);
     } finally {
+      settle();
       opening = false;
     }
   }
@@ -285,7 +301,7 @@
   <Sidebar
     {home}
     groups={recent.map((path) => ({ folder: path, sessions: saved[path] ?? [] }))}
-    current={sessionFile}
+    current={pending ?? sessionFile}
     {busy}
     onnew={newSession}
     onresume={(path, session) => { page = "chat"; void open(path, session); }}
@@ -309,7 +325,14 @@
   {:else}
     <div class="center">
     {#if error}<div class="banner error">{error}</div>{/if}
-    {#if !chat.items.length && !chat.running}
+    {#if loading}
+      <div class="chat" aria-busy="true" aria-label="Loading session">
+        {#each [40, 26, 34] as width}
+          <div class="user bone" style:width="{width}%"></div>
+          <div class="bones">{#each [96, 100, 62] as w}<div class="bone line" style:width="{w}%"></div>{/each}</div>
+        {/each}
+      </div>
+    {:else if !chat.items.length && !chat.running}
       <NewSession {folder} {recent} {busy} onopen={(p) => open(p)} onchoose={choose} onremove={removeFolder} onproviders={hasAccess ? undefined : () => (page = "settings")} />
     {:else}
       {#if !hasAccess}
@@ -319,7 +342,7 @@
     {/if}
     {#if folder}
       <div class="dock">
-        <Composer running={chat.running} {chat} onsend={send} onabort={() => post({ type: "abort" }).catch(() => {})} />
+        <Composer running={chat.running} disabled={opening} {chat} onsend={send} onabort={() => post({ type: "abort" }).catch(() => {})} />
         <div class="status">
           <Menu
             label="Working folder"
@@ -353,7 +376,11 @@
     {/if}
     </div>
   {/if}
-  {#if active && panelOpen && side === "diff"}
+  {#if loading && panelOpen}
+    <aside class="right" aria-busy="true" aria-label="Loading session details">
+      {#each [70, 45, 85, 55, 65] as width}<div class="bone line" style:width="{width}%"></div>{/each}
+    </aside>
+  {:else if active && panelOpen && side === "diff"}
     <DiffPane
       base={changes?.base ?? null}
       bases={changes?.bases ?? []}
