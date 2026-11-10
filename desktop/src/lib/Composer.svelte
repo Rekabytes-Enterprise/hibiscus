@@ -8,8 +8,11 @@
     chat,
     onsend,
     onabort,
+    disabled = false,
   }: {
     running: boolean;
+    /** While a session loads, so nothing is sent to the wrong one. */
+    disabled?: boolean;
     chat: Chat;
     onsend: (text: string, images: Image[], steer: boolean) => void;
     onabort: () => void;
@@ -22,6 +25,7 @@
 
   function submit() {
     const message = text.trim();
+    if (disabled) return;
     if (!message && !images.length) return;
     onsend(message, images, steer);
     text = "";
@@ -82,17 +86,18 @@
     </div>
   {/if}
   <div class="inputrow">
-    <button class="plain attach" onclick={() => picker.click()} title="Attach images" aria-label="Attach images"><Icon name="paperclip" size={16} /></button>
+    <button class="plain attach" onclick={() => picker.click()} {disabled} title="Attach images" aria-label="Attach images"><Icon name="paperclip" size={16} /></button>
     <input bind:this={picker} type="file" accept="image/*" multiple hidden onchange={(e) => { void attach(Array.from(e.currentTarget.files ?? [])); e.currentTarget.value = ""; }} />
     <textarea
       bind:value={text}
       {onkeydown}
       {onpaste}
       rows="1"
+      {disabled}
       placeholder={running ? "Queue a message for when this step finishes…" : "Describe a task or ask a question"}
     ></textarea>
     {#if running}<button class="send" onclick={onabort} title="Stop (Esc)" aria-label="Stop"><Icon name="square" size={14} /></button>{/if}
-    <button class="primary send" onclick={submit} disabled={!text.trim() && !images.length} title={running ? "Queue" : "Send (Enter)"} aria-label={running ? "Queue" : "Send"}><Icon name="arrow-up" /></button>
+    <button class="primary send" onclick={submit} disabled={disabled || (!text.trim() && !images.length)} title={running ? "Queue" : "Send (Enter)"} aria-label={running ? "Queue" : "Send"}><Icon name="arrow-up" /></button>
   </div>
   {#if running}
     <label class="small muted"><input type="checkbox" bind:checked={steer} /> Steer the current run instead of waiting for it</label>
