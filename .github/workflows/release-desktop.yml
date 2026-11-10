@@ -3,8 +3,9 @@ name: Desktop release
 # Builds the desktop app (macOS .dmg, Linux .AppImage) for the same release tags
 # as release.yml, and adds the files to the draft release that release.yml
 # creates. Kept separate so the CLI release contract stays untouched.
-# The builds are also signed with the Tauri updater key, and latest.json tells
-# installed apps where the new version is, so they can update themselves.
+# sign_updates signs the update files with the Tauri updater key and writes
+# latest.json, which installed apps read to update themselves. It is the only
+# job that sees a secret, and it runs no repository code.
 on:
   push:
     tags:
@@ -77,13 +78,9 @@ jobs:
           toolchain: 1.99.1
       - name: Build the app
         working-directory: desktop
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so the update files can't be signed. See docs/desktop/release.md."; exit 1; }
           npm ci
-          npm run tauri -- build --ci --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          npm run tauri -- build --ci --bundles dmg
       - name: Name the files and record their digests
         id: receipt
         shell: bash
@@ -92,12 +89,12 @@ jobs:
           bundle=desktop/src-tauri/target/release/bundle
           built=("$bundle"/dmg/*.dmg)
           test "${#built[@]}" -eq 1
-          update=("$bundle"/macos/*.app.tar.gz)
-          test "${#update[@]}" -eq 1 && test -f "${update[0]}.sig"
+          # The updater replaces the app with the .app inside this archive.
+          apps=("$bundle"/macos/*.app)
+          test "${#apps[@]}" -eq 1
           mkdir -p dist
           cp "${built[0]}" dist/hibiscus-desktop-aarch64-apple-darwin.dmg
-          cp "${update[0]}" dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz
-          cp "${update[0]}.sig" dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz.sig
+          COPYFILE_DISABLE=1 tar -czf dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz -C "$bundle/macos" "$(basename "${apps[0]}")"
           (cd dist && shasum -a 256 hibiscus-desktop-* > receipt-macos)
           printf 'sha256=%s\n' "$(shasum -a 256 dist/receipt-macos | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -137,23 +134,18 @@ jobs:
           toolchain: 1.99.1
       - name: Build the app
         working-directory: desktop
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so the update files can't be signed. See docs/desktop/release.md."; exit 1; }
           npm ci
-          npm run tauri -- build --ci --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
-      - name: Name the files and record their digests
+          npm run tauri -- build --ci --bundles appimage
+      - name: Name the file and record its digest
         id: receipt
         shell: bash
         run: |
           shopt -s nullglob
           built=(desktop/src-tauri/target/release/bundle/appimage/*.AppImage)
-          test "${#built[@]}" -eq 1 && test -f "${built[0]}.sig"
+          test "${#built[@]}" -eq 1
           mkdir -p dist
           cp "${built[0]}" dist/hibiscus-desktop-x86_64.AppImage
-          cp "${built[0]}.sig" dist/hibiscus-desktop-x86_64.AppImage.sig
           (cd dist && sha256sum hibiscus-desktop-* > receipt-linux)
           printf 'sha256=%s\n' "$(sha256sum dist/receipt-linux | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -163,15 +155,15 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-  provenance:
+  sign_updates:
     if: github.event_name == 'push'
     needs: [verify, macos_arm64, linux_x64]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+    outputs:
+      sha256: ${{ steps.receipt.outputs.sha256 }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -186,18 +178,34 @@ jobs:
         run: |
           shopt -s nullglob dotglob
           files=(dist/*)
-          # 5 built files plus each build's receipt.
-          test "${#files[@]}" -eq 7
+          # 3 built files and the 2 build receipts.
+          test "${#files[@]}" -eq 5
           [[ "$MACOS_ARM64_SHA" =~ ^[0-9a-f]{64}$ && "$LINUX_X64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
           for file in "${files[@]}"; do
             test -f "$file" && test ! -L "$file" || exit 1
           done
-          # Each receipt is the one its build recorded, and lists that build's files.
+          # Each receipt is the one its build recorded, and lists exactly that build's files.
           printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/receipt-macos "$LINUX_X64_SHA" dist/receipt-linux | sha256sum -c
-          test "$(wc -l < dist/receipt-macos)" -eq 3 && test "$(wc -l < dist/receipt-linux)" -eq 2
+          test "$(wc -l < dist/receipt-macos)" -eq 2 && test "$(wc -l < dist/receipt-linux)" -eq 1
           (cd dist && sha256sum -c receipt-macos && sha256sum -c receipt-linux)
-          rm dist/receipt-macos dist/receipt-linux
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Sign the update files
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so the update files can't be signed. See docs/desktop/release.md."; exit 1; }
+          # Only the pinned Tauri CLI runs with the key: no checkout, no repository code, no install scripts.
+          npm install --prefix "$RUNNER_TEMP/tauri" --no-save --ignore-scripts @tauri-apps/cli@2.12.4
+          for file in dist/hibiscus-desktop-aarch64-apple-darwin.app.tar.gz dist/hibiscus-desktop-x86_64.AppImage; do
+            "$RUNNER_TEMP/tauri/node_modules/.bin/tauri" signer sign "$file"
+            test -s "$file.sig"
+          done
       - name: Write the update manifest
+        id: receipt
         shell: bash
         env:
           GH_REPO: ${{ github.repository }}
@@ -215,6 +223,56 @@ jobs:
             '{version: $version, notes: $notes, pub_date: $date, platforms: {
               "darwin-aarch64": {signature: $mac_sig, url: $mac_url},
               "linux-x86_64": {signature: $linux_sig, url: $linux_url}}}' > dist/latest.json
+          mkdir updates
+          mv dist/*.sig dist/latest.json updates/
+          (cd updates && sha256sum hibiscus-desktop-*.sig latest.json > receipt-updates)
+          printf 'sha256=%s\n' "$(sha256sum updates/receipt-updates | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-updates
+          path: updates/*
+          if-no-files-found: error
+          retention-days: 5
+
+  provenance:
+    if: github.event_name == 'push'
+    needs: [verify, macos_arm64, linux_x64, sign_updates]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+      - name: Verify build receipts
+        shell: bash
+        env:
+          MACOS_ARM64_SHA: ${{ needs.macos_arm64.outputs.sha256 }}
+          LINUX_X64_SHA: ${{ needs.linux_x64.outputs.sha256 }}
+          UPDATES_SHA: ${{ needs.sign_updates.outputs.sha256 }}
+        run: |
+          shopt -s nullglob dotglob
+          files=(dist/*)
+          # 6 release files and the 3 receipts.
+          test "${#files[@]}" -eq 9
+          [[ "$UPDATES_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          [[ "$MACOS_ARM64_SHA" =~ ^[0-9a-f]{64}$ && "$LINUX_X64_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          for file in "${files[@]}"; do
+            test -f "$file" && test ! -L "$file" || exit 1
+          done
+          # Each receipt is the one its build recorded, and lists exactly that build's files.
+          printf '%s  %s\n' "$MACOS_ARM64_SHA" dist/receipt-macos "$LINUX_X64_SHA" dist/receipt-linux | sha256sum -c
+          test "$(wc -l < dist/receipt-macos)" -eq 2 && test "$(wc -l < dist/receipt-linux)" -eq 1
+          (cd dist && sha256sum -c receipt-macos && sha256sum -c receipt-linux)
+          printf '%s  %s\n' "$UPDATES_SHA" dist/receipt-updates | sha256sum -c
+          test "$(wc -l < dist/receipt-updates)" -eq 3
+          (cd dist && sha256sum -c receipt-updates)
+          rm dist/receipt-*
       - name: Sign desktop files
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2

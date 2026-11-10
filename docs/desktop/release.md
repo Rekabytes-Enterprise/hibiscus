@@ -21,11 +21,12 @@ The app's version comes from the root `package.json` (`"version": "../../package
 ## How a release runs
 
 1. **verify** takes the commit that triggered the run and accepts it only if it is on `main`. A manual build-only run may also use `dev`.
-2. **macos_arm64** and **linux_x64** check out that same triggering commit, without credentials, confirm it is the authorized one, run `npm ci`, and build with Tauri. The build signs the update files with the updater key and fails at once if the key secret is missing. Each job writes a receipt listing the SHA-256 of its files, and records the receipt's own digest.
-3. **provenance** checks the receipts against those digests and every file against its receipt, writes `latest.json`, signs the files with `actions/attest`, and writes `SHA256SUMS-desktop`.
-4. **publish** waits up to 30 minutes for `release.yml` to create the draft release, then uploads the eight files into it. It never creates a release and refuses one that is already published.
+2. **macos_arm64** and **linux_x64** check out that same triggering commit, without credentials, confirm it is the authorized one, run `npm ci`, and build with Tauri. macOS also packs the `.app` into the `.app.tar.gz` the updater installs. Each job writes a receipt listing the SHA-256 of its files, and records the receipt's own digest.
+3. **sign_updates** checks the build receipts, then signs the `.app.tar.gz` and the AppImage with the updater key and writes `latest.json`. It is the only job that sees a secret. It has no checkout and runs no repository code: only the pinned Tauri CLI, installed without install scripts. It fails at once if the key secret is missing. It records a receipt for the files it adds.
+4. **provenance** checks all three receipts against their digests and every file against its receipt, signs the files with `actions/attest`, and writes `SHA256SUMS-desktop`.
+5. **publish** waits up to 30 minutes for `release.yml` to create the draft release, then uploads the eight files into it. It never creates a release and refuses one that is already published.
 
-Only `publish` can write to the repository, and only `provenance` can sign.
+Only `publish` can write to the repository, only `provenance` can sign provenance, and only `sign_updates` holds the updater key.
 
 To try the build without releasing, run the workflow by hand on `main` or `dev`. The two files are kept as run artifacts for 5 days and nothing is published. To rebuild a release, re-run the failed jobs of that tag's run; the workflow only ever builds the commit that triggered it.
 
@@ -47,7 +48,7 @@ The update files are signed with a Tauri updater key, separate from the provenan
 3. Put the contents of `~/.tauri/hibiscus.key.pub` in `plugins.updater.pubkey` in `desktop/src-tauri/tauri.conf.json`. The public key is safe to commit.
 4. Back up the private key and its password. If they are lost, installed apps can never update again, and users have to reinstall by hand.
 
-Local builds don't sign update files. Only the release workflow turns on `createUpdaterArtifacts`, with `--config`.
+Builds never see the key, so local builds and the release build jobs work the same way. Only `sign_updates` signs.
 
 ## Opening the unsigned files
 
