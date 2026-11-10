@@ -23,9 +23,13 @@ grep -Fq "version = \"$old\"" Cargo.lock &&
     echo 'Version references are out of sync; inspect Cargo.lock, package.json, docs/installation.md and tests/install.sh' >&2
     exit 1
 }
+grep -Fq "## [$next]" CHANGELOG.md && {
+    echo "CHANGELOG.md already has a section for $next" >&2
+    exit 1
+}
 
 backup=$(mktemp -d "${TMPDIR:-/tmp}/hibiscus-version.XXXXXXXX")
-files='Cargo.toml Cargo.lock package.json docs/installation.md tests/install.sh'
+files='CHANGELOG.md Cargo.toml Cargo.lock package.json docs/installation.md tests/install.sh'
 for file in $files; do
     mkdir -p "$backup/$(dirname "$file")"
     cp -p "$file" "$backup/$file"
@@ -39,6 +43,22 @@ cleanup() {
     exit "$result"
 }
 trap cleanup EXIT
+
+# The Unreleased entries become this version's notes; Unreleased starts empty.
+status=0
+awk -v version="$next" -v date="$(date +%Y-%m-%d)" '
+    /^## \[Unreleased\]$/ && !seen { print; print ""; print "## [" version "] - " date; seen = 1; inside = 1; next }
+    inside && /^## / { inside = 0 }
+    inside && NF { entries = 1 }
+    { print }
+    END { if (!seen) exit 3; if (!entries) exit 4 }
+' CHANGELOG.md > "$backup/changelog.tmp" || status=$?
+case $status in
+0) cp "$backup/changelog.tmp" CHANGELOG.md ;;
+3) echo 'CHANGELOG.md has no "## [Unreleased]" heading' >&2; exit 1 ;;
+4) echo 'CHANGELOG.md has nothing under "## [Unreleased]"; add the release notes first' >&2; exit 1 ;;
+*) exit "$status" ;;
+esac
 
 # Cargo.toml has one package version; Cargo updates only the workspace entry
 # in Cargo.lock, leaving third-party dependency versions pinned.
@@ -55,7 +75,7 @@ cp "$backup/docs.tmp" docs/installation.md
 sed "s/\(run_case Darwin arm64 aarch64-apple-darwin \)${old_pattern}/\1${next}/" tests/install.sh > "$backup/installer.tmp"
 cp "$backup/installer.tmp" tests/install.sh
 
-printf 'Bumped Hibiscus %s -> %s in Cargo.toml, Cargo.lock, package.json, docs and installer fixture.\n' "$old" "$next"
+printf 'Bumped Hibiscus %s -> %s in CHANGELOG.md, Cargo.toml, Cargo.lock, package.json, docs and installer fixture.\n' "$old" "$next"
 if command -v git >/dev/null 2>&1 &&
    git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
    git -C "$root" show-ref --verify --quiet "refs/tags/v$next"; then

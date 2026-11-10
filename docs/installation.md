@@ -86,7 +86,7 @@ The npm package is published separately from GitHub release assets; check the pa
 
 ## Publishing a release
 
-Publication needs a separate explicit owner request. Version references in Cargo.toml, Cargo.lock, package.json, this guide and the installer fixture must agree. Prepare a bump with `sh scripts/bump-version.sh 0.3.33`, substituting the intended next version, then review and verify locally. A Git tag, GitHub Release and npm publication are separate events.
+Publication needs a separate explicit owner request. Version references in Cargo.toml, Cargo.lock, package.json, this guide and the installer fixture must agree. Prepare a bump with `sh scripts/bump-version.sh 0.3.33`, substituting the intended next version, then review and verify locally. The script also turns the `## [Unreleased]` entries in `CHANGELOG.md` into the new version's section, dated today, and refuses to run while that section is empty. The desktop app's About page shows this changelog, so write the release notes under Unreleased before bumping. A Git tag, GitHub Release and npm publication are separate events.
 
 When explicitly authorized, tag the exact approved release commit with an annotated tag such as `v0.3.33`. The release workflow verifies the tag/version, tests, builds platform archives, verifies signed provenance and uploads assets to a draft through the isolated publisher. Publish that draft only after independent verification. Rebuilds require an existing draft; already published releases are not overwritten. The npm package must be published separately at the matching version. Never force-move an existing tag to replace a release.
 

@@ -4,6 +4,10 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/bump-version.sh` moves the `## [Unreleased]` entries in `CHANGELOG.md` under the new version with today's date, and refuses to bump while Unreleased is empty.
+
 ## [0.3.33] - 2026-11-10
 
 ### Changed
