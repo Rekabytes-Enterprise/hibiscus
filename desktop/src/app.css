@@ -12,6 +12,9 @@
   --hover: rgb(0 0 0 / 0.06);
   --selected: rgb(0 0 0 / 0.1);
   --sidebar: #f3f2ef;
+  --raspberry: #d1105a;
+  --raspberry-soft: #d1105a1a;
+  --hero-gradient: linear-gradient(150deg, #d1105a24 0%, #d1105a12 40%, #d1105a00 80%);
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -32,6 +35,9 @@
     --hover: rgb(255 255 255 / 0.07);
     --selected: rgb(255 255 255 / 0.12);
     --sidebar: #22211f;
+    --raspberry: #ff4f8f;
+    --raspberry-soft: #ff4f8f21;
+    --hero-gradient: linear-gradient(150deg, #ff4f8f33 0%, #ff4f8f17 40%, #ff4f8f00 80%);
   }
 }
 * { box-sizing: border-box; }
@@ -140,8 +146,57 @@ aside.left footer { display: flex; align-items: center; gap: 8px; padding: 8px 6
 .settings nav { width: 200px; flex: none; padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); }
 .settings nav .heading { padding: 14px 10px 4px; }
 .settings .nav.active { background: var(--hover); }
-.settings section { flex: 1; overflow-y: auto; padding: 24px 32px; max-width: 760px; }
+/* Like the chat: the scroll area spans the window, the content stays centred. */
+.settings section { flex: 1; min-width: 0; overflow-y: auto; padding: 24px max(24px, (100% - 960px) / 2) 40px; }
 .settings h2 { margin: 0 0 4px; font-size: 18px; }
+.settings h3 { margin: 28px 0 10px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Settings → About: a bento grid, the latest release as the raspberry hero. */
+.about h2 { margin-bottom: 16px; }
+.bento { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
+.tile { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.tile .eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.tile .big { font-size: 26px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; }
+.tile .big .unit { font-size: 14px; font-weight: 500; color: var(--muted); }
+/* The gradient fades to the same hex at alpha 00, not `transparent`, so it stays pink instead of turning grey midway. */
+.hero { grid-row: span 2; padding: 22px 24px; background: var(--hero-gradient), var(--panel); }
+.hero .eyebrow { color: var(--raspberry); }
+.hero .headline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.hero .ver { font-size: 34px; font-weight: 750; letter-spacing: -0.02em; color: var(--raspberry); line-height: 1; }
+.hero .when, .release .when { color: var(--muted); }
+.notes { display: flex; flex-direction: column; gap: 6px; }
+.notes + .notes { margin-top: 6px; }
+.notes ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
+.notes li { list-style: disc; font-size: 13px; line-height: 1.55; }
+.notes li::marker { color: var(--muted); }
+.notes li.md > p { margin: 0; }
+.hero .notes li::marker { color: var(--raspberry); }
+.tag { align-self: flex-start; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--hover); color: var(--muted); }
+.tag.added { background: rgb(46 125 50 / 0.14); color: var(--ok); }
+.tag.changed { background: var(--raspberry-soft); color: var(--raspberry); }
+.tag.fixed { background: rgb(66 133 244 / 0.15); color: #4a8df8; }
+.tag.security, .tag.removed { background: rgb(179 38 30 / 0.14); color: var(--error); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--raspberry-soft); color: var(--raspberry); }
+.pill.ok { background: rgb(46 125 50 / 0.14); color: var(--ok); }
+.linkbtn { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: none; background: none; padding: 0; color: var(--accent); font-size: 13px; }
+.linkbtn:hover { text-decoration: underline; }
+.releases { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; align-items: start; }
+.release { padding: 0; gap: 0; }
+.release[open] { grid-column: 1 / -1; }
+.release summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; border-radius: 14px; }
+.release .meta { display: flex; flex-direction: column; min-width: 0; }
+.release .meta .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.release summary::-webkit-details-marker { display: none; }
+.release summary:hover { background: var(--hover); }
+.release .ver { font-weight: 650; }
+.release .chevron { display: inline-grid; color: var(--muted); transition: transform 0.15s; }
+.release[open] .chevron { transform: rotate(180deg); }
+.release .body { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 6px; }
+/* Two columns while the hero has room, one below that. */
+@container about (max-width: 640px) { .bento { grid-template-columns: minmax(0, 1fr); } .hero { grid-row: auto; } }
+.about { container: about / inline-size; }
+@media (max-width: 900px) { .settings nav { width: 160px; } }
 .settings-list { margin-top: 16px; border: 1px solid var(--line); border-radius: 10px; }
 .settings-list li { padding: 10px 14px; }
 .settings-list li + li { border-top: 1px solid var(--line); }
