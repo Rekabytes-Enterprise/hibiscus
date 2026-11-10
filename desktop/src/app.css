@@ -94,6 +94,8 @@ aside.left { width: 260px; flex: none; background: var(--sidebar); border-right:
 
 .titlebar { height: 46px; display: flex; align-items: center; padding: 0 20px; border-bottom: 1px solid var(--line); font-weight: 500; user-select: none; -webkit-user-select: none; cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
 .banner { background: var(--user); padding: 6px 20px; font-size: 13px; }
+.banner.update { display: flex; align-items: center; gap: 12px; }
+.banner.update button.primary { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; }
 
 .start { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; }
 .brandmark { color: var(--accent); font-weight: 600; font-size: 18px; }

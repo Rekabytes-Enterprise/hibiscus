@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The app's own commands, the folder picker and opening key pages in the browser. No shell, fs or http access from the frontend.",
+  "description": "The app's own commands, the folder picker, opening key pages in the browser, and installing signed updates. No shell, fs or http access from the frontend.",
   "windows": [
     "main"
   ],
@@ -10,6 +10,8 @@
     "core:window:allow-start-dragging",
     "dialog:allow-open",
     "dialog:allow-ask",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

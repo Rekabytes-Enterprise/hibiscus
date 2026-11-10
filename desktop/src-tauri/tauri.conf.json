@@ -53,5 +53,13 @@
         "depends": []
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_UPDATER_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/Rekabytes-Enterprise/hibiscus/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
