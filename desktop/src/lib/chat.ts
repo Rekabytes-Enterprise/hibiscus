@@ -327,6 +327,10 @@ export class ChatCache {
     this.#chats.set(path, chat);
     if (this.#chats.size > this.limit) this.#chats.delete(this.#chats.keys().next().value!);
   }
+
+  drop(path: string) {
+    this.#chats.delete(path);
+  }
 }
 
 // What the session file holds: notices and tool timings only exist while the app watches a run.

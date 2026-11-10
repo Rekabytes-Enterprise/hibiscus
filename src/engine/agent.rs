@@ -62,6 +62,9 @@ enum Command {
         #[serde(rename = "sessionPath")]
         session_path: std::path::PathBuf,
     },
+    SetSessionName {
+        name: String,
+    },
     ClearQueue,
     Abort,
     Compact {
@@ -528,6 +531,18 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                             if let Err(error) = s.save() {
                                 s.thinking = previous;
                                 return Err(error);
+                            }
+                            Ok(json!({}))
+                        }
+                        Command::SetSessionName { name } if !busy => {
+                            let previous =
+                                std::mem::replace(&mut s.name, super::session::clean_name(&name));
+                            // A session without a file yet keeps the name for its first save.
+                            if s.path.exists() {
+                                if let Err(error) = s.save() {
+                                    s.name = previous;
+                                    return Err(error);
+                                }
                             }
                             Ok(json!({}))
                         }

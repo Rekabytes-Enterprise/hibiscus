@@ -1,9 +1,9 @@
 <script lang="ts">
   import { homeDir } from "@tauri-apps/api/path";
-  import { open as pickFolder } from "@tauri-apps/plugin-dialog";
+  import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { gitChanges, listSessions, onEvent, openFile, openProject, post, request, type Changes, type SavedSession } from "./lib/engine";
+  import { deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
@@ -226,6 +226,33 @@
     await refresh();
   }
 
+  /** Names a session; the open one through the engine, so its next save keeps the name. */
+  async function rename(path: string, session: string, name: string) {
+    try {
+      if (path === folder && session === sessionFile) await request({ type: "set_session_name", name });
+      else await renameSession(session, name);
+    } catch (e) {
+      notice(message(e));
+    }
+    await loadSessions(path);
+  }
+
+  async function remove(path: string, session: string) {
+    if (!(await ask("Delete this session? This can't be undone.", { title: "Delete session", kind: "warning", okLabel: "Delete" }))) return;
+    try {
+      // The open session is replaced first, so the engine never saves it again.
+      if (path === folder && session === sessionFile) {
+        await newSession();
+        if (sessionFile === session) return;
+      }
+      await deleteSession(session);
+      chats.drop(session);
+    } catch (e) {
+      notice(message(e));
+    }
+    await loadSessions(path);
+  }
+
   /** Keys are read when an engine starts, as the TUI reconnects after /login. */
   async function signedIn() {
     if (folder) await open(folder, sessionFile ?? undefined, true);
@@ -241,6 +268,8 @@
     {busy}
     onnew={newSession}
     onresume={(path, session) => { page = "chat"; void open(path, session); }}
+    onrename={rename}
+    ondelete={remove}
     onsettings={() => (page = "settings")}
   />
   <main>
