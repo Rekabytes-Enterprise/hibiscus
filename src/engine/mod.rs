@@ -26,6 +26,7 @@ pub(crate) fn native_tool_count() -> usize {
 }
 
 pub(crate) use tools::edit_diff;
+pub(crate) use tools::BROWSER_SESSION;
 
 /// Bounded, single-line terminal-safe detail. Drop URLs and common credential
 /// representations; never retain the raw provider error in recovery state.

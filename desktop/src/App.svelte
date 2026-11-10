@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { homeDir } from "@tauri-apps/api/path";
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
   import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
-  import { calls, POINTING } from "./lib/browser";
+  import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
@@ -36,14 +37,17 @@
   let levels = $state<string[]>([]);
   let stats = $state<any>(null);
   let changes = $state<Changes | null>(null);
-  // The right side shows session details, or the branch diff or browser in their place.
-  let side = $state<"details" | "diff" | "browser">("details");
-  // The agent-browser session Hibi used last, the element it acts on, and a
-  // counter bumped after each of its agent-browser calls.
-  let browserSession = $state<string | null>(null);
+  // The right side shows session details, or the branch diff in their place.
+  let side = $state<"details" | "diff">("details");
+  // The browser opens as its own pane at the far right, beside them.
+  let browserOpen = $state(false);
+  // The element the browser tool acts on, and a counter bumped after each
+  // browser call. The pane opens by itself once per run.
   let pointer = $state<{ target: string; seq: number } | null>(null);
   let poke = $state(0);
   const browserCalls = new Set<string>();
+  let browserShown = false;
+  let browserWide = $state(false);
   let wide = $state(false);
   let extensions = $state<{ name: string; description: string }[]>([]);
   let panelOpen = $state(true);
@@ -59,6 +63,8 @@
   const context = $derived(stats?.contextUsage?.percent ?? null);
   // The session panel only has something to say once the session has started.
   const active = $derived(page === "chat" && !!folder && (chat.items.length > 0 || chat.running));
+  // The browser is there before a session starts too, to open a page by hand.
+  const showBrowser = $derived(page === "chat" && !!folder && browserOpen);
   const title = $derived(
     (folder && saved[folder]?.find((s) => s.path === sessionFile)?.title) || "New session",
   );
@@ -75,24 +81,28 @@
     onEvent((event) => {
       chat = apply(chat, event);
       if (event.type === "agent_settled") void refresh();
-      if (event.type === "tool_execution_start" && event.toolName === "bash") browsing(event.toolCallId, event.args?.command);
+      if (event.type === "agent_start") browserShown = false;
+      if (event.type === "tool_execution_start" && event.toolName === "browser") browsing(event.toolCallId, event.args?.args);
       if (event.type === "tool_execution_end" && browserCalls.delete(event.toolCallId)) poke++;
     }),
   );
 
-  /** Opens the browser pane the first time Hibi uses agent-browser, and points at what it acts on. */
-  function browsing(id: string, command: unknown) {
-    const found = calls(String(command ?? ""));
-    if (!found.length) return;
+  /** Closing the pane closes the browser too, so it opens blank next time. */
+  function closeBrowser() {
+    browserOpen = false;
+    browserWide = false;
+    void invoke("browser", { args: ["close"] }).catch(() => {});
+  }
+
+  /** Shows the browser pane on the run's first browser call, and points at the element it acts on. */
+  function browsing(id: string, args: unknown) {
     browserCalls.add(id);
-    if (side !== "browser") {
-      side = "browser";
-      panelOpen = true;
+    if (!browserShown) {
+      browserShown = true;
+      browserOpen = true;
     }
-    for (const c of found) {
-      browserSession = c.session;
-      if (POINTING.has(c.verb) && c.target) pointer = { target: c.target, seq: (pointer?.seq ?? 0) + 1 };
-    }
+    const [verb, target] = Array.isArray(args) ? args.map(String) : [];
+    if (POINTING.has(verb) && target && !target.startsWith("-")) pointer = { target, seq: (pointer?.seq ?? 0) + 1 };
   }
 
   const message = (e: unknown) => String(e instanceof Error ? e.message : e);
@@ -323,8 +333,10 @@
   <main>
     <div class="titlebar" data-tauri-drag-region>
       <span class="grow ellipsis" data-tauri-drag-region>{page === "settings" ? "Settings" : title}</span>
+      {#if page === "chat" && folder}
+        <button class="iconbtn" class:on={showBrowser} onclick={() => (browserOpen ? closeBrowser() : (browserOpen = true))} title={showBrowser ? "Hide browser" : "Show browser"} aria-label="Browser" aria-pressed={showBrowser}><Icon name="globe" /></button>
+      {/if}
       {#if active}
-        <button class="iconbtn" class:on={panelOpen && side === "browser"} onclick={() => { side = side === "browser" ? "details" : "browser"; panelOpen = true; wide = false; }} title={side === "browser" ? "Hide browser" : "Show browser"} aria-label="Browser" aria-pressed={panelOpen && side === "browser"}><Icon name="globe" /></button>
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
     </div>
@@ -379,16 +391,7 @@
     {/if}
     </div>
   {/if}
-  {#if active && panelOpen && side === "browser"}
-    <BrowserPane
-      session={browserSession}
-      {pointer}
-      {poke}
-      {wide}
-      onwide={() => (wide = !wide)}
-      onclose={() => { side = "details"; wide = false; }}
-    />
-  {:else if active && panelOpen && side === "diff"}
+  {#if active && panelOpen && side === "diff"}
     <DiffPane
       base={changes?.base ?? null}
       bases={changes?.bases ?? []}
@@ -415,6 +418,15 @@
       onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
       onshowdiff={() => { side = "diff"; void refresh(); }}
       onabort={() => post({ type: "abort" }).catch(() => {})}
+    />
+  {/if}
+  {#if showBrowser}
+    <BrowserPane
+      {pointer}
+      {poke}
+      wide={browserWide}
+      onwide={() => (browserWide = !browserWide)}
+      onclose={closeBrowser}
     />
   {/if}
     </div>

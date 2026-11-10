@@ -435,24 +435,28 @@ fn inside(folder: &Path, path: &Path) -> Option<PathBuf> {
     (file.starts_with(&folder) && file.is_file()).then_some(file)
 }
 
+/// The agent-browser the app bundles next to its own binary (`externalBin`).
+fn agent_browser() -> Option<PathBuf> {
+    let path = std::env::current_exe().ok()?.parent()?.join("agent-browser");
+    path.is_file().then_some(path)
+}
+
 /// Runs one agent-browser command for the browser pane and returns its `data`.
 /// Only the few commands the pane needs are allowed, never ones that change
 /// the page's content or read its storage.
 #[tauri::command]
-async fn browser(session: Option<String>, args: Vec<String>) -> Result<Value, String> {
-    let argv = browser_args(session.as_deref(), &args)?;
+async fn browser(args: Vec<String>) -> Result<Value, String> {
+    let argv = browser_args(&args)?;
+    let bin = agent_browser().ok_or("The bundled agent-browser is missing")?;
     let output = tauri::async_runtime::spawn_blocking(move || {
-        std::process::Command::new("agent-browser")
+        std::process::Command::new(bin)
             .args(&argv)
             .stdin(std::process::Stdio::null())
             .output()
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => "agent-browser is not installed".to_string(),
-        _ => e.to_string(),
-    })?;
+    .map_err(|e| e.to_string())?;
     let reply: Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| String::from_utf8_lossy(&output.stderr).trim().to_string())?;
     if reply["success"].as_bool() == Some(true) {
@@ -462,24 +466,77 @@ async fn browser(session: Option<String>, args: Vec<String>) -> Result<Value, St
     }
 }
 
-fn browser_args(session: Option<&str>, args: &[String]) -> Result<Vec<String>, String> {
+/// Ports common dev servers listen on: Vite, Next/CRA/Rails, Angular, Astro,
+/// Storybook, and generic ones.
+const DEV_PORTS: &[u16] = &[
+    5173, 5174, 3000, 3001, 4200, 4321, 8080, 8000, 8888, 5000, 4000, 6006, 3333, 9000,
+];
+
+/// Local ports from `DEV_PORTS` that accept a connection, in that order.
+#[tauri::command]
+async fn dev_servers() -> Vec<u16> {
+    tauri::async_runtime::spawn_blocking(|| {
+        std::thread::scope(|scope| {
+            let probes: Vec<_> = DEV_PORTS
+                .iter()
+                .map(|&port| {
+                    scope.spawn(move || {
+                        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                        std::net::TcpStream::connect_timeout(&address, Duration::from_millis(250))
+                            .is_ok()
+                            .then_some(port)
+                    })
+                })
+                .collect();
+            probes.into_iter().filter_map(|p| p.join().ok().flatten()).collect()
+        })
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Closes the app's browser, so it doesn't outlive the window. Waits at most
+/// a few seconds, so a stuck browser never holds up quitting.
+fn close_browser() {
+    let Some(bin) = agent_browser() else {
+        return;
+    };
+    let Ok(mut child) = std::process::Command::new(bin)
+        .args(["--session", desktop::BROWSER_SESSION, "close"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while child.try_wait().ok().flatten().is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.wait();
+}
+
+fn browser_args(args: &[String]) -> Result<Vec<String>, String> {
     let ok = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        ["stream", "status"] | ["back"] | ["forward"] | ["reload"] => true,
+        ["stream", "status"] | ["back"] | ["forward"] | ["reload"] | ["close"] => true,
         // A leading dash would be read as a flag.
         ["get", "box", target] => !target.starts_with('-'),
         ["open", url] => url.starts_with("http://") || url.starts_with("https://"),
+        // The pane sizes the page to fit itself.
+        ["set", "viewport", w, h] => [w, h]
+            .iter()
+            .all(|n| n.parse::<u32>().is_ok_and(|n| (200..=4000).contains(&n))),
         _ => false,
     };
     if !ok {
         return Err(format!("Not allowed: agent-browser {}", args.join(" ")));
     }
-    let mut argv = Vec::new();
-    if let Some(name) = session {
-        if !name.starts_with(char::is_alphanumeric) || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-            return Err(format!("Invalid browser session name: {name}"));
-        }
-        argv.extend(["--session".to_string(), name.to_string()]);
-    }
+    let mut argv = vec!["--session".to_string(), desktop::BROWSER_SESSION.to_string()];
     argv.extend(args.iter().cloned());
     argv.push("--json".into());
     Ok(argv)
@@ -537,6 +594,10 @@ fn main() {
     if std::env::var_os("HIBISCUS_DESKTOP_KEEP_ENV").is_none() {
         import_login_environment();
     }
+    // Gives the engine its browser tool.
+    if let Some(path) = agent_browser() {
+        std::env::set_var("HIBISCUS_AGENT_BROWSER", path);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -562,7 +623,8 @@ fn main() {
             codex_cancel,
             git_changes,
             open_file,
-            browser
+            browser,
+            dev_servers
         ])
         .build(tauri::generate_context!())
         .expect("failed to start Hibiscus")
@@ -570,6 +632,7 @@ fn main() {
             if let tauri::RunEvent::Exit = event {
                 // Quit like the TUI: stop the run and wait for tools to stop.
                 app.state::<App>().stop();
+                close_browser();
             }
         });
 }
@@ -717,12 +780,8 @@ mod tests {
     fn browser_pane_runs_only_its_own_commands() {
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            browser_args(Some("dev-1"), &args(&["get", "box", "@e3"])).unwrap(),
-            args(&["--session", "dev-1", "get", "box", "@e3", "--json"])
-        );
-        assert_eq!(
-            browser_args(None, &args(&["open", "http://localhost:5173"])).unwrap(),
-            args(&["open", "http://localhost:5173", "--json"])
+            browser_args(&args(&["get", "box", "@e3"])).unwrap(),
+            args(&["--session", "hibiscus", "get", "box", "@e3", "--json"])
         );
         for bad in [
             &["eval", "1"][..],
@@ -731,10 +790,10 @@ mod tests {
             &["get", "box", "--json"],
             &["cookies"],
             &["stream", "enable"],
+            &["set", "viewport", "100", "800"],
+            &["set", "viewport", "-1", "800"],
         ] {
-            assert!(browser_args(None, &args(bad)).is_err(), "{bad:?}");
+            assert!(browser_args(&args(bad)).is_err(), "{bad:?}");
         }
-        assert!(browser_args(Some("a b"), &args(&["back"])).is_err());
-        assert!(browser_args(Some("--x"), &args(&["back"])).is_err());
     }
 }

@@ -17,7 +17,7 @@ Each phase ships on its own and leaves `main` releasable.
 
 ## Fixed decisions
 
-- **Framework:** Tauri v2. The engine runs inside the app process, the same way the TUI runs it today. No sidecar binary, no local server, no open port.
+- **Framework:** Tauri v2. The engine runs inside the app process, the same way the TUI runs it today, with no local server or open port of its own. The one bundled side program is agent-browser, for the browser tool (see [Browser](#browser)).
 - **Platforms:** `aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`. Intel Mac and Linux ARM are not in the first release.
 - **Signing:** no Apple Developer or Windows accounts for now. macOS builds get a free ad-hoc signature. Desktop files get their own `SHA256SUMS-desktop` and sigstore provenance in the same release ([Desktop release](release.md)). The updater uses its own Tauri signing key. See [Unsigned distribution](#unsigned-distribution).
 - **Products:** this is Hibiscus work only. It does not change the Rooxcode Gateway's code, behaviour or tests; the gateway stays one provider inside the engine.
@@ -29,7 +29,7 @@ Needs Node 20+, Rust and, on Linux, the [Tauri system packages](https://v2.tauri
 ```bash
 cd desktop
 npm install
-npm run tauri dev      # opens the app; reloads on frontend changes
+npm run tauri dev      # fetches agent-browser, opens the app; reloads on frontend changes
 npm test               # frontend unit tests
 npm run check          # Svelte/TypeScript checks
 npm run tauri build    # .app/.dmg on macOS, .AppImage/.deb on Linux, under src-tauri/target/release/bundle/
@@ -55,3 +55,13 @@ The app uses the same `~/.hibiscus` (or `HIBISCUS_HOME`) config, keys and sessio
 | macOS, `.dmg` from a browser | "Apple cannot check it for malicious software" | Try to open once, then System Settings → Privacy & Security → **Open Anyway** |
 
 Not possible without an Apple account: Homebrew casks, the Mac App Store, and a warning-free first launch from a browser download. Adding signing later only changes the release workflow, not the app.
+
+## Browser
+
+The engine's `browser` tool lets Hibi open and test web pages, and the browser pane shows them live. Both use [agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0), which the app bundles as a Tauri `externalBin`. Users install nothing.
+
+- `desktop/scripts/agent-browser.sh` fetches the pinned version for the build target and checks its SHA-256. `npm run tauri` runs it first, so `tauri dev` and release builds both bundle the same binary. To update agent-browser, change the version and both checksums in that script.
+- At startup the app sets `HIBISCUS_AGENT_BROWSER` to the bundled binary. The engine offers the `browser` tool only when that is set, so the CLI and TUI don't have it.
+- The tool runs every command in the `hibiscus` agent-browser session, headless. It refuses commands that manage agent-browser itself and flags that would attach the user's own Chrome or profile (`--profile`, `--cdp`, `--auto-connect` and similar).
+- agent-browser uses its own Chrome for Testing, or Google Chrome when it's installed. If it finds neither, the tool downloads Chrome for Testing once, about 150 MB, into `~/.agent-browser/browsers`, and retries.
+- The pane reads the session's stream port with `agent-browser stream status` and connects through the Tauri WebSocket plugin from Rust, because the stream accepts only localhost page origins and the Linux app's origin is `http://tauri.localhost`. The pane sizes the page to fit itself with `set viewport`, and uses ack pacing so the stream sends a new frame only after the last one is drawn. Frames are shown and never stored. Closing the pane, or quitting the app, closes the browser, so it starts blank next time.

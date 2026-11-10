@@ -2,6 +2,9 @@
 //! See `docs/desktop/protocol.md` for the commands and events.
 pub use crate::client::embed::{Engine, Start};
 pub use crate::engine::CodexSignIn;
+
+/// The agent-browser session the engine's browser tool uses, for the browser pane.
+pub const BROWSER_SESSION: &str = crate::engine::BROWSER_SESSION;
 use crate::Result;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;

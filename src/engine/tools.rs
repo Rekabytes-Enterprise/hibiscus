@@ -15,6 +15,9 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"bash","description":"Run a POSIX /bin/sh command in the workspace. Output and duration are bounded.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
+    if agent_browser().is_some() {
+        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] or [\"errors\"]. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the dev server with bash in the background first.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
+    }
     definitions.extend(crate::extensions::agent_definitions());
     definitions.extend(crate::checkpoints::definitions());
     definitions
@@ -45,6 +48,39 @@ struct Bash {
     command: String,
     timeout: Option<u64>,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Browser {
+    args: Vec<String>,
+    timeout: Option<u64>,
+}
+
+/// The agent-browser binary the desktop app bundles. The browser tool exists only when it is set.
+fn agent_browser() -> Option<PathBuf> {
+    std::env::var_os("HIBISCUS_AGENT_BROWSER").map(PathBuf::from)
+}
+/// One session for the app, so the browser pane knows which stream to show.
+pub const BROWSER_SESSION: &str = "hibiscus";
+// Commands that manage agent-browser itself or reach outside its own headless Chrome.
+const BROWSER_DENIED: &[&str] = &[
+    "install", "upgrade", "doctor", "dashboard", "chat", "connect", "mcp", "profiles", "skills",
+    "stream", "session",
+];
+// Flags that would attach the user's own Chrome or profile, or change which browser runs.
+const BROWSER_FLAGS: &[&str] = &[
+    "--session", "--profile", "--state", "--cdp", "--auto-connect", "--executable-path",
+    "--extension", "--provider", "-p", "--engine", "--namespace", "--config", "--headed",
+    "--allow-file-access", "--restore",
+];
+fn browser_command(bin: &Path, args: &[String], cwd: &Path) -> Command {
+    let mut command = Command::new(bin);
+    command
+        .args(["--session", BROWSER_SESSION])
+        .args(args)
+        .current_dir(cwd);
+    command
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Goal {
@@ -119,6 +155,29 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
         }
         "goal" => {
             let _: Goal = serde_json::from_value(args.clone())?;
+        }
+        "browser" => {
+            let a: Browser = serde_json::from_value(args.clone())?;
+            let verb = a.args.first().map(String::as_str).unwrap_or("");
+            if verb.is_empty()
+                || verb.starts_with('-')
+                || a.args.len() > 64
+                || a.args.iter().any(|arg| arg.len() > 65536)
+                || !(1..=600).contains(&a.timeout.unwrap_or(60))
+            {
+                return Err("Invalid browser command or timeout".into());
+            }
+            if BROWSER_DENIED.contains(&verb) {
+                return Err(format!("The browser tool does not run `{verb}`").into());
+            }
+            // Text after `--` is literal, such as a value typed into a field.
+            let flags = a.args.iter().take_while(|arg| *arg != "--");
+            if let Some(flag) = flags
+                .filter_map(|arg| arg.split('=').next())
+                .find(|flag| BROWSER_FLAGS.contains(flag))
+            {
+                return Err(format!("The browser tool does not accept {flag}").into());
+            }
         }
         _ => return Err("Unknown tool".into()),
     }
@@ -215,6 +274,48 @@ pub async fn execute(
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
+            if !output.status.success() {
+                return Err(ShellExit {
+                    status: output.status,
+                    output: bounded(&text, 65536).0,
+                }
+                .into());
+            }
+            Ok(result(text, json!({"exitCode":output.status.code()})))
+        }
+        "browser" => {
+            let a: Browser = serde_json::from_value(args.clone())?;
+            let bin = agent_browser().ok_or("The browser tool is not available")?;
+            let timeout = Duration::from_secs(a.timeout.unwrap_or(60));
+            let text = |o: &crate::process::Output| {
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                )
+            };
+            let mut output =
+                crate::process::run(browser_command(&bin, &a.args, cwd), None, timeout, cancel)
+                    .await?;
+            // Without its own Chrome or an installed Google Chrome, agent-browser
+            // fails with this message. Download Chrome for Testing once, then retry.
+            if !output.status.success() && text(&output).contains("Chrome not found") {
+                let mut install = Command::new(&bin);
+                install.arg("install").current_dir(cwd);
+                let installed =
+                    crate::process::run(install, None, Duration::from_secs(600), cancel).await?;
+                if !installed.status.success() {
+                    return Err(format!(
+                        "Could not download Chrome for the browser tool:\n{}",
+                        bounded(&text(&installed), 65536).0
+                    )
+                    .into());
+                }
+                output =
+                    crate::process::run(browser_command(&bin, &a.args, cwd), None, timeout, cancel)
+                        .await?;
+            }
+            let text = text(&output);
             if !output.status.success() {
                 return Err(ShellExit {
                     status: output.status,
@@ -350,7 +451,23 @@ fn bounded(text: &str, max: usize) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::edit_diff;
+    use super::{edit_diff, validate};
+    use serde_json::{json, Value};
+    #[test]
+    fn browser_tool_refuses_commands_outside_its_own_headless_chrome() {
+        let ok = |args: Value| validate("browser", &json!({ "args": args })).is_ok();
+        assert!(ok(json!(["open", "http://localhost:5173"])));
+        assert!(ok(json!(["fill", "@e2", "--", "--profile is fine as typed text"])));
+        assert!(ok(json!(["snapshot", "-i"])));
+        assert!(!ok(json!([])));
+        assert!(!ok(json!(["--headed", "open", "x"])));
+        assert!(!ok(json!(["install"])));
+        assert!(!ok(json!(["stream", "status"])));
+        assert!(!ok(json!(["open", "x", "--profile", "Default"])));
+        assert!(!ok(json!(["open", "x", "--cdp=9222"])));
+        assert!(!ok(json!(["open", "x", "--session", "other"])));
+        assert!(validate("browser", &json!({"args":["open"],"timeout":601})).is_err());
+    }
     #[test]
     fn edit_diff_trims_unchanged_lines_and_tracks_actual_line_numbers() {
         let before = "intro\ndef greet(name):\n    return name\nend\nfooter\n";

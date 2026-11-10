@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Shows agent-browser's live stream of the page Hibi is using. Frames come in
-  // over the session's local WebSocket; the user's mouse and keys go back on it.
+  // Shows the live page of the engine's browser tool, from the bundled
+  // agent-browser's local stream. The user's mouse and keys go back on it.
   import { invoke } from "@tauri-apps/api/core";
   import WebSocket from "@tauri-apps/plugin-websocket";
   import { onDestroy } from "svelte";
@@ -8,18 +8,15 @@
   import Icon from "./Icon.svelte";
 
   let {
-    session,
     pointer,
     poke,
     wide,
     onwide,
     onclose,
   }: {
-    /** agent-browser session Hibi used last; null is its default one. */
-    session: string | null;
     /** The element Hibi is acting on; `seq` changes for every action. */
     pointer: { target: string; seq: number } | null;
-    /** Changes after each agent-browser call, to connect once a browser exists. */
+    /** Changes after each browser tool call, to connect once a browser exists. */
     poke: number;
     wide: boolean;
     onwide: () => void;
@@ -27,9 +24,8 @@
   } = $props();
 
   let socket: WebSocket | null = null;
-  let socketSession: string | null = null;
-  let status = $state<"connecting" | "live" | "none" | "missing">("connecting");
-  let frame = $state("");
+  let status = $state<"connecting" | "live" | "none">("connecting");
+  let hasFrame = $state(false);
   let page = $state({ width: 0, height: 0 });
   let address = $state("");
   let editing = false;
@@ -37,8 +33,13 @@
   let cursor = $state<{ x: number; y: number } | null>(null);
   let clicks = $state(0);
   let screen: HTMLDivElement;
+  let canvas = $state<HTMLCanvasElement>();
+  let area = $state<HTMLDivElement>();
+  // Dev servers found on this computer: null before a search, then the ports.
+  let servers = $state<number[] | null>(null);
+  let searching = $state(false);
 
-  const run = (args: string[]) => invoke<any>("browser", { session, args });
+  const run = (args: string[]) => invoke<any>("browser", { args });
 
   async function disconnect() {
     const old = socket;
@@ -47,19 +48,21 @@
   }
 
   async function connect() {
-    if (socket && socketSession === session) return;
+    if (socket) return;
     await disconnect();
     try {
       const stream = await run(["stream", "status"]);
-      if (!stream?.enabled || !stream.port) {
+      // No Chrome yet (`connected` is false): stay on the start screen until a page opens.
+      if (!stream?.enabled || !stream.port || stream.connected === false) {
         status = "none";
         return;
       }
-      const ws = await WebSocket.connect(`ws://127.0.0.1:${stream.port}/?maxFps=20`);
+      // Ack pacing: the next frame comes only after this one is drawn, so frames never queue up.
+      const ws = await WebSocket.connect(`ws://127.0.0.1:${stream.port}/?pacing=ack&maxFps=30`);
       socket = ws;
-      socketSession = session;
       status = "live";
       error = null;
+      fit(true);
       ws.addListener((m) => {
         if (m.type === "Close") {
           if (socket === ws) { socket = null; status = "none"; }
@@ -67,22 +70,59 @@
         }
         if (m.type !== "Text") return;
         const msg = JSON.parse(m.data);
-        if (msg.type === "frame") {
-          frame = `data:image/jpeg;base64,${msg.data}`;
-          page = { width: msg.metadata.deviceWidth, height: msg.metadata.deviceHeight };
-        } else if (msg.type === "url" && !editing) {
+        if (msg.type === "frame") void draw(msg);
+        else if (msg.type === "url" && !editing) {
           address = msg.url;
         }
       });
     } catch (e) {
       error = String(e);
-      status = error.includes("not installed") ? "missing" : "none";
+      status = "none";
     }
   }
 
+  /** Decodes a frame off the main thread, draws it, then asks for the next one. */
+  async function draw(msg: any) {
+    try {
+      const bytes = Uint8Array.from(atob(msg.data), (c) => c.charCodeAt(0));
+      const image = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+      if (canvas) {
+        if (canvas.width !== image.width || canvas.height !== image.height) {
+          canvas.width = image.width;
+          canvas.height = image.height;
+        }
+        canvas.getContext("2d")?.drawImage(image, 0, 0);
+      }
+      image.close();
+      page = { width: msg.metadata.deviceWidth, height: msg.metadata.deviceHeight };
+      hasFrame = true;
+    } finally {
+      send({ type: "ack", seq: msg.seq });
+    }
+  }
+
+  // Sizes the page to the pane, so it fills it at any window size.
+  let sized = "";
+  let resizing: ReturnType<typeof setTimeout> | undefined;
+  function fit(now = false) {
+    clearTimeout(resizing);
+    resizing = setTimeout(() => {
+      if (!socket || !area) return;
+      const size = [Math.max(200, Math.floor(area.clientWidth)), Math.max(200, Math.floor(area.clientHeight))].map(String);
+      if (size.join("x") === sized) return;
+      sized = size.join("x");
+      run(["set", "viewport", ...size]).catch(() => (sized = ""));
+    }, now ? 0 : 200);
+  }
+  $effect(() => {
+    if (!area) return;
+    const observer = new ResizeObserver(() => fit());
+    observer.observe(area);
+    return () => observer.disconnect();
+  });
+
   $effect(() => {
     void poke;
-    void session;
     void connect();
   });
 
@@ -147,6 +187,16 @@
     }
   }
 
+  /** Looks for running dev servers, and opens the only one straight away. */
+  async function detect() {
+    searching = true;
+    // The app's own dev server, when it runs from source, isn't the user's app.
+    const found = (await invoke<number[]>("dev_servers")).filter((p) => String(p) !== location.port);
+    searching = false;
+    servers = found;
+    if (found.length === 1) void go(["open", `http://localhost:${found[0]}`]);
+  }
+
   function submit(e: SubmitEvent) {
     e.preventDefault();
     editing = false;
@@ -155,7 +205,7 @@
   }
 </script>
 
-<aside class="diff browser" class:wide>
+<aside class="browser" class:wide>
   <header>
     <button class="iconbtn" onclick={() => go(["back"])} disabled={status !== "live"} title="Back" aria-label="Back"><Icon name="arrow-left" size={14} /></button>
     <button class="iconbtn" onclick={() => go(["forward"])} disabled={status !== "live"} title="Forward" aria-label="Forward"><Icon name="arrow-right" size={14} /></button>
@@ -167,8 +217,8 @@
     <button class="iconbtn" onclick={onclose} title="Close" aria-label="Close browser"><Icon name="x" size={14} /></button>
   </header>
   {#if error}<div class="note error">{error}</div>{/if}
-  {#if status === "live" && frame}
-    <div class="viewport">
+  {#if status === "live"}
+    <div class="viewport" bind:this={area}>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div
         class="screen"
@@ -176,7 +226,7 @@
         tabindex="0"
         role="application"
         aria-label="Browser page"
-        style:--ratio={page.width / page.height}
+        style:--ratio={page.width ? page.width / page.height : 16 / 9}
         onpointerdown={(e) => { screen.focus(); screen.setPointerCapture(e.pointerId); mouse(e, "mousePressed"); }}
         onpointerup={(e) => mouse(e, "mouseReleased")}
         onpointermove={(e) => mouse(e, "mouseMoved")}
@@ -185,7 +235,8 @@
         onkeydown={(e) => key(e, "keyDown")}
         onkeyup={(e) => key(e, "keyUp")}
       >
-        <img src={frame} alt="" draggable="false" />
+        <canvas bind:this={canvas}></canvas>
+        {#if !hasFrame}<span class="waiting muted">Waiting for the page…</span>{/if}
         {#if cursor}
           <div class="cursor" style:left={`${(cursor.x / page.width) * 100}%`} style:top={`${(cursor.y / page.height) * 100}%`}>
             {#key clicks}<span class="ripple"></span>{/key}
@@ -194,19 +245,29 @@
         {/if}
       </div>
     </div>
-  {:else if status === "missing"}
-    <div class="empty">
-      <p>The browser pane shows pages Hibi opens with agent-browser, which isn't installed.</p>
-      <p class="muted">Install it in a terminal, then ask Hibi to test something in the browser:</p>
-      <pre>npm install -g agent-browser
-agent-browser install</pre>
-    </div>
-  {:else if status === "connecting" || status === "live"}
-    <div class="empty muted">{status === "live" ? "Waiting for the page…" : "Connecting to the browser…"}</div>
   {:else}
     <div class="empty">
-      <p>No browser is open yet.</p>
-      <p class="muted">Ask Hibi to check your app in the browser, or type a URL above.</p>
+      <Icon name="globe" size={22} />
+      {#if status === "none"}
+        <strong>Browse with Hibi</strong>
+        <span class="muted">Type a URL, or ask Hibi to open a page. Hibi can read it, click and type.</span>
+        <span class="detect">
+          {#if searching}
+            <span class="muted">Looking for dev servers…</span>
+          {:else if servers && servers.length > 1}
+            <span class="muted">Open a dev server:</span>
+            {#each servers as port (port)}<button class="link" onclick={() => go(["open", `http://localhost:${port}`])}>localhost:{port}</button>{/each}
+          {:else if servers && !servers.length}
+            <span class="muted">No dev server found on the usual ports. Ask Hibi to start one.</span>
+            <button class="link" onclick={detect}>Try again</button>
+          {:else}
+            <span class="muted">Preview your app instead?</span>
+            <button class="link" onclick={detect}>Detect dev server</button>
+          {/if}
+        </span>
+      {:else}
+        <span class="muted">Connecting to the browser…</span>
+      {/if}
     </div>
   {/if}
 </aside>
