@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { homeDir } from "@tauri-apps/api/path";
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
   import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
+  import BrowserPane from "./lib/BrowserPane.svelte";
+  import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
@@ -36,6 +39,15 @@
   let changes = $state<Changes | null>(null);
   // The right side shows session details, or the branch diff in their place.
   let side = $state<"details" | "diff">("details");
+  // The browser opens as its own pane at the far right, beside them.
+  let browserOpen = $state(false);
+  // The element the browser tool acts on, and a counter bumped after each
+  // browser call. The pane opens by itself once per run.
+  let pointer = $state<{ target: string; seq: number } | null>(null);
+  let poke = $state(0);
+  const browserCalls = new Set<string>();
+  let browserShown = false;
+  let browserWide = $state(false);
   let wide = $state(false);
   let extensions = $state<{ name: string; description: string }[]>([]);
   let panelOpen = $state(true);
@@ -55,6 +67,8 @@
   const context = $derived(stats?.contextUsage?.percent ?? null);
   // The session panel only has something to say once the session has started.
   const active = $derived(page === "chat" && !!folder && (chat.items.length > 0 || chat.running));
+  // The browser is there before a session starts too, to open a page by hand.
+  const showBrowser = $derived(page === "chat" && !!folder && browserOpen);
   const title = $derived(
     (folder && saved[folder]?.find((s) => s.path === (pending ?? sessionFile))?.title) || "New session",
   );
@@ -71,8 +85,29 @@
     onEvent((event) => {
       chat = apply(chat, event);
       if (event.type === "agent_settled") void refresh();
+      if (event.type === "agent_start") browserShown = false;
+      if (event.type === "tool_execution_start" && event.toolName === "browser") browsing(event.toolCallId, event.args?.args);
+      if (event.type === "tool_execution_end" && browserCalls.delete(event.toolCallId)) poke++;
     }),
   );
+
+  /** Closing the pane closes the browser too, so it opens blank next time. */
+  function closeBrowser() {
+    browserOpen = false;
+    browserWide = false;
+    void invoke("browser", { args: ["close"] }).catch(() => {});
+  }
+
+  /** Shows the browser pane on the run's first browser call, and points at the element it acts on. */
+  function browsing(id: string, args: unknown) {
+    browserCalls.add(id);
+    if (!browserShown) {
+      browserShown = true;
+      browserOpen = true;
+    }
+    const [verb, target] = Array.isArray(args) ? args.map(String) : [];
+    if (POINTING.has(verb) && target && !target.startsWith("-")) pointer = { target, seq: (pointer?.seq ?? 0) + 1 };
+  }
 
   const message = (e: unknown) => String(e instanceof Error ? e.message : e);
 
@@ -266,7 +301,10 @@
   /** Names a session; the open one through the engine, so its next save keeps the name. */
   async function rename(path: string, session: string, name: string) {
     try {
-      if (path === folder && session === sessionFile) await request({ type: "set_session_name", name });
+      // Ask the engine which session it has open: writing that one's file
+      // directly would be undone by the engine's next save of it.
+      const open = await request({ type: "get_state" }).then((s) => s.sessionFile, () => null);
+      if (open === session) await request({ type: "set_session_name", name });
       else await renameSession(session, name);
     } catch (e) {
       notice(message(e));
@@ -314,6 +352,9 @@
   <main>
     <div class="titlebar" data-tauri-drag-region>
       <span class="grow ellipsis" data-tauri-drag-region>{page === "settings" ? "Settings" : title}</span>
+      {#if page === "chat" && folder}
+        <button class="iconbtn" class:on={showBrowser} onclick={() => (browserOpen ? closeBrowser() : (browserOpen = true))} title={showBrowser ? "Hide browser" : "Show browser"} aria-label="Browser" aria-pressed={showBrowser}><Icon name="globe" /></button>
+      {/if}
       {#if active}
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
@@ -407,6 +448,15 @@
       onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
       onshowdiff={() => { side = "diff"; void refresh(); }}
       onabort={() => post({ type: "abort" }).catch(() => {})}
+    />
+  {/if}
+  {#if showBrowser}
+    <BrowserPane
+      {pointer}
+      {poke}
+      wide={browserWide}
+      onwide={() => (browserWide = !browserWide)}
+      onclose={closeBrowser}
     />
   {/if}
     </div>

@@ -129,6 +129,7 @@ describe("tool calls", () => {
   it("reads like a sentence, with paths relative to the folder", () => {
     expect(toolView(tool("read", { path: "/w/src/main.rs" }), "/w")).toMatchObject({ verb: "Read", target: "src/main.rs", command: false });
     expect(toolView(tool("bash", { command: "npm test\nmore" }, { running: true }), "/w")).toMatchObject({ verb: "Running", target: "npm test", command: true });
+    expect(toolView(tool("browser", { args: ["click", "@e3"] }), "/w")).toMatchObject({ verb: "Browsed", target: "click @e3", icon: "globe" });
     expect(relative("/other/x", "/w")).toBe("/other/x");
   });
 

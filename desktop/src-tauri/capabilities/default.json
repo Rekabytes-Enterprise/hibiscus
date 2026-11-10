@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The app's own commands, the folder picker, opening key pages in the browser, and installing signed updates. No shell, fs or http access from the frontend.",
+  "description": "The app's own commands, the folder picker, opening key pages in the browser, installing signed updates, and the browser pane's connection to the local agent-browser stream. No shell, fs or http access from the frontend.",
   "windows": [
     "main"
   ],
@@ -12,6 +12,7 @@
     "dialog:allow-ask",
     "updater:default",
     "process:allow-restart",
+    "websocket:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

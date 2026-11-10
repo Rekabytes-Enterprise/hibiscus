@@ -249,6 +249,7 @@ const VERBS: { [tool: string]: [string, string, string] } = {
   edit: ["Editing", "Edited", "edit"],
   bash: ["Running", "Ran", "terminal"],
   goal: ["Updating", "Updated", "check"],
+  browser: ["Browsing", "Browsed", "globe"],
 };
 
 /** `path` relative to the session folder when it is inside it. */
@@ -269,8 +270,9 @@ function shorten(command: string, folder: string | null): string {
 export function toolView(tool: Tool, folder: string | null) {
   const [running, done, icon] = VERBS[tool.name] ?? ["Using", "Used", "cpu"];
   const a = tool.args ?? {};
-  const command = tool.name === "bash";
-  const raw = command ? shorten(String(a.command ?? "").split("\n")[0], folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
+  const command = tool.name === "bash" || tool.name === "browser";
+  const line = tool.name === "browser" ? (Array.isArray(a.args) ? a.args.join(" ") : "") : String(a.command ?? "").split("\n")[0];
+  const raw = command ? shorten(line, folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
   const target = raw.length > 120 ? raw.slice(0, 119) + "…" : raw;
   return { verb: tool.running ? running : done, target, icon, command };
 }
