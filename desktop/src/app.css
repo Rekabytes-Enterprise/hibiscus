@@ -282,6 +282,13 @@ pre.toolscroll { padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhe
 .spinner { width: 11px; height: 11px; border: 1.5px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { to { opacity: 0.3; } }
+/* Placeholders while a session loads (#171). */
+.bone { background: var(--hover); border-radius: 6px; animation: pulse 0.9s ease-in-out infinite alternate; }
+.chat .user.bone { height: 42px; background: var(--hover); }
+.bones { display: flex; flex-direction: column; gap: 10px; }
+.bone.line { height: 12px; }
+aside.right .bone.line { margin: 14px 6px; }
+@media (prefers-reduced-motion: reduce) { .bone { animation: none; } }
 .notice { font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 8px; white-space: pre-wrap; }
 .notice.error { color: var(--error); border-color: var(--error); }
 

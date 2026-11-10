@@ -8,6 +8,12 @@ All notable changes to Hibiscus are documented here.
 
 - Desktop app: Hibi can test web pages in a built-in browser. A new `browser` tool drives a headless Chrome through [agent-browser](https://github.com/vercel-labs/agent-browser), which ships inside the app, and a browser pane shows the page live. The pane opens on the first browser call of a run, or from the globe button in the title bar. A cursor moves to each element Hibi clicks or types into, and you can click, scroll and type in the page, use the address bar, or have the pane find a running dev server on the usual local ports. The browser uses Google Chrome when it's installed; otherwise the app downloads Chrome for Testing the first time Hibi needs it.
 
+## [0.3.35] - 2026-11-11
+
+### Changed
+
+- Desktop app: clicking a session that hasn't been opened yet highlights it and changes the title at once. If its conversation takes longer than 150 ms to load, grey placeholders fill the chat and the details panel, and the message box is disabled until the session is ready.
+
 ## [0.3.34] - 2026-11-10
 
 ### Added

@@ -80,7 +80,9 @@ jobs:
         working-directory: desktop
         run: |
           npm ci
-          npm run tauri -- build --ci --bundles dmg
+          # Tauri deletes bundle/macos/*.app after making the .dmg unless the app
+          # bundle is asked for too; the updater archive is made from that .app.
+          npm run tauri -- build --ci --bundles app,dmg
       - name: Name the files and record their digests
         id: receipt
         shell: bash
