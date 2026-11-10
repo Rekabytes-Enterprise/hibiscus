@@ -13,6 +13,8 @@
     onresume,
     onrename,
     ondelete,
+    onaddfolder,
+    onremovefolder,
     onsettings,
   }: {
     home: string;
@@ -24,6 +26,9 @@
     /** An empty name restores the automatic title. */
     onrename: (folder: string, session: string, name: string) => void;
     ondelete: (folder: string, session: string) => void;
+    onaddfolder: () => void;
+    /** Takes the folder out of the list; nothing on disk changes. */
+    onremovefolder: (folder: string) => void;
     onsettings: () => void;
   } = $props();
 
@@ -52,11 +57,23 @@
 <aside class="left">
   <div class="traffic" data-tauri-drag-region></div>
   <button class="nav strong" onclick={onnew} disabled={busy}><Icon name="plus" /> New session</button>
+  <button class="nav" onclick={onaddfolder}><Icon name="folder-plus" /> Add folder…</button>
   <div class="groups">
     {#each groups as g (g.folder)}
-      <button class="group muted small" onclick={() => (closed[g.folder] = !closed[g.folder])} title={g.folder} aria-expanded={!closed[g.folder]}>
-        {label(g.folder)} <Icon name={closed[g.folder] ? "chevron-right" : "chevron-down"} size={12} />
-      </button>
+      <div class="grouphead">
+        <button class="group muted small" onclick={() => (closed[g.folder] = !closed[g.folder])} title={g.folder} aria-expanded={!closed[g.folder]}>
+          {label(g.folder)} <Icon name={closed[g.folder] ? "chevron-right" : "chevron-down"} size={12} />
+        </button>
+        <Menu
+          actions
+          label="Folder actions"
+          title="Folder actions"
+          options={[{ value: "remove", label: "Remove from sidebar", hint: "Keeps the folder and its sessions on disk" }]}
+          onpick={() => onremovefolder(g.folder)}
+        >
+          {#snippet trigger()}<Icon name="more-horizontal" size={14} />{/snippet}
+        </Menu>
+      </div>
       {#if !closed[g.folder]}
         <ul class="list">
           {#each g.sessions as s (s.path)}

@@ -11,6 +11,7 @@
   import Composer from "./lib/Composer.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
+  import { added, opened, removed } from "./lib/folders";
   import { name } from "./lib/paths";
   import Models from "./lib/Models.svelte";
   import NewSession from "./lib/NewSession.svelte";
@@ -88,14 +89,32 @@
     chat = { ...chat, items: [...chat.items, { kind: "notice", text, error: true }] };
   }
 
+  function saveRecent(next: string[]) {
+    recent = next;
+    localStorage.setItem(RECENT, JSON.stringify(recent));
+  }
+
+  /** Adds a folder to the list without starting a session in it. */
+  async function addFolder() {
+    const path = await pickFolder({ directory: true, multiple: false, defaultPath: folder ?? undefined });
+    if (typeof path !== "string") return;
+    saveRecent(added(recent, path));
+    void loadSessions(path);
+  }
+
+  /** Takes a folder out of the list only; its files and saved sessions stay. */
+  function removeFolder(path: string) {
+    saveRecent(removed(recent, path));
+    delete saved[path];
+  }
+
   async function loadSessions(path: string) {
     try {
       saved[path] = await listSessions(path);
     } catch {
       // Moved or deleted: it can no longer be opened, so drop it from the sidebar.
       if (path === folder) return;
-      recent = recent.filter((p) => p !== path);
-      localStorage.setItem(RECENT, JSON.stringify(recent));
+      saveRecent(removed(recent, path));
     }
   }
 
@@ -165,8 +184,7 @@
         t("engine start");
       }
       folder = path;
-      recent = [path, ...recent.filter((p) => p !== path)].slice(0, 8);
-      localStorage.setItem(RECENT, JSON.stringify(recent));
+      saveRecent(opened(recent, path));
       const fresh = session ? fromMessages((await request({ type: "get_messages" })).messages ?? []) : empty();
       // Set together, so the chat view is rebuilt once, with the new conversation.
       if (session) sessionFile = session;
@@ -197,6 +215,8 @@
     side = "details";
     wide = false;
     if (!folder) return open(home);
+    // A folder removed from the list comes back once a new session starts in it.
+    saveRecent(opened(recent, folder));
     remember();
     try {
       await request({ type: "new_session" });
@@ -270,6 +290,8 @@
     onresume={(path, session) => { page = "chat"; void open(path, session); }}
     onrename={rename}
     ondelete={remove}
+    onaddfolder={addFolder}
+    onremovefolder={removeFolder}
     onsettings={() => (page = "settings")}
   />
   <main>
@@ -286,7 +308,7 @@
     <div class="center">
     {#if error}<div class="banner error">{error}</div>{/if}
     {#if !chat.items.length && !chat.running}
-      <NewSession {folder} {recent} {busy} onopen={(p) => open(p)} onchoose={choose} onproviders={hasAccess ? undefined : () => (page = "settings")} />
+      <NewSession {folder} {recent} {busy} onopen={(p) => open(p)} onchoose={choose} onremove={removeFolder} onproviders={hasAccess ? undefined : () => (page = "settings")} />
     {:else}
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>

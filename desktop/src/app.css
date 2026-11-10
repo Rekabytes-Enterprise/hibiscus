@@ -99,7 +99,16 @@ aside.left { width: 260px; flex: none; background: var(--sidebar); border-right:
 .brandmark { color: var(--accent); font-weight: 600; font-size: 18px; }
 .card { width: min(320px, 100%); border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
 .card .row { width: 100%; display: flex; justify-content: space-between; border: none; border-radius: 0; background: none; padding: 9px 12px; text-align: left; }
-.card .row + .row { border-top: 1px solid var(--line); }
+.card .row + .row, .card .folderrow + .folderrow, .card .folderrow + .row { border-top: 1px solid var(--line); }
+/* The remove button shows on hover over a folder row (#147). */
+.card .folderrow { position: relative; }
+.card .folderrow .remove { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); opacity: 0; }
+.card .folderrow:hover .remove, .card .folderrow .remove:focus-visible { opacity: 1; }
+.grouphead { position: relative; }
+.grouphead .group { padding-right: 30px; }
+.grouphead .menu { position: absolute; right: 2px; top: 0; opacity: 0; }
+.grouphead:hover .menu, .grouphead .menu:focus-within { opacity: 1; }
+.grouphead .more { width: 22px; height: 22px; padding: 0; }
 .card .row:disabled { opacity: 1; }
 .card .row:hover:not(:disabled) { background: var(--hover); }
 .check { color: var(--accent); }
