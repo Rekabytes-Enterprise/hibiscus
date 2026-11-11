@@ -447,9 +447,10 @@ mod tests {
                 token('a')
             );
             // Rejected as expired: refreshed once, even by two callers at once.
+            let rejected = token('a');
             let (one, two) = tokio::join!(
-                access_at(&store, &server.base, Some(&token('a'))),
-                access_at(&store, &server.base, Some(&token('a')))
+                access_at(&store, &server.base, Some(&rejected)),
+                access_at(&store, &server.base, Some(&rejected))
             );
             assert_eq!((one.unwrap(), two.unwrap()), (token('b'), token('b')));
             let saved: Account = store.read_json().unwrap().unwrap();
