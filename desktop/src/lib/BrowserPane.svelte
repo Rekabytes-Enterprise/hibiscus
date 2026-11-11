@@ -3,24 +3,30 @@
   // agent-browser's local stream. The user's mouse and keys go back on it.
   import { invoke } from "@tauri-apps/api/core";
   import WebSocket from "@tauri-apps/plugin-websocket";
-  import { onDestroy } from "svelte";
-  import { modifiers, toPage } from "./browser";
+  import { onDestroy, tick } from "svelte";
+  import { commentMessage, MAX_IMAGES, modifiers, toPage, type Hit, type Note } from "./browser";
   import Icon from "./Icon.svelte";
 
   let {
     pointer,
     poke,
     wide,
+    running,
     onwide,
     onclose,
+    onnotes,
   }: {
     /** The element Hibi is acting on; `seq` changes for every action. */
     pointer: { target: string; seq: number } | null;
     /** Changes after each browser tool call, to connect once a browser exists. */
     poke: number;
     wide: boolean;
+    /** Whether Hibi is working; comments handed to it clear when its run ends. */
+    running: boolean;
     onwide: () => void;
     onclose: () => void;
+    /** Puts the comments in the message box. */
+    onnotes: (text: string, images: { mimeType: string; data: string }[]) => void;
   } = $props();
 
   let socket: WebSocket | null = null;
@@ -40,6 +46,108 @@
   let searching = $state(false);
 
   const run = (args: string[]) => invoke<any>("browser", { args });
+
+  // Comment mode (#175): the page takes no clicks or keys. Hovering outlines
+  // the element under the pointer, and a click pins a note to it.
+  // shortcut: pins keep the place the element had when pinned, so they drift
+  // if the page scrolls; track boxes per frame if that bothers people.
+  let commenting = $state(false);
+  let hover = $state<Hit | null>(null);
+  let notes = $state<Note[]>([]);
+  let draft = $state<Note | null>(null);
+  let draftInput = $state<HTMLInputElement>();
+  // Set once the notes are in the message box; they clear when the run they start ends.
+  let handed = $state(false);
+  let ran = false;
+  let hitting = false;
+
+  async function hitAt(e: PointerEvent) {
+    const at = toPage(e.clientX, e.clientY, screen.getBoundingClientRect(), page);
+    const data = await run(["hit", String(Math.max(0, at.x)), String(Math.max(0, at.y))]).catch(() => null);
+    return (data?.result ?? null) as Hit | null;
+  }
+
+  /** One lookup at a time, so a fast pointer doesn't queue them up. */
+  async function hoverAt(e: PointerEvent) {
+    if (hitting) return;
+    hitting = true;
+    try {
+      const found = await hitAt(e);
+      if (commenting && !draft) hover = found;
+    } finally {
+      hitting = false;
+    }
+  }
+
+  async function pin(e: PointerEvent) {
+    const found = await hitAt(e);
+    if (!found || !commenting) return;
+    hover = null;
+    draft = { hit: found, text: "", image: crop(found) };
+    await tick();
+    draftInput?.focus();
+  }
+
+  /** Cuts the element, with a margin, out of the frame on screen, as base64 JPEG. */
+  function crop(h: Hit) {
+    if (!canvas || !page.width) return "";
+    const scale = canvas.width / page.width;
+    const x = Math.max(0, (h.x - 16) * scale);
+    const y = Math.max(0, (h.y - 16) * scale);
+    const w = Math.min(canvas.width - x, (h.width + 32) * scale);
+    const ht = Math.min(canvas.height - y, (h.height + 32) * scale);
+    if (w < 1 || ht < 1) return "";
+    const out = document.createElement("canvas");
+    out.width = Math.round(w);
+    out.height = Math.round(ht);
+    out.getContext("2d")?.drawImage(canvas, x, y, w, ht, 0, 0, out.width, out.height);
+    return out.toDataURL("image/jpeg", 0.85).split(",")[1] ?? "";
+  }
+
+  function addNote(e: SubmitEvent) {
+    e.preventDefault();
+    if (!draft?.text.trim()) return;
+    notes = [...notes, { ...draft, text: draft.text.trim() }];
+    draft = null;
+    screen?.focus();
+  }
+
+  function leaveComments() {
+    commenting = false;
+    hover = null;
+    draft = null;
+  }
+
+  function toggleComments() {
+    if (commenting) return leaveComments();
+    // Comments already handed to Hibi give way to a new set.
+    if (handed) clearNotes();
+    commenting = true;
+    screen?.focus();
+  }
+
+  function clearNotes() {
+    notes = [];
+    handed = false;
+    ran = false;
+  }
+
+  function hand() {
+    const images = notes.filter((n) => n.image).slice(0, MAX_IMAGES).map((n) => ({ mimeType: "image/jpeg", data: n.image }));
+    onnotes(commentMessage(notes), images);
+    handed = true;
+    leaveComments();
+  }
+
+  $effect(() => {
+    if (!handed) return;
+    if (running) ran = true;
+    else if (ran) clearNotes();
+  });
+
+  /** Places an overlay on an element's box, in percent of the page. */
+  const place = (h: Hit) =>
+    `left:${(h.x / page.width) * 100}%;top:${(h.y / page.height) * 100}%;width:${(h.width / page.width) * 100}%;height:${(h.height / page.height) * 100}%`;
 
   async function disconnect() {
     const old = socket;
@@ -210,6 +318,7 @@
     <button class="iconbtn" onclick={() => go(["back"])} disabled={status !== "live"} title="Back" aria-label="Back"><Icon name="arrow-left" size={14} /></button>
     <button class="iconbtn" onclick={() => go(["forward"])} disabled={status !== "live"} title="Forward" aria-label="Forward"><Icon name="arrow-right" size={14} /></button>
     <button class="iconbtn" onclick={() => go(["reload"])} disabled={status !== "live"} title="Reload" aria-label="Reload"><Icon name="rotate-cw" size={14} /></button>
+    <button class="iconbtn" class:on={commenting} onclick={toggleComments} disabled={status !== "live"} title={commenting ? "Stop commenting (Esc)" : "Comment on an element"} aria-label="Comment on an element" aria-pressed={commenting}><Icon name="message-square" size={14} /></button>
     <form class="address" onsubmit={submit}>
       <input bind:value={address} onfocus={() => (editing = true)} onblur={() => (editing = false)} placeholder="Type a URL" aria-label="Address" spellcheck="false" />
     </form>
@@ -222,18 +331,25 @@
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div
         class="screen"
+        class:commenting
         bind:this={screen}
         tabindex="0"
         role="application"
         aria-label="Browser page"
         style:--ratio={page.width ? page.width / page.height : 16 / 9}
-        onpointerdown={(e) => { screen.focus(); screen.setPointerCapture(e.pointerId); mouse(e, "mousePressed"); }}
-        onpointerup={(e) => mouse(e, "mouseReleased")}
-        onpointermove={(e) => mouse(e, "mouseMoved")}
+        onpointerdown={(e) => {
+          screen.focus();
+          if (commenting) return void (draft ? (draft = null) : pin(e));
+          screen.setPointerCapture(e.pointerId);
+          mouse(e, "mousePressed");
+        }}
+        onpointerup={(e) => !commenting && mouse(e, "mouseReleased")}
+        onpointermove={(e) => (commenting ? !draft && hoverAt(e) : mouse(e, "mouseMoved"))}
+        onpointerleave={() => (hover = null)}
         onwheel={(e) => mouse(e, "mouseWheel")}
         oncontextmenu={(e) => e.preventDefault()}
-        onkeydown={(e) => key(e, "keyDown")}
-        onkeyup={(e) => key(e, "keyUp")}
+        onkeydown={(e) => (commenting ? e.key === "Escape" && leaveComments() : key(e, "keyDown"))}
+        onkeyup={(e) => !commenting && key(e, "keyUp")}
       >
         <canvas bind:this={canvas}></canvas>
         {#if !hasFrame}<span class="waiting muted">Waiting for the page…</span>{/if}
@@ -243,8 +359,42 @@
             <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2l16 10-7 1.5L9.5 21z" /></svg>
           </div>
         {/if}
+        {#if page.width}
+          {#if hover}<div class="outline" style={place(hover)}></div>{/if}
+          {#each notes as note, i}<div class="outline pinned" style={place(note.hit)} title={note.text}><span class="pin">{i + 1}</span></div>{/each}
+          {#if draft}
+            <div class="outline" style={place(draft.hit)}></div>
+            <!-- Keys and clicks in the note stay out of the page. -->
+            <form
+              class="draft"
+              style:left="min({(draft.hit.x / page.width) * 100}%, calc(100% - 276px))"
+              style:top="min({((draft.hit.y + draft.hit.height) / page.height) * 100}%, calc(100% - 48px))"
+              onsubmit={addNote}
+              onpointerdown={(e) => e.stopPropagation()}
+              onkeydown={(e) => { e.stopPropagation(); if (e.key === "Escape") { draft = null; screen.focus(); } }}
+              onkeyup={(e) => e.stopPropagation()}
+            >
+              <input bind:this={draftInput} bind:value={draft.text} placeholder="What should change?" aria-label="Comment" />
+              <button class="primary" disabled={!draft.text.trim()}>Add</button>
+            </form>
+          {/if}
+        {/if}
       </div>
     </div>
+    {#if commenting || notes.length}
+      <div class="comments">
+        <span class="muted">
+          {#if handed}{notes.length} comment{notes.length > 1 ? "s" : ""} in the message box
+          {:else if notes.length}{notes.length} comment{notes.length > 1 ? "s" : ""}
+          {:else}Click an element to comment on it{/if}
+        </span>
+        <span class="grow"></span>
+        {#if notes.length}
+          <button class="plain" onclick={clearNotes}>Clear</button>
+          {#if !handed}<button class="primary" onclick={hand}>Add to message</button>{/if}
+        {/if}
+      </div>
+    {/if}
   {:else}
     <div class="empty">
       <Icon name="globe" size={22} />

@@ -437,7 +437,10 @@ fn inside(folder: &Path, path: &Path) -> Option<PathBuf> {
 
 /// The agent-browser the app bundles next to its own binary (`externalBin`).
 fn agent_browser() -> Option<PathBuf> {
-    let path = std::env::current_exe().ok()?.parent()?.join("agent-browser");
+    let path = std::env::current_exe()
+        .ok()?
+        .parent()?
+        .join("agent-browser");
     path.is_file().then_some(path)
 }
 
@@ -462,7 +465,10 @@ async fn browser(args: Vec<String>) -> Result<Value, String> {
     if reply["success"].as_bool() == Some(true) {
         Ok(reply["data"].clone())
     } else {
-        Err(reply["error"].as_str().unwrap_or("agent-browser failed").to_string())
+        Err(reply["error"]
+            .as_str()
+            .unwrap_or("agent-browser failed")
+            .to_string())
     }
 }
 
@@ -488,7 +494,10 @@ async fn dev_servers() -> Vec<u16> {
                     })
                 })
                 .collect();
-            probes.into_iter().filter_map(|p| p.join().ok().flatten()).collect()
+            probes
+                .into_iter()
+                .filter_map(|p| p.join().ok().flatten())
+                .collect()
         })
     })
     .await
@@ -521,7 +530,42 @@ fn close_browser() {
     let _ = child.wait();
 }
 
+/// Finds the element at a point on the page for comment mode: a CSS path to
+/// it, its text, the page URL and its box. `__X__` and `__Y__` are replaced
+/// with checked numbers; nothing else from the window reaches the script.
+const HIT: &str = r##"(() => {
+  const e = document.elementFromPoint(__X__, __Y__);
+  if (!e) return null;
+  const path = [];
+  for (let n = e; n && n.nodeType === 1 && n !== document.documentElement; n = n.parentElement) {
+    if (n.id) { path.unshift("#" + CSS.escape(n.id)); break; }
+    const same = n.parentElement ? [...n.parentElement.children].filter((c) => c.tagName === n.tagName) : [];
+    path.unshift(n.tagName.toLowerCase() + (same.length > 1 ? `:nth-of-type(${same.indexOf(n) + 1})` : ""));
+  }
+  const r = e.getBoundingClientRect();
+  const text = e.innerText || e.getAttribute("aria-label") || e.getAttribute("alt") || e.getAttribute("placeholder") || "";
+  return { selector: path.join(" > "), text: text.trim().replace(/\s+/g, " ").slice(0, 80), url: location.href, x: r.x, y: r.y, width: r.width, height: r.height };
+})()"##;
+
 fn browser_args(args: &[String]) -> Result<Vec<String>, String> {
+    let point = |n: &str| n.parse::<u32>().ok().filter(|n| *n <= 10_000);
+    if let ["hit", x, y] = args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        let (Some(x), Some(y)) = (point(x), point(y)) else {
+            return Err(format!("Not allowed: agent-browser {}", args.join(" ")));
+        };
+        let script = HIT
+            .replace("__X__", &x.to_string())
+            .replace("__Y__", &y.to_string());
+        return Ok([
+            "--session",
+            desktop::BROWSER_SESSION,
+            "eval",
+            &script,
+            "--json",
+        ]
+        .map(String::from)
+        .to_vec());
+    }
     let ok = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["stream", "status"] | ["back"] | ["forward"] | ["reload"] | ["close"] => true,
         // A leading dash would be read as a flag.
@@ -536,7 +580,10 @@ fn browser_args(args: &[String]) -> Result<Vec<String>, String> {
     if !ok {
         return Err(format!("Not allowed: agent-browser {}", args.join(" ")));
     }
-    let mut argv = vec!["--session".to_string(), desktop::BROWSER_SESSION.to_string()];
+    let mut argv = vec![
+        "--session".to_string(),
+        desktop::BROWSER_SESSION.to_string(),
+    ];
     argv.extend(args.iter().cloned());
     argv.push("--json".into());
     Ok(argv)
@@ -783,8 +830,14 @@ mod tests {
             browser_args(&args(&["get", "box", "@e3"])).unwrap(),
             args(&["--session", "hibiscus", "get", "box", "@e3", "--json"])
         );
+        let hit = browser_args(&args(&["hit", "12", "340"])).unwrap();
+        assert_eq!(hit[2], "eval");
+        assert!(hit[3].contains("elementFromPoint(12, 340)"));
         for bad in [
             &["eval", "1"][..],
+            &["hit", "1", "x"],
+            &["hit", "-1", "2"],
+            &["hit", "1", "2", "3"],
             &["open", "file:///etc/passwd"],
             &["open", "--profile"],
             &["get", "box", "--json"],

@@ -48,6 +48,7 @@
   const browserCalls = new Set<string>();
   let browserShown = false;
   let browserWide = $state(false);
+  let composer = $state<ReturnType<typeof Composer>>();
   let wide = $state(false);
   let extensions = $state<{ name: string; description: string }[]>([]);
   let panelOpen = $state(true);
@@ -383,7 +384,7 @@
     {/if}
     {#if folder}
       <div class="dock">
-        <Composer running={chat.running} disabled={opening} {chat} onsend={send} onabort={() => post({ type: "abort" }).catch(() => {})} />
+        <Composer bind:this={composer} running={chat.running} disabled={opening} {chat} onsend={send} onabort={() => post({ type: "abort" }).catch(() => {})} />
         <div class="status">
           <Menu
             label="Working folder"
@@ -455,6 +456,8 @@
       {pointer}
       {poke}
       wide={browserWide}
+      running={chat.running}
+      onnotes={(text, images) => composer?.add(text, images)}
       onwide={() => (browserWide = !browserWide)}
       onclose={closeBrowser}
     />
