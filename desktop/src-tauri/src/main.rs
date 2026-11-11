@@ -478,6 +478,36 @@ const DEV_PORTS: &[u16] = &[
     5173, 5174, 3000, 3001, 4200, 4321, 8080, 8000, 8888, 5000, 4000, 6006, 3333, 9000,
 ];
 
+use hibiscus::desktop::dev_server;
+
+/// The command the pane offers to run when no dev server is up.
+#[tauri::command]
+async fn dev_server_detect(folder: PathBuf) -> Option<String> {
+    dev_server::detect(&folder)
+}
+
+/// Starts the folder's dev server, or keeps the running one, and waits for its URL.
+#[tauri::command]
+async fn dev_server_start(folder: PathBuf) -> Result<Option<dev_server::Status>, String> {
+    dev_server::start(&folder, None).map_err(|e| e.to_string())?;
+    Ok(dev_server::ready(&folder, Duration::from_secs(60)).await)
+}
+
+#[tauri::command]
+async fn dev_server_status(folder: PathBuf) -> Option<dev_server::Status> {
+    dev_server::status(&folder)
+}
+
+#[tauri::command]
+async fn dev_server_output(folder: PathBuf) -> Vec<String> {
+    dev_server::output(&folder, 300)
+}
+
+#[tauri::command]
+async fn dev_server_stop(folder: PathBuf) {
+    dev_server::stop(&folder)
+}
+
 /// Local ports from `DEV_PORTS` that accept a connection, in that order.
 #[tauri::command]
 async fn dev_servers() -> Vec<u16> {
@@ -656,6 +686,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_project,
             send,
+            dev_server_detect,
+            dev_server_start,
+            dev_server_status,
+            dev_server_output,
+            dev_server_stop,
             close_project,
             sessions,
             rename_session,
@@ -680,6 +715,7 @@ fn main() {
                 // Quit like the TUI: stop the run and wait for tools to stop.
                 app.state::<App>().stop();
                 close_browser();
+                dev_server::stop_all();
             }
         });
 }
