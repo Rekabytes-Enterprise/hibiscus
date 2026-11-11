@@ -19,12 +19,16 @@
     copied = true;
     setTimeout(() => (copied = false), 1500);
   }
+  // The screenshot shown full size over the app, until a click or Esc.
+  let zoomed = $state(false);
   // Failed calls open by themselves so the error shows.
   let open = $state(false);
   $effect(() => {
     if (tool.error) open = true;
   });
 </script>
+
+<svelte:window onkeydown={(e) => zoomed && e.key === "Escape" && (zoomed = false)} />
 
 <div class="toolcall" class:failed={tool.error}>
   <button class="toolrow" onclick={() => foldable && (open = !open)} aria-expanded={foldable ? open : undefined} class:static={!foldable}>
@@ -37,6 +41,13 @@
     <span class="grow"></span>
     {#if tool.ms != null && tool.ms >= 100}<span class="ms">{(tool.ms / 1000).toFixed(1)}s</span>{/if}
   </button>
+  {#if tool.image}
+    <button class="shot" onclick={() => (zoomed = true)} title="Show full size" aria-label="Show the screenshot full size"><img src={tool.image} alt="What Hibi saw" /></button>
+  {/if}
+  {#if zoomed}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="backdrop lightbox" onclick={() => (zoomed = false)}><img src={tool.image} alt="What Hibi saw" /></div>
+  {/if}
   {#if open && foldable}
     <div class="toolbody">
       {#if view.command}<pre class="cmd">$ {tool.args?.command ?? ""}</pre>{/if}

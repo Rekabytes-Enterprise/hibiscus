@@ -16,7 +16,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
     if agent_browser().is_some() {
-        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] or [\"errors\"]. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the dev server with bash in the background first.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
+        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] or [\"errors\"]. [\"screenshot\"] returns the visible page as an image you can see; [\"screenshot\",\"#app\"] captures one element and [\"screenshot\",\"--full\"] the whole page. Take one to check how a page looks: layout, overlap, colours, blank areas. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the dev server with bash in the background first.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
     }
     definitions.extend(crate::extensions::agent_definitions());
     definitions.extend(crate::checkpoints::definitions());
@@ -344,7 +344,27 @@ pub async fn execute(
                 }
                 .into());
             }
-            Ok(result(text, json!({"exitCode":output.status.code()})))
+            let details = json!({"exitCode":output.status.code()});
+            let saved = (a.args[0] == "screenshot")
+                .then(|| {
+                    text.lines()
+                        .find_map(|l| l.split_once("Screenshot saved to "))
+                })
+                .flatten()
+                .map(|(_, path)| path.trim());
+            let Some(saved) = saved else {
+                return Ok(result(text, details));
+            };
+            Ok(match screenshot(Path::new(saved)) {
+                Ok((data, note)) => json!({"content":[
+                    {"type":"text","text":format!("{text}{note}")},
+                    {"type":"image","mimeType":"image/jpeg","data":data}
+                ],"details":details}),
+                Err(e) => result(
+                    format!("{text}The screenshot could not be attached: {e}"),
+                    details,
+                ),
+            })
         }
 
         "goal" => {
@@ -389,6 +409,37 @@ pub async fn execute(
         }
         _ => unreachable!("validated tool"),
     }
+}
+
+/// Largest screenshot sent to the model: long edge and total pixels, near what
+/// providers accept without scaling it again themselves.
+const SHOT_EDGE: f64 = 1568.0;
+const SHOT_PIXELS: f64 = 1_150_000.0;
+
+/// Reads a screenshot and scales it down to JPEG for the model. Returns the
+/// base64 data and a note on its size.
+fn screenshot(path: &Path) -> Result<(String, String)> {
+    use base64::Engine;
+    let image = image::open(path)?;
+    let (w, h) = (image.width() as f64, image.height() as f64);
+    let scale = (SHOT_EDGE / w.max(h))
+        .min((SHOT_PIXELS / (w * h)).sqrt())
+        .min(1.0);
+    let (sw, sh) = (((w * scale) as u32).max(1), ((h * scale) as u32).max(1));
+    let small = if scale < 1.0 {
+        image.thumbnail_exact(sw, sh)
+    } else {
+        image
+    };
+    let mut jpeg = vec![];
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 80)
+        .encode_image(&small.to_rgb8())?;
+    let note = if scale < 1.0 {
+        format!("The screenshot is attached, scaled from {w}x{h} to {sw}x{sh}.")
+    } else {
+        format!("The screenshot is attached ({sw}x{sh}).")
+    };
+    Ok((base64::engine::general_purpose::STANDARD.encode(jpeg), note))
 }
 
 fn checkpoint_notice(receipt: &Value) -> String {
@@ -472,8 +523,22 @@ fn bounded(text: &str, max: usize) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_diff, validate};
+    use super::{edit_diff, screenshot, validate};
     use serde_json::{json, Value};
+    #[test]
+    fn screenshots_are_scaled_to_jpeg_within_the_model_limits() {
+        use base64::Engine;
+        let path = std::env::temp_dir().join(format!("hibiscus-shot-{}.png", std::process::id()));
+        image::RgbaImage::new(4000, 1000).save(&path).unwrap();
+        let (data, note) = screenshot(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let jpeg = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
+        let small = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
+        assert_eq!((small.width(), small.height()), (1568, 392));
+        assert!(note.contains("scaled from 4000x1000 to 1568x392"), "{note}");
+    }
     #[test]
     fn browser_tool_refuses_commands_outside_its_own_headless_chrome() {
         let ok = |args: Value| validate("browser", &json!({ "args": args })).is_ok();

@@ -16,6 +16,8 @@ export type Item =
       output: string;
       /** Unified diff of an edit, from the engine's result details. */
       diff: string;
+      /** Image the tool returned, such as a browser screenshot, as a data URL. */
+      image: string;
       ms: number | null;
     }
   | { kind: "notice"; text: string; error: boolean };
@@ -40,13 +42,18 @@ export const empty = (): Chat => ({
   rejected: [],
 });
 
-type Block = { type: string; text?: string; id?: string; name?: string; arguments?: any };
+type Block = { type: string; text?: string; id?: string; name?: string; arguments?: any; mimeType?: string; data?: string };
 
 const text = (content: Block[] = []) =>
   content
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("\n");
+
+const image = (content: Block[] = []) => {
+  const b = content.find((b) => b.type === "image");
+  return b ? `data:${b.mimeType};base64,${b.data}` : "";
+};
 
 /** Short description of a tool call, e.g. `bash · npm test`. */
 export function toolLabel(name: string, args: any): string {
@@ -115,6 +122,7 @@ export function apply(chat: Chat, event: Record): Chat {
             error: false,
             output: "",
             diff: "",
+            image: "",
             ms: null,
           },
         ],
@@ -130,6 +138,7 @@ export function apply(chat: Chat, event: Record): Chat {
                 error: !!event.isError,
                 output: text(event.result?.content),
                 diff: event.result?.details?.diff ?? "",
+                image: image(event.result?.content),
                 ms: event.durationMs ?? null,
               }
             : i,
@@ -190,6 +199,7 @@ export function fromMessages(messages: any[]): Chat {
             error: false,
             output: "",
             diff: "",
+            image: "",
             ms: null,
           });
         }
@@ -200,6 +210,7 @@ export function fromMessages(messages: any[]): Chat {
         tool.output = text(m.content);
         tool.error = !!m.isError;
         tool.diff = m.details?.diff ?? "";
+        tool.image = image(m.content);
       }
     }
   }

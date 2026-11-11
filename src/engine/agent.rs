@@ -750,9 +750,19 @@ async fn run_turns(
                 let message = Message::ToolResult {
                     tool_call_id: id.clone(),
                     tool_name: name.clone(),
-                    content: vec![Block::Text {
+                    // The text, and any image a tool returns, such as a browser screenshot.
+                    content: std::iter::once(Block::Text {
                         text: result["content"][0]["text"].as_str().unwrap_or("").into(),
-                    }],
+                    })
+                    .chain(
+                        result["content"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|b| b["type"] == "image")
+                            .filter_map(|b| serde_json::from_value(b.clone()).ok()),
+                    )
+                    .collect(),
                     is_error,
                     details: result["details"].clone(),
                 };

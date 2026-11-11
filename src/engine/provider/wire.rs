@@ -10,10 +10,47 @@ fn text_blocks(blocks: &[Block], api: &Api) -> Vec<Value> {
     Block::Text{text}=>Some(match api{Api::Responses=>json!({"type":"input_text","text":text}),_=>json!({"type":"text","text":text})}),
     Block::Image{mime_type,data}=>Some(match api{Api::Anthropic=>json!({"type":"image","source":{"type":"base64","media_type":mime_type,"data":data}}),Api::Responses=>json!({"type":"input_image","image_url":format!("data:{mime_type};base64,{data}")}),Api::ChatCompletions=>json!({"type":"image_url","image_url":{"url":format!("data:{mime_type};base64,{data}")}})}),_=>None}).collect()
 }
+/// A tool result's blocks as the model gets them: images only for a model
+/// that takes them, else a note in their place.
+fn tool_blocks(content: &[Block], model: &Model) -> Vec<Block> {
+    if model.images || !content.iter().any(|b| matches!(b, Block::Image { .. })) {
+        return content.to_vec();
+    }
+    let mut blocks: Vec<_> = content
+        .iter()
+        .filter(|b| !matches!(b, Block::Image { .. }))
+        .cloned()
+        .collect();
+    blocks.push(Block::Text {
+        text: "[The image was not sent: this model does not accept images.]".into(),
+    });
+    blocks
+}
+fn has_image(blocks: &[Block]) -> bool {
+    blocks.iter().any(|b| matches!(b, Block::Image { .. }))
+}
 fn wire_messages(messages: &[Message], provider: &Provider, model: &Model) -> Vec<Value> {
     let api = &provider.api;
     let mut wire = vec![];
+    // Chat Completions tool messages hold text only, so their images follow
+    // in one user message after the last tool result of the step.
+    let mut images: Vec<Value> = vec![];
     for m in messages {
+        if !images.is_empty() && !matches!(m, Message::ToolResult { .. }) {
+            wire.push(json!({"role":"user","content":std::mem::take(&mut images)}));
+        }
+        let tool = match m {
+            Message::ToolResult { content, .. } => tool_blocks(content, model),
+            _ => vec![],
+        };
+        let tool_text = tool
+            .iter()
+            .filter_map(|b| match b {
+                Block::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         match (api, m) {
             (Api::Responses, Message::User { content }) => {
                 wire.push(json!({"role":"user","content":text_blocks(content,api)}))
@@ -42,9 +79,16 @@ fn wire_messages(messages: &[Message], provider: &Provider, model: &Model) -> Ve
                     match b{Block::Text{text}=>wire.push(json!({"role":"assistant","content":[{"type":"output_text","text":text}]})),Block::ToolCall{id,name,arguments}=>wire.push(json!({"type":"function_call","call_id":id,"name":name,"arguments":arguments.to_string()})),_=>{}}
                 }
             }
-            (Api::Responses, Message::ToolResult { tool_call_id, .. }) => wire.push(
-                json!({"type":"function_call_output","call_id":tool_call_id,"output":m.text()}),
-            ),
+            (Api::Responses, Message::ToolResult { tool_call_id, .. }) => {
+                let output = if has_image(&tool) {
+                    json!(text_blocks(&tool, api))
+                } else {
+                    json!(tool_text)
+                };
+                wire.push(
+                    json!({"type":"function_call_output","call_id":tool_call_id,"output":output}),
+                )
+            }
             (Api::Anthropic, Message::User { content }) => {
                 wire.push(json!({"role":"user","content":text_blocks(content,api)}))
             }
@@ -67,7 +111,12 @@ fn wire_messages(messages: &[Message], provider: &Provider, model: &Model) -> Ve
                     ..
                 },
             ) => {
-                let result = json!({"type":"tool_result","tool_use_id":tool_call_id,"content":m.text(),"is_error":is_error});
+                let content = if has_image(&tool) {
+                    json!(text_blocks(&tool, api))
+                } else {
+                    json!(tool_text)
+                };
+                let result = json!({"type":"tool_result","tool_use_id":tool_call_id,"content":content,"is_error":is_error});
                 if let Some(last) = wire.last_mut().filter(|v| v["role"] == "user") {
                     last["content"].as_array_mut().unwrap().push(result);
                 } else {
@@ -101,9 +150,21 @@ fn wire_messages(messages: &[Message], provider: &Provider, model: &Model) -> Ve
                 wire.push(v);
             }
             (Api::ChatCompletions, Message::ToolResult { tool_call_id, .. }) => {
-                wire.push(json!({"role":"tool","tool_call_id":tool_call_id,"content":m.text()}))
+                wire.push(json!({"role":"tool","tool_call_id":tool_call_id,"content":tool_text}));
+                let attached: Vec<_> = tool
+                    .iter()
+                    .filter(|b| matches!(b, Block::Image { .. }))
+                    .cloned()
+                    .collect();
+                if !attached.is_empty() {
+                    images.push(json!({"type":"text","text":format!("Image from tool call {tool_call_id}:")}));
+                    images.extend(text_blocks(&attached, api));
+                }
             }
         }
+    }
+    if !images.is_empty() {
+        wire.push(json!({"role":"user","content":images}));
     }
     wire
 }
@@ -158,4 +219,67 @@ pub(in crate::engine) fn request_body(
         body.as_object_mut().unwrap().remove("tools");
     }
     (route, body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::config::Authentication;
+
+    fn shot(api: Api, images: bool) -> Vec<Value> {
+        let provider = Provider {
+            id: "p".into(),
+            base_url: String::new(),
+            api,
+            authentication: Authentication::default(),
+            api_key_env: None,
+            models: vec![],
+        };
+        let model: Model = serde_json::from_value(json!({"id":"m","images":images})).unwrap();
+        let messages = [
+            Message::ToolResult {
+                tool_call_id: "c1".into(),
+                tool_name: "browser".into(),
+                content: vec![
+                    Block::Text {
+                        text: "saved".into(),
+                    },
+                    Block::Image {
+                        mime_type: "image/jpeg".into(),
+                        data: "AAAA".into(),
+                    },
+                ],
+                is_error: false,
+                details: json!({}),
+            },
+            Message::User {
+                content: vec![Block::Text {
+                    text: "next".into(),
+                }],
+            },
+        ];
+        wire_messages(&messages, &provider, &model)
+    }
+
+    #[test]
+    fn tool_result_images_reach_each_api() {
+        let anthropic = shot(Api::Anthropic, true);
+        assert_eq!(anthropic[0]["content"][0]["content"][1]["type"], "image");
+        let responses = shot(Api::Responses, true);
+        assert_eq!(responses[0]["output"][1]["type"], "input_image");
+        // Tool messages hold text, so the image follows as a user message.
+        let chat = shot(Api::ChatCompletions, true);
+        assert_eq!(chat[0]["content"], "saved");
+        assert_eq!(chat[1]["role"], "user");
+        assert_eq!(chat[1]["content"][1]["type"], "image_url");
+        assert_eq!(chat[2]["content"][0]["text"], "next");
+    }
+
+    #[test]
+    fn models_without_image_input_get_a_note_instead() {
+        let anthropic = shot(Api::Anthropic, false);
+        let text = anthropic[0]["content"][0]["content"].as_str().unwrap();
+        assert!(text.starts_with("saved\n[The image was not sent"), "{text}");
+        assert_eq!(shot(Api::ChatCompletions, false).len(), 2);
+    }
 }
