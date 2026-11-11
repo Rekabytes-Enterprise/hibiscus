@@ -383,6 +383,13 @@ aside.browser .output header { gap: 8px; padding: 4px 10px; font-size: 12px; }
 aside.browser .output code { min-width: 0; font: 12px ui-monospace, Menlo, monospace; }
 aside.browser .output pre { flex: 1; min-height: 0; margin: 0; padding: 8px 12px; overflow: auto; background: var(--code-bg); font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 aside.browser .detect code { font: 11.5px ui-monospace, Menlo, monospace; }
+/* Page errors in the browser pane (#177). */
+aside.browser .problems { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border: 1px solid var(--error); border-radius: 10px; background: none; color: var(--error); font-size: 12px; font-variant-numeric: tabular-nums; }
+aside.browser .problems.on { background: var(--hover); }
+aside.browser .problemlist { flex: 1; min-height: 0; margin: 0; padding: 4px 0; overflow: auto; list-style: none; background: var(--code-bg); }
+aside.browser .problemlist li { display: flex; gap: 10px; padding: 3px 12px; font-size: 12px; }
+aside.browser .problemlist .kind { flex: none; width: 68px; color: var(--error); }
+aside.browser .problemlist code { min-width: 0; font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Comment mode in the browser pane (#175). */
 aside.browser .screen.commenting { cursor: crosshair; }
 aside.browser .outline { position: absolute; pointer-events: none; border: 2px solid var(--raspberry); border-radius: 3px; }

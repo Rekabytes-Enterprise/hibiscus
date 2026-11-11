@@ -48,6 +48,37 @@
   let servers = $state<number[] | null>(null);
   let searching = $state(false);
 
+  // Problems on the page (#177): console errors, uncaught exceptions and failed requests.
+  type Problem = { kind: "Exception" | "Console" | "Request"; text: string };
+  let problems = $state<Problem[]>([]);
+  let showProblems = $state(false);
+
+  async function checkProblems() {
+    const [logs, errors, requests] = await Promise.all(
+      [["console"], ["errors"], ["network", "requests", "--status", "400-599"]].map((a) => run(a).catch(() => null)),
+    );
+    problems = [
+      ...(errors?.errors ?? []).map((e: any): Problem => ({ kind: "Exception", text: e.text })),
+      ...(logs?.messages ?? []).filter((m: any) => m.type === "error").map((m: any): Problem => ({ kind: "Console", text: m.text })),
+      ...(requests?.requests ?? []).map((q: any): Problem => ({ kind: "Request", text: `${q.status} ${q.method} ${q.url}` })),
+    ];
+    if (!problems.length) showProblems = false;
+  }
+
+  async function clearProblems() {
+    await Promise.all([["console", "--clear"], ["errors", "--clear"], ["network", "requests", "--clear"]].map((a) => run(a).catch(() => {})));
+    problems = [];
+    showProblems = false;
+  }
+
+  // shortcut: polls every 3 s while a page is shown; listen to stream events if agent-browser adds them.
+  $effect(() => {
+    if (status !== "live") return;
+    void checkProblems();
+    const timer = setInterval(checkProblems, 3000);
+    return () => clearInterval(timer);
+  });
+
   // The folder's dev server run by the app (#176), and the command to start one.
   type Server = { command: string; running: boolean; exitCode: number | null; url: string | null };
   let server = $state<Server | null>(null);
@@ -375,6 +406,9 @@
     <form class="address" onsubmit={submit}>
       <input bind:value={address} onfocus={() => (editing = true)} onblur={() => (editing = false)} placeholder="Type a URL" aria-label="Address" spellcheck="false" />
     </form>
+    {#if problems.length}
+      <button class="problems" class:on={showProblems} onclick={() => (showProblems = !showProblems)} title="Errors on this page" aria-label={`${problems.length} errors on this page`} aria-pressed={showProblems}><Icon name="alert-circle" size={13} />{problems.length}</button>
+    {/if}
     {#if server}
       <button class="iconbtn" class:on={showOutput} onclick={() => (showOutput = !showOutput)} title="Dev server output" aria-label="Dev server output" aria-pressed={showOutput}><Icon name="terminal" size={14} /></button>
     {/if}
@@ -480,6 +514,19 @@
         <span class="muted">Connecting to the browser…</span>
       {/if}
     </div>
+  {/if}
+  {#if showProblems && problems.length}
+    <section class="output">
+      <header>
+        <strong>Errors on this page</strong>
+        <span class="grow"></span>
+        <button class="plain" onclick={clearProblems}>Clear</button>
+        <button class="iconbtn" onclick={() => (showProblems = false)} title="Hide errors" aria-label="Hide errors"><Icon name="x" size={13} /></button>
+      </header>
+      <ul class="problemlist">
+        {#each problems as p, i (i)}<li><span class="kind">{p.kind}</span><code>{p.text}</code></li>{/each}
+      </ul>
+    </section>
   {/if}
   {#if showOutput && server}
     <section class="output">
