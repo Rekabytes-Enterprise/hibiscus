@@ -126,6 +126,8 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"
       - name: Install Tauri's Linux libraries
         run: |
+          # The runner's Azure Ubuntu mirror can stall for 30+ minutes; use archive.ubuntu.com only.
+          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
