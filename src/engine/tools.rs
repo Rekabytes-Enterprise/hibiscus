@@ -16,7 +16,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
     if agent_browser().is_some() {
-        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] or [\"errors\"]. [\"screenshot\"] returns the visible page as an image you can see; [\"screenshot\",\"#app\"] captures one element and [\"screenshot\",\"--full\"] the whole page. Take one to check how a page looks: layout, overlap, colours, blank areas. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the project's dev server with the dev_server tool first, not with bash.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
+        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] (log lines tagged [log], [warning], [error]), [\"errors\"] (uncaught exceptions), [\"network\",\"requests\",\"--status\",\"400-599\"] (failed requests; also --filter <url part>, --method, --type xhr,fetch) and [\"network\",\"request\",\"<id>\"] for one request's detail and body. These show the latest 100 entries; add --clear to empty them before reproducing a problem. [\"screenshot\"] returns the visible page as an image you can see; [\"screenshot\",\"#app\"] captures one element and [\"screenshot\",\"--full\"] the whole page. Take one to check how a page looks: layout, overlap, colours, blank areas. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the project's dev server with the dev_server tool first, not with bash.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
         definitions.push(json!({"name":"dev_server","description":"Run the project's dev server in the background, owned by the app: one per folder, kept running between tool calls and shown to the user in the browser pane. `start` runs `command`, or the project's usual one (package.json dev/start script, Django, Rails, or a static index.html) when omitted, waits until it prints its local URL and returns it; if a server is already running it returns that one. `status` reports it, `output` returns its last lines (build errors show up here), `stop` stops it. Open the URL with the browser tool.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["start","status","output","stop"]},"command":{"type":"string","maxLength":4096},"lines":{"type":"integer","minimum":1,"maximum":500}},"required":["action"],"additionalProperties":false}}));
     }
     definitions.extend(crate::extensions::agent_definitions());
@@ -362,6 +362,18 @@ pub async fn execute(
                 .into());
             }
             let details = json!({"exitCode":output.status.code()});
+            // Logs can hold a thousand entries; the latest are what matter.
+            let logs = matches!(
+                a.args.iter().map(String::as_str).collect::<Vec<_>>()[..],
+                ["console", ..] | ["errors", ..] | ["network", "requests", ..]
+            );
+            let text = if logs {
+                recent(&text, 100)
+            } else if a.args[0] == "network" {
+                bounded(&text, 16384).0
+            } else {
+                text
+            };
             let saved = (a.args[0] == "screenshot")
                 .then(|| {
                     text.lines()
@@ -466,6 +478,24 @@ pub async fn execute(
         }
         _ => unreachable!("validated tool"),
     }
+}
+
+/// The last `keep` lines of `text`, each cut to 500 characters, with a note
+/// on how many earlier lines were left out.
+fn recent(text: &str, keep: usize) -> String {
+    let lines: Vec<_> = text.lines().collect();
+    let skipped = lines.len().saturating_sub(keep);
+    let mut out = if skipped > 0 {
+        format!("[{skipped} earlier lines not shown]\n")
+    } else {
+        String::new()
+    };
+    for line in &lines[skipped..] {
+        let cut = line.char_indices().nth(500).map_or(line.len(), |(i, _)| i);
+        out.push_str(&line[..cut]);
+        out.push_str(if cut < line.len() { "…\n" } else { "\n" });
+    }
+    out
 }
 
 /// Largest screenshot sent to the model: long edge and total pixels, near what
@@ -580,7 +610,21 @@ fn bounded(text: &str, max: usize) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_diff, screenshot, validate};
+    use super::{edit_diff, recent, screenshot, validate};
+    #[test]
+    fn browser_logs_keep_the_latest_entries() {
+        let text = (1..=150)
+            .map(|i| format!("[log] {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = recent(&text, 100);
+        assert!(out.starts_with("[50 earlier lines not shown]\n[log] 51\n"));
+        assert!(out.ends_with("[log] 150\n"));
+        assert_eq!(
+            recent(&"x".repeat(600), 100),
+            format!("{}…\n", "x".repeat(500))
+        );
+    }
     use serde_json::{json, Value};
     #[test]
     fn screenshots_are_scaled_to_jpeg_within_the_model_limits() {

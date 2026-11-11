@@ -598,6 +598,9 @@ fn browser_args(args: &[String]) -> Result<Vec<String>, String> {
     }
     let ok = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["stream", "status"] | ["back"] | ["forward"] | ["reload"] | ["close"] => true,
+        // The pane's error badge reads these and can clear them.
+        ["console"] | ["errors"] | ["network", "requests", "--status", "400-599"] => true,
+        ["console", "--clear"] | ["errors", "--clear"] | ["network", "requests", "--clear"] => true,
         // A leading dash would be read as a flag.
         ["get", "box", target] => !target.starts_with('-'),
         ["open", url] => url.starts_with("http://") || url.starts_with("https://"),
@@ -869,8 +872,11 @@ mod tests {
         let hit = browser_args(&args(&["hit", "12", "340"])).unwrap();
         assert_eq!(hit[2], "eval");
         assert!(hit[3].contains("elementFromPoint(12, 340)"));
+        assert!(browser_args(&args(&["network", "requests", "--status", "400-599"])).is_ok());
         for bad in [
             &["eval", "1"][..],
+            &["network", "route", "**", "--abort"],
+            &["network", "request", "1.2"],
             &["hit", "1", "x"],
             &["hit", "-1", "2"],
             &["hit", "1", "2", "3"],
