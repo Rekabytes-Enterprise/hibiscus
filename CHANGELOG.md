@@ -12,6 +12,10 @@ All notable changes to Hibiscus are documented here.
 - Desktop app: the app can start the project's dev server. When none is running, the browser pane offers the usual command (a `package.json` dev or start script, Django, Rails, or a static `index.html`), starts it in the background and opens its URL. Hibi gets a `dev_server` tool that starts, checks, reads and stops the same server, so it can test a change and read build errors without a terminal. The pane shows the server's output with a Stop button. One server runs per folder, and it stops when you open another folder, remove the folder from the sidebar, or quit.
 - Desktop app: the browser pane shows a red badge with a count when the page logs a console error, throws an uncaught exception, or gets a 4xx or 5xx response. Click it to list them, or clear them. Hibi's `browser` tool now tells it how to read the console, exceptions, failed requests and one request's detail, and shows only the latest 100 entries, each cut to 500 characters.
 
+### Changed
+
+- Desktop app: opening a saved session loads its latest 60 messages instead of the whole conversation, and older ones as you scroll up. Tool output over 2 KB loads in full when you open or copy its row, and screenshots load as they scroll into view. The session panel still lists every file the session edited. Hibi still sees the whole conversation.
+
 ## [0.3.35] - 2026-11-11
 
 ### Changed

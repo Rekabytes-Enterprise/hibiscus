@@ -80,7 +80,7 @@ describe("fromMessages", () => {
     expect(chat.items).toEqual([
       { kind: "user", text: "fix it", images: 1 },
       { kind: "assistant", text: "Reading.", streaming: false },
-      { kind: "tool", id: "c1", name: "read", args: { path: "a.rs" }, running: false, error: false, output: "fn main() {}", diff: "", image: "", ms: null },
+      { kind: "tool", id: "c1", name: "read", args: { path: "a.rs" }, running: false, error: false, output: "fn main() {}", diff: "", image: "", trimmed: false, pendingImage: false, ms: null },
     ]);
   });
 
@@ -90,6 +90,24 @@ describe("fromMessages", () => {
       { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "saved" }, { type: "image", mimeType: "image/jpeg", data: "AAAA" }] },
     ]);
     expect(chat.items[0]).toMatchObject({ output: "saved", image: "data:image/jpeg;base64,AAAA" });
+  });
+});
+
+describe("pages of a long session", () => {
+  it("marks rows the page trimmed or left an image out of", () => {
+    const chat = fromMessages([
+      { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "browser", arguments: { args: ["screenshot"] } }] },
+      { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "saved" }], trimmed: true, omittedImages: 1 },
+    ]);
+    expect(chat.items[0]).toMatchObject({ output: "saved", image: "", trimmed: true, pendingImage: true });
+  });
+
+  it("lists edits from pages not loaded yet after the loaded ones", () => {
+    const chat = fromMessages([
+      { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "edit", arguments: { path: "new.rs" } }] },
+      { role: "toolResult", toolCallId: "c1", content: [] },
+    ]);
+    expect(outputs({ ...chat, edited: ["new.rs", "old.rs"] })).toEqual(["new.rs", "old.rs"]);
   });
 });
 
@@ -119,7 +137,7 @@ describe("outputs", () => {
 });
 
 const tool = (name: string, args: any, extra: Partial<Tool> = {}): Tool => ({
-  kind: "tool", id: name + JSON.stringify(args), name, args, running: false, error: false, output: "", diff: "", image: "", ms: null, ...extra,
+  kind: "tool", id: name + JSON.stringify(args), name, args, running: false, error: false, output: "", diff: "", image: "", trimmed: false, pendingImage: false, ms: null, ...extra,
 });
 
 describe("tool calls", () => {
@@ -191,6 +209,20 @@ describe("ChatCache", () => {
       { role: "user", content: [{ type: "text", text: "from the TUI" }] },
     ]);
     expect(newer(conversation("hello"), fresh)).toBe(fresh);
+  });
+
+  it("keeps the cached rows when the engine sends only the latest page of them", () => {
+    const cached = fromMessages([
+      { role: "user", content: [{ type: "text", text: "older" }] },
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "hello" }] },
+    ]);
+    const page = { ...conversation("hello"), start: 1 };
+    expect(newer(cached, page)).toBe(cached);
+    // The whole conversation is compared in full: here it lost a message, so it wins.
+    const whole = { ...page, start: 0 };
+    expect(newer(cached, whole)).toBe(whole);
+    expect(newer(cached, { ...conversation("changed"), start: 1 }).items[1]).toMatchObject({ text: "changed" });
   });
 
   it("keeps sessions from different folders apart", () => {
