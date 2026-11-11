@@ -16,6 +16,12 @@ export type Item =
       output: string;
       /** Unified diff of an edit, from the engine's result details. */
       diff: string;
+      /** Image the tool returned, such as a browser screenshot, as a data URL. */
+      image: string;
+      /** A page of a saved session cut the output or diff; `get_tool_result` has it all (#171). */
+      trimmed: boolean;
+      /** A page of a saved session left the tool's image out, to load when it scrolls into view. */
+      pendingImage: boolean;
       ms: number | null;
     }
   | { kind: "notice"; text: string; error: boolean };
@@ -29,6 +35,10 @@ export type Chat = {
   waiting: boolean;
   /** Prompts the engine could not deliver; offered for resending. */
   rejected: string[];
+  /** Where the loaded messages begin in the session: 0 once all are loaded (#171). */
+  start: number;
+  /** Files the whole session wrote or edited, newest first, from the engine. */
+  edited: string[];
 };
 
 export const empty = (): Chat => ({
@@ -38,15 +48,22 @@ export const empty = (): Chat => ({
   followUp: [],
   waiting: false,
   rejected: [],
+  start: 0,
+  edited: [],
 });
 
-type Block = { type: string; text?: string; id?: string; name?: string; arguments?: any };
+type Block = { type: string; text?: string; id?: string; name?: string; arguments?: any; mimeType?: string; data?: string };
 
 const text = (content: Block[] = []) =>
   content
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("\n");
+
+const image = (content: Block[] = []) => {
+  const b = content.find((b) => b.type === "image");
+  return b ? `data:${b.mimeType};base64,${b.data}` : "";
+};
 
 /** Short description of a tool call, e.g. `bash · npm test`. */
 export function toolLabel(name: string, args: any): string {
@@ -115,6 +132,9 @@ export function apply(chat: Chat, event: Record): Chat {
             error: false,
             output: "",
             diff: "",
+            image: "",
+            trimmed: false,
+            pendingImage: false,
             ms: null,
           },
         ],
@@ -130,6 +150,7 @@ export function apply(chat: Chat, event: Record): Chat {
                 error: !!event.isError,
                 output: text(event.result?.content),
                 diff: event.result?.details?.diff ?? "",
+                image: image(event.result?.content),
                 ms: event.durationMs ?? null,
               }
             : i,
@@ -169,7 +190,17 @@ export function apply(chat: Chat, event: Record): Chat {
   }
 }
 
-/** Rebuilds the chat from a saved conversation (`get_messages`). */
+/** A stored tool result (`toolResult` message, or `get_tool_result`) as a tool row's fields. */
+export const result = (m: any) => ({
+  output: text(m.content),
+  error: !!m.isError,
+  diff: m.details?.diff ?? "",
+  image: image(m.content),
+  trimmed: !!m.trimmed,
+  pendingImage: (m.omittedImages ?? 0) > 0,
+});
+
+/** Rebuilds the chat from a saved conversation (`get_messages`), or one page of it. */
 export function fromMessages(messages: any[]): Chat {
   const items: Item[] = [];
   for (const m of messages) {
@@ -190,17 +221,16 @@ export function fromMessages(messages: any[]): Chat {
             error: false,
             output: "",
             diff: "",
+            image: "",
+            trimmed: false,
+            pendingImage: false,
             ms: null,
           });
         }
       }
     } else if (m.role === "toolResult") {
       const tool = items.find((i) => i.kind === "tool" && i.id === m.toolCallId);
-      if (tool?.kind === "tool") {
-        tool.output = text(m.content);
-        tool.error = !!m.isError;
-        tool.diff = m.details?.diff ?? "";
-      }
+      if (tool?.kind === "tool") Object.assign(tool, result(m));
     }
   }
   return { ...empty(), items };
@@ -214,7 +244,8 @@ export function outputs(chat: Chat): string[] {
     const path = item.args?.path ?? item.args?.filePath;
     if (typeof path === "string" && path) paths.unshift(path);
   }
-  return [...new Set(paths)];
+  // Pages of a long session hold only some of its edits; the engine lists them all.
+  return [...new Set([...paths, ...chat.edited])];
 }
 
 export type Tool = Extract<Item, { kind: "tool" }>;
@@ -249,6 +280,7 @@ const VERBS: { [tool: string]: [string, string, string] } = {
   edit: ["Editing", "Edited", "edit"],
   bash: ["Running", "Ran", "terminal"],
   goal: ["Updating", "Updated", "check"],
+  browser: ["Browsing", "Browsed", "globe"],
 };
 
 /** `path` relative to the session folder when it is inside it. */
@@ -269,8 +301,9 @@ function shorten(command: string, folder: string | null): string {
 export function toolView(tool: Tool, folder: string | null) {
   const [running, done, icon] = VERBS[tool.name] ?? ["Using", "Used", "cpu"];
   const a = tool.args ?? {};
-  const command = tool.name === "bash";
-  const raw = command ? shorten(String(a.command ?? "").split("\n")[0], folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
+  const command = tool.name === "bash" || tool.name === "browser";
+  const line = tool.name === "browser" ? (Array.isArray(a.args) ? a.args.join(" ") : "") : String(a.command ?? "").split("\n")[0];
+  const raw = command ? shorten(line, folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
   const target = raw.length > 120 ? raw.slice(0, 119) + "…" : raw;
   return { verb: tool.running ? running : done, target, icon, command };
 }
@@ -335,11 +368,18 @@ export class ChatCache {
 
 // What the session file holds: notices and tool timings only exist while the app watches a run.
 const saved = (chat: Chat) =>
-  JSON.stringify(
-    chat.items.flatMap((i) =>
-      i.kind === "tool" ? [[i.id, i.output, i.error]] : i.kind === "notice" ? [] : [[i.kind, i.text]],
-    ),
+  chat.items.flatMap((i) =>
+    i.kind === "tool" ? [JSON.stringify([i.id, i.output, i.error])] : i.kind === "notice" ? [] : [JSON.stringify([i.kind, i.text])],
   );
 
-/** `cached` if the saved conversation is unchanged, so its rows stay as they are; else `fresh`. */
-export const newer = (cached: Chat, fresh: Chat): Chat => (saved(cached) === saved(fresh) ? cached : fresh);
+/**
+ * `cached` if the saved conversation is unchanged, so its rows stay as they are; else `fresh`.
+ * `fresh` may be only the latest page, so it's compared with the same number of rows at the end of `cached`.
+ */
+export function newer(cached: Chat, fresh: Chat): Chat {
+  const old = saved(cached);
+  const now = saved(fresh);
+  const tail = fresh.start > 0 ? old.slice(Math.max(0, old.length - now.length)) : old;
+  if (tail.join("\n") !== now.join("\n")) return fresh;
+  return cached.edited.join("\n") === fresh.edited.join("\n") ? cached : { ...cached, edited: fresh.edited };
+}

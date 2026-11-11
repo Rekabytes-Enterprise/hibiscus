@@ -6,25 +6,44 @@
   import ToolCall from "./ToolCall.svelte";
   import { cachedMarkdown, markdown } from "./markdown";
 
-  let { chat, folder, onresend }: { chat: Chat; folder: string | null; onresend: (text: string) => void } = $props();
+  let {
+    chat,
+    folder,
+    onolder,
+    onresend,
+  }: {
+    chat: Chat;
+    folder: string | null;
+    /** Loads the page of messages before the loaded ones, when `chat.start` says there are more. */
+    onolder: () => Promise<void>;
+    onresend: (text: string) => void;
+  } = $props();
   /** Groups the user opened, by the id of their first tool call. */
   let opened = $state<{ [id: string]: boolean }>({});
   let scroller: HTMLDivElement;
   let pinned = true;
 
   // A long session renders its newest entries first and the older ones as the
-  // user scrolls up (#159). Keys are positions in the whole list, so adding
-  // older entries above keeps the rows already on screen.
+  // user scrolls up (#159). Once all loaded entries show, the next page of
+  // messages comes from the engine (#171). Keys are positions in the whole
+  // list less the entries loaded above since, so rows already on screen keep
+  // their keys.
   const PAGE = 50;
   let shown = $state(PAGE);
+  let above = $state(0);
   let loading = false;
   const all = $derived(entries(chat.items));
   const start = $derived(Math.max(0, all.length - shown));
 
   async function older() {
-    if (loading || start === 0) return;
+    if (loading || (start === 0 && !chat.start)) return;
     loading = true;
     const height = scroller.scrollHeight;
+    if (start === 0) {
+      const before = all.length;
+      await onolder();
+      above += entries(chat.items).length - before;
+    }
     shown += PAGE;
     await tick();
     // Keep the entry the user was reading in place.
@@ -64,10 +83,10 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="chat" bind:this={scroller} {onscroll} {onclick}>
-  {#if start > 0}
+  {#if start > 0 || chat.start}
     <button class="link earlier" onclick={older}>Show earlier messages</button>
   {/if}
-  {#each all.slice(start) as item, i (start + i)}
+  {#each all.slice(start) as item, i (start + i - above)}
     {#if item.kind === "user"}
       <div class="user">{item.text}{#if item.images}<span class="muted small"> · {item.images} image{item.images > 1 ? "s" : ""}</span>{/if}</div>
     {:else if item.kind === "assistant"}

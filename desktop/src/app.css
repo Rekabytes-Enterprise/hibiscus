@@ -275,6 +275,12 @@ aside.left footer { display: flex; align-items: center; gap: 8px; padding: 8px 6
 pre.toolscroll { padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .toolscroll { max-height: calc(15 * 1.5 * 12px + 16px); overflow: auto; }
 .toolrow.static { cursor: default; }
+/* Screenshot a tool returned (#174). */
+.toolcall .shot { display: block; margin: 4px 0 6px 20px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; overflow: hidden; cursor: zoom-in; }
+.toolcall .shot img { display: block; max-width: min(320px, 100%); max-height: 200px; }
+.toolcall .shot.pending { width: 240px; max-width: 100%; height: 150px; background: var(--hover); cursor: default; }
+.lightbox { z-index: 50; cursor: zoom-out; padding: 24px; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 8px 32px rgb(0 0 0 / 0.4); }
 .toolrow.static:hover { color: var(--muted); }
 .toolbox { position: relative; width: 100%; }
 .toolbox .copy { position: absolute; top: 4px; right: 4px; background: var(--code-bg); opacity: 0; }
@@ -348,6 +354,53 @@ aside.diff .files { overflow: auto; flex: 1; }
 .filehead { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .filehead .name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: none; background: none; padding: 4px 0; text-align: left; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 aside.diff .note { padding: 8px 16px; color: var(--muted); font-size: 12px; }
+/* Browser pane: the browser tool's live page, at the far right beside the session panel. */
+aside.browser { flex: 1.4 1 0; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg); }
+aside.browser.wide { flex: 1; }
+.body:has(aside.browser.wide) :is(.center, aside.right, aside.diff) { display: none; }
+aside.browser header { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line); flex: none; }
+aside.browser .address { flex: 1; min-width: 0; margin: 0 4px; }
+aside.browser .address input { width: 100%; padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); font-size: 12px; }
+aside.browser .viewport { flex: 1; min-height: 0; display: flex; justify-content: center; align-items: flex-start; overflow: hidden; container-type: size; }
+/* The page is sized to the pane, so this fills it; the ratio only matters while a resize is on its way. */
+aside.browser .screen { position: relative; width: min(100cqw, 100cqh * var(--ratio)); outline: none; cursor: default; touch-action: none; }
+aside.browser .screen:focus-visible { box-shadow: inset 0 0 0 1px var(--raspberry); }
+aside.browser .screen canvas { display: block; width: 100%; height: auto; }
+aside.browser .waiting { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; }
+aside.browser .cursor { position: absolute; pointer-events: none; transition: left 0.3s ease-out, top 0.3s ease-out; }
+aside.browser .cursor svg { position: absolute; left: -3px; top: -2px; fill: var(--raspberry); stroke: #ffffff; stroke-width: 1.5; filter: drop-shadow(0 1px 2px #00000059); }
+aside.browser .ripple { position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--raspberry); opacity: 0; animation: ripple 0.6s ease-out 0.3s; }
+@keyframes ripple { from { transform: scale(0.3); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+aside.browser .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; font-size: 13px; }
+aside.browser .empty .icon { color: var(--muted); margin-bottom: 4px; }
+aside.browser .empty .muted { max-width: 300px; font-size: 12px; }
+aside.browser .empty .detect { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 6px; margin-top: 10px; font-size: 12px; }
+aside.browser .note { padding: 8px 16px; font-size: 12px; }
+aside.browser .note.error { color: var(--error); }
+.body:has(aside.browser) .center { min-width: 320px; }
+/* Dev server output under the browser pane (#176). */
+aside.browser .output { flex: none; height: 32%; min-height: 120px; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+aside.browser .output header { gap: 8px; padding: 4px 10px; font-size: 12px; }
+aside.browser .output code { min-width: 0; font: 12px ui-monospace, Menlo, monospace; }
+aside.browser .output pre { flex: 1; min-height: 0; margin: 0; padding: 8px 12px; overflow: auto; background: var(--code-bg); font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+aside.browser .detect code { font: 11.5px ui-monospace, Menlo, monospace; }
+/* Page errors in the browser pane (#177). */
+aside.browser .problems { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border: 1px solid var(--error); border-radius: 10px; background: none; color: var(--error); font-size: 12px; font-variant-numeric: tabular-nums; }
+aside.browser .problems.on { background: var(--hover); }
+aside.browser .problemlist { flex: 1; min-height: 0; margin: 0; padding: 4px 0; overflow: auto; list-style: none; background: var(--code-bg); }
+aside.browser .problemlist li { display: flex; gap: 10px; padding: 3px 12px; font-size: 12px; }
+aside.browser .problemlist .kind { flex: none; width: 68px; color: var(--error); }
+aside.browser .problemlist code { min-width: 0; font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Comment mode in the browser pane (#175). */
+aside.browser .screen.commenting { cursor: crosshair; }
+aside.browser .outline { position: absolute; pointer-events: none; border: 2px solid var(--raspberry); border-radius: 3px; }
+aside.browser .outline.pinned { pointer-events: auto; }
+aside.browser .pin { position: absolute; left: -11px; top: -11px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--raspberry); color: #ffffff; font-size: 11px; font-weight: 600; display: grid; place-items: center; }
+aside.browser .draft { position: absolute; z-index: 2; display: flex; gap: 6px; width: 270px; margin-top: 6px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); cursor: default; }
+aside.browser .draft input { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 12px; }
+aside.browser .comments { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; flex: none; }
+/* Three panes don't fit in a narrow window, so the browser takes the session panel's place. */
+@media (max-width: 1200px) { .body:has(aside.browser) :is(aside.right, aside.diff) { display: none; } }
 table.hunks { width: 100%; border-collapse: collapse; font: 12px/1.6 ui-monospace, Menlo, monospace; table-layout: fixed; }
 table.hunks col.no { width: 44px; }
 table.hunks td.no { padding: 0 8px 0 0; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; vertical-align: top; }

@@ -41,7 +41,17 @@ enum Command {
         name: String,
         input: String,
     },
-    GetMessages,
+    GetMessages {
+        /// Paged for the desktop chat when set (#171).
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        before: Option<usize>,
+    },
+    GetToolResult {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+    },
     GetToolOutputs,
     GetToolOutput {
         index: Option<std::num::NonZeroUsize>,
@@ -485,7 +495,17 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                                 serde_json::to_value(extensions.snapshot().commands())?;
                             Ok(state)
                         }
-                        Command::GetMessages => Ok(json!({"messages":s.messages})),
+                        Command::GetMessages { limit: None, .. } => {
+                            Ok(json!({"messages":s.messages}))
+                        }
+                        Command::GetMessages {
+                            limit: Some(limit),
+                            before,
+                        } => Ok(super::paging::page(&s.messages, limit.min(1000), before)),
+                        Command::GetToolResult { tool_call_id } => {
+                            super::paging::tool_result(&s.messages, &tool_call_id)
+                                .ok_or_else(|| "No tool result with that id".into())
+                        }
                         Command::GetToolOutputs => {
                             Ok(json!({"outputs":super::tool_output::list(&s.messages)}))
                         }
@@ -750,9 +770,19 @@ async fn run_turns(
                 let message = Message::ToolResult {
                     tool_call_id: id.clone(),
                     tool_name: name.clone(),
-                    content: vec![Block::Text {
+                    // The text, and any image a tool returns, such as a browser screenshot.
+                    content: std::iter::once(Block::Text {
                         text: result["content"][0]["text"].as_str().unwrap_or("").into(),
-                    }],
+                    })
+                    .chain(
+                        result["content"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|b| b["type"] == "image")
+                            .filter_map(|b| serde_json::from_value(b.clone()).ok()),
+                    )
+                    .collect(),
                     is_error,
                     details: result["details"].clone(),
                 };

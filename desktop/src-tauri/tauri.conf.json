@@ -42,6 +42,8 @@
       "icons/icon.icns",
       "icons/icon.png"
     ],
+    "externalBin": ["binaries/agent-browser"],
+    "resources": { "licenses/agent-browser.txt": "licenses/agent-browser.txt" },
     "category": "DeveloperTool",
     "shortDescription": "Hibiscus coding agent",
     "macOS": {

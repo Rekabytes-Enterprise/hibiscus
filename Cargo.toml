@@ -1,6 +1,6 @@
 [package]
 name = "hibiscus"
-version = "0.3.35"
+version = "0.3.36"
 edition = "2021"
 description = "A standalone Rust coding agent"
 license = "MIT"
@@ -16,6 +16,7 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "process", "macros"] }
 base64 = "0.23"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 sha2 = "0.11"
 rand = "0.10"
 unicode-width = { version = "0.2.2", default-features = false }

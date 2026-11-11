@@ -15,9 +15,20 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"bash","description":"Run a POSIX /bin/sh command in the workspace. Output and duration are bounded.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
+    if agent_browser().is_some() {
+        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] (log lines tagged [log], [warning], [error]), [\"errors\"] (uncaught exceptions), [\"network\",\"requests\",\"--status\",\"400-599\"] (failed requests; also --filter <url part>, --method, --type xhr,fetch) and [\"network\",\"request\",\"<id>\"] for one request's detail and body. These show the latest 100 entries; add --clear to empty them before reproducing a problem. [\"screenshot\"] returns the visible page as an image you can see; [\"screenshot\",\"#app\"] captures one element and [\"screenshot\",\"--full\"] the whole page. Take one to check how a page looks: layout, overlap, colours, blank areas. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the project's dev server with the dev_server tool first, not with bash.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
+        definitions.push(json!({"name":"dev_server","description":"Run the project's dev server in the background, owned by the app: one per folder, kept running between tool calls and shown to the user in the browser pane. `start` runs `command`, or the project's usual one (package.json dev/start script, Django, Rails, or a static index.html) when omitted, waits until it prints its local URL and returns it; if a server is already running it returns that one. `status` reports it, `output` returns its last lines (build errors show up here), `stop` stops it. Open the URL with the browser tool.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["start","status","output","stop"]},"command":{"type":"string","maxLength":4096},"lines":{"type":"integer","minimum":1,"maximum":500}},"required":["action"],"additionalProperties":false}}));
+    }
     definitions.extend(crate::extensions::agent_definitions());
     definitions.extend(crate::checkpoints::definitions());
     definitions
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevServer {
+    action: String,
+    command: Option<String>,
+    lines: Option<usize>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +56,60 @@ struct Bash {
     command: String,
     timeout: Option<u64>,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Browser {
+    args: Vec<String>,
+    timeout: Option<u64>,
+}
+
+/// The agent-browser binary the desktop app bundles. The browser tool exists only when it is set.
+fn agent_browser() -> Option<PathBuf> {
+    std::env::var_os("HIBISCUS_AGENT_BROWSER").map(PathBuf::from)
+}
+/// One session for the app, so the browser pane knows which stream to show.
+pub const BROWSER_SESSION: &str = "hibiscus";
+// Commands that manage agent-browser itself or reach outside its own headless Chrome.
+const BROWSER_DENIED: &[&str] = &[
+    "install",
+    "upgrade",
+    "doctor",
+    "dashboard",
+    "chat",
+    "connect",
+    "mcp",
+    "profiles",
+    "skills",
+    "stream",
+    "session",
+];
+// Flags that would attach the user's own Chrome or profile, or change which browser runs.
+const BROWSER_FLAGS: &[&str] = &[
+    "--session",
+    "--profile",
+    "--state",
+    "--cdp",
+    "--auto-connect",
+    "--executable-path",
+    "--extension",
+    "--provider",
+    "-p",
+    "--engine",
+    "--namespace",
+    "--config",
+    "--headed",
+    "--allow-file-access",
+    "--restore",
+];
+fn browser_command(bin: &Path, args: &[String], cwd: &Path) -> Command {
+    let mut command = Command::new(bin);
+    command
+        .args(["--session", BROWSER_SESSION])
+        .args(args)
+        .current_dir(cwd);
+    command
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Goal {
@@ -119,6 +184,38 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
         }
         "goal" => {
             let _: Goal = serde_json::from_value(args.clone())?;
+        }
+        "browser" => {
+            let a: Browser = serde_json::from_value(args.clone())?;
+            let verb = a.args.first().map(String::as_str).unwrap_or("");
+            if verb.is_empty()
+                || verb.starts_with('-')
+                || a.args.len() > 64
+                || a.args.iter().any(|arg| arg.len() > 65536)
+                || !(1..=600).contains(&a.timeout.unwrap_or(60))
+            {
+                return Err("Invalid browser command or timeout".into());
+            }
+            if BROWSER_DENIED.contains(&verb) {
+                return Err(format!("The browser tool does not run `{verb}`").into());
+            }
+            // Text after `--` is literal, such as a value typed into a field.
+            let flags = a.args.iter().take_while(|arg| *arg != "--");
+            if let Some(flag) = flags
+                .filter_map(|arg| arg.split('=').next())
+                .find(|flag| BROWSER_FLAGS.contains(flag))
+            {
+                return Err(format!("The browser tool does not accept {flag}").into());
+            }
+        }
+        "dev_server" => {
+            let a: DevServer = serde_json::from_value(args.clone())?;
+            if !["start", "status", "output", "stop"].contains(&a.action.as_str())
+                || a.command.as_ref().is_some_and(|c| c.len() > 4096)
+                || !(1..=500).contains(&a.lines.unwrap_or(50))
+            {
+                return Err("Invalid dev_server action, command or lines".into());
+            }
         }
         _ => return Err("Unknown tool".into()),
     }
@@ -224,6 +321,120 @@ pub async fn execute(
             }
             Ok(result(text, json!({"exitCode":output.status.code()})))
         }
+        "browser" => {
+            let a: Browser = serde_json::from_value(args.clone())?;
+            let bin = agent_browser().ok_or("The browser tool is not available")?;
+            let timeout = Duration::from_secs(a.timeout.unwrap_or(60));
+            let text = |o: &crate::process::Output| {
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                )
+            };
+            let mut output =
+                crate::process::run(browser_command(&bin, &a.args, cwd), None, timeout, cancel)
+                    .await?;
+            // Without its own Chrome or an installed Google Chrome, agent-browser
+            // fails with this message. Download Chrome for Testing once, then retry.
+            if !output.status.success() && text(&output).contains("Chrome not found") {
+                let mut install = Command::new(&bin);
+                install.arg("install").current_dir(cwd);
+                let installed =
+                    crate::process::run(install, None, Duration::from_secs(600), cancel).await?;
+                if !installed.status.success() {
+                    return Err(format!(
+                        "Could not download Chrome for the browser tool:\n{}",
+                        bounded(&text(&installed), 65536).0
+                    )
+                    .into());
+                }
+                output =
+                    crate::process::run(browser_command(&bin, &a.args, cwd), None, timeout, cancel)
+                        .await?;
+            }
+            let text = text(&output);
+            if !output.status.success() {
+                return Err(ShellExit {
+                    status: output.status,
+                    output: bounded(&text, 65536).0,
+                }
+                .into());
+            }
+            let details = json!({"exitCode":output.status.code()});
+            // Logs can hold a thousand entries; the latest are what matter.
+            let logs = matches!(
+                a.args.iter().map(String::as_str).collect::<Vec<_>>()[..],
+                ["console", ..] | ["errors", ..] | ["network", "requests", ..]
+            );
+            let text = if logs {
+                recent(&text, 100)
+            } else if a.args[0] == "network" {
+                bounded(&text, 16384).0
+            } else {
+                text
+            };
+            let saved = (a.args[0] == "screenshot")
+                .then(|| {
+                    text.lines()
+                        .find_map(|l| l.split_once("Screenshot saved to "))
+                })
+                .flatten()
+                .map(|(_, path)| path.trim());
+            let Some(saved) = saved else {
+                return Ok(result(text, details));
+            };
+            Ok(match screenshot(Path::new(saved)) {
+                Ok((data, note)) => json!({"content":[
+                    {"type":"text","text":format!("{text}{note}")},
+                    {"type":"image","mimeType":"image/jpeg","data":data}
+                ],"details":details}),
+                Err(e) => result(
+                    format!("{text}The screenshot could not be attached: {e}"),
+                    details,
+                ),
+            })
+        }
+
+        "dev_server" => {
+            use crate::devserver;
+            let a: DevServer = serde_json::from_value(args.clone())?;
+            let tail = |n| devserver::output(cwd, n).join("\n");
+            let describe = |s: &devserver::Status| {
+                let state = match (s.running, s.exit_code, &s.url) {
+                    (true, _, Some(url)) => format!("running at {url}"),
+                    (true, _, None) => "running, but it hasn't printed a local URL yet".into(),
+                    (false, code, _) => format!(
+                        "stopped (exit code {})",
+                        code.map_or("unknown".into(), |c| c.to_string())
+                    ),
+                };
+                format!("`{}` is {state}.", s.command)
+            };
+            let text = match a.action.as_str() {
+                "start" => {
+                    devserver::start(cwd, a.command.as_deref())?;
+                    let s = tokio::select! {
+                        s = devserver::ready(cwd, Duration::from_secs(60)) => s.ok_or("The dev server is gone")?,
+                        _ = cancel.changed() => return Err("Tool cancelled; the dev server keeps running".into()),
+                    };
+                    format!("{}\nLast output:\n{}", describe(&s), tail(20))
+                }
+                "status" => devserver::status(cwd)
+                    .map_or("No dev server is running for this folder.".into(), |s| {
+                        describe(&s)
+                    }),
+                "output" => match devserver::status(cwd) {
+                    Some(s) => format!("{}\n{}", describe(&s), tail(a.lines.unwrap_or(50))),
+                    None => "No dev server is running for this folder.".into(),
+                },
+                _ => {
+                    devserver::stop(cwd);
+                    "Stopped the dev server.".into()
+                }
+            };
+            Ok(result(text, json!({})))
+        }
 
         "goal" => {
             let a: Goal = serde_json::from_value(args.clone())?;
@@ -267,6 +478,55 @@ pub async fn execute(
         }
         _ => unreachable!("validated tool"),
     }
+}
+
+/// The last `keep` lines of `text`, each cut to 500 characters, with a note
+/// on how many earlier lines were left out.
+fn recent(text: &str, keep: usize) -> String {
+    let lines: Vec<_> = text.lines().collect();
+    let skipped = lines.len().saturating_sub(keep);
+    let mut out = if skipped > 0 {
+        format!("[{skipped} earlier lines not shown]\n")
+    } else {
+        String::new()
+    };
+    for line in &lines[skipped..] {
+        let cut = line.char_indices().nth(500).map_or(line.len(), |(i, _)| i);
+        out.push_str(&line[..cut]);
+        out.push_str(if cut < line.len() { "…\n" } else { "\n" });
+    }
+    out
+}
+
+/// Largest screenshot sent to the model: long edge and total pixels, near what
+/// providers accept without scaling it again themselves.
+const SHOT_EDGE: f64 = 1568.0;
+const SHOT_PIXELS: f64 = 1_150_000.0;
+
+/// Reads a screenshot and scales it down to JPEG for the model. Returns the
+/// base64 data and a note on its size.
+fn screenshot(path: &Path) -> Result<(String, String)> {
+    use base64::Engine;
+    let image = image::open(path)?;
+    let (w, h) = (image.width() as f64, image.height() as f64);
+    let scale = (SHOT_EDGE / w.max(h))
+        .min((SHOT_PIXELS / (w * h)).sqrt())
+        .min(1.0);
+    let (sw, sh) = (((w * scale) as u32).max(1), ((h * scale) as u32).max(1));
+    let small = if scale < 1.0 {
+        image.thumbnail_exact(sw, sh)
+    } else {
+        image
+    };
+    let mut jpeg = vec![];
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 80)
+        .encode_image(&small.to_rgb8())?;
+    let note = if scale < 1.0 {
+        format!("The screenshot is attached, scaled from {w}x{h} to {sw}x{sh}.")
+    } else {
+        format!("The screenshot is attached ({sw}x{sh}).")
+    };
+    Ok((base64::engine::general_purpose::STANDARD.encode(jpeg), note))
 }
 
 fn checkpoint_notice(receipt: &Value) -> String {
@@ -350,7 +610,65 @@ fn bounded(text: &str, max: usize) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::edit_diff;
+    use super::{edit_diff, recent, screenshot, validate};
+    #[test]
+    fn browser_logs_keep_the_latest_entries() {
+        let text = (1..=150)
+            .map(|i| format!("[log] {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = recent(&text, 100);
+        assert!(out.starts_with("[50 earlier lines not shown]\n[log] 51\n"));
+        assert!(out.ends_with("[log] 150\n"));
+        assert_eq!(
+            recent(&"x".repeat(600), 100),
+            format!("{}…\n", "x".repeat(500))
+        );
+    }
+    use serde_json::{json, Value};
+    #[test]
+    fn screenshots_are_scaled_to_jpeg_within_the_model_limits() {
+        use base64::Engine;
+        let path = std::env::temp_dir().join(format!("hibiscus-shot-{}.png", std::process::id()));
+        image::RgbaImage::new(4000, 1000).save(&path).unwrap();
+        let (data, note) = screenshot(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let jpeg = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
+        let small = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
+        assert_eq!((small.width(), small.height()), (1568, 392));
+        assert!(note.contains("scaled from 4000x1000 to 1568x392"), "{note}");
+    }
+    #[test]
+    fn dev_server_tool_checks_its_action() {
+        let ok = |args: Value| validate("dev_server", &args).is_ok();
+        assert!(ok(json!({"action":"start","command":"npm run dev"})));
+        assert!(ok(json!({"action":"output","lines":100})));
+        assert!(!ok(json!({"action":"restart"})));
+        assert!(!ok(json!({"action":"output","lines":0})));
+        assert!(!ok(json!({"action":"start","cwd":"/"})));
+    }
+    #[test]
+    fn browser_tool_refuses_commands_outside_its_own_headless_chrome() {
+        let ok = |args: Value| validate("browser", &json!({ "args": args })).is_ok();
+        assert!(ok(json!(["open", "http://localhost:5173"])));
+        assert!(ok(json!([
+            "fill",
+            "@e2",
+            "--",
+            "--profile is fine as typed text"
+        ])));
+        assert!(ok(json!(["snapshot", "-i"])));
+        assert!(!ok(json!([])));
+        assert!(!ok(json!(["--headed", "open", "x"])));
+        assert!(!ok(json!(["install"])));
+        assert!(!ok(json!(["stream", "status"])));
+        assert!(!ok(json!(["open", "x", "--profile", "Default"])));
+        assert!(!ok(json!(["open", "x", "--cdp=9222"])));
+        assert!(!ok(json!(["open", "x", "--session", "other"])));
+        assert!(validate("browser", &json!({"args":["open"],"timeout":601})).is_err());
+    }
     #[test]
     fn edit_diff_trims_unchanged_lines_and_tracks_actual_line_numbers() {
         let before = "intro\ndef greet(name):\n    return name\nend\nfooter\n";
