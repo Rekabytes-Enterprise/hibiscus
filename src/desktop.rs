@@ -1,7 +1,9 @@
 //! Library API for the desktop app. The CLI and TUI do not use it.
 //! See `docs/desktop/protocol.md` for the commands and events.
 pub use crate::client::embed::{Engine, Start};
-pub use crate::engine::CodexSignIn;
+/// The error a Rooxcode prompt gets without a Reka Bytes session.
+pub use crate::engine::reka::SIGN_IN as REKA_SIGN_IN;
+pub use crate::engine::{CodexSignIn, RekaSignIn};
 
 /// The agent-browser session the engine's browser tool uses, for the browser pane.
 pub const BROWSER_SESSION: &str = crate::engine::BROWSER_SESSION;
@@ -20,7 +22,22 @@ pub fn save_api_key(provider: &str, key: &str) -> Result<()> {
     crate::engine::auth::save_api_key(provider, key.to_owned())
 }
 
-/// Removes the stored credential for `provider`: its API key, or the Codex login.
+/// The Reka Bytes account signed in for Rooxcode. Never carries its tokens.
+pub struct RekaAccount {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+/// The signed-in Reka Bytes account, shared with the terminal app.
+pub fn reka_account() -> Option<RekaAccount> {
+    crate::engine::reka::account().map(|a| RekaAccount {
+        name: a.name,
+        email: a.email,
+    })
+}
+
+/// Removes the stored credential for `provider`: its API key, the Codex
+/// login, or for `rooxcode` the Reka Bytes session.
 pub fn sign_out(provider: &str) -> Result<()> {
     crate::engine::logout::remove(provider)
 }

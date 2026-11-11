@@ -1,10 +1,10 @@
 //! The /login prompts. Credential storage stays in the runtime (auth, oauth).
 use crate::{
-    engine::{auth, oauth},
+    engine::{auth, oauth, reka},
     ui::Frontend,
     Result,
 };
-use std::{sync::mpsc::Receiver, time::Duration};
+use std::{future::Future, sync::mpsc::Receiver, time::Duration};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AuthOutcome {
@@ -19,7 +19,36 @@ pub(crate) fn sign_in(
     auth_type: &str,
 ) -> Result<AuthOutcome> {
     if auth_type == "oauth" && provider == "openai-codex" {
-        return codex(output, events);
+        let sign_in = oauth::BrowserSignIn::start()?;
+        let url = sign_in.url().to_owned();
+        return browser(
+            output,
+            events,
+            "Codex",
+            url,
+            move |rx| sign_in.complete(rx),
+            |token| oauth::save(&token),
+        );
+    }
+    if auth_type == "oauth" && provider == "rooxcode" {
+        // Starting asks the gateway for its issuer, so it runs on its own thread.
+        let sign_in = std::thread::spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(reka::BrowserSignIn::start("terminal"))
+        })
+        .join()
+        .map_err(|_| "Reka Bytes sign-in stopped unexpectedly")??;
+        let url = sign_in.url().to_owned();
+        return browser(
+            output,
+            events,
+            "Reka Bytes",
+            url,
+            move |rx| sign_in.complete(rx),
+            |account| reka::save(&account),
+        );
     }
     if auth_type != "api_key" {
         return Err("This provider requires a supported native authentication flow. Use a configured API-key provider.".into());
@@ -42,24 +71,31 @@ pub(crate) fn sign_in(
     Ok(AuthOutcome::Success)
 }
 
-fn codex(output: &mut Frontend, events: &Receiver<u8>) -> Result<AuthOutcome> {
-    let sign_in = oauth::BrowserSignIn::start()?;
-    let url = sign_in.url().to_owned();
+/// Drives one browser sign-in: opens `url`, takes a pasted redirect URL, and
+/// saves the result only when it completes, never after a cancel.
+fn browser<T: Send + 'static, F: Future<Output = Result<T>> + 'static>(
+    output: &mut Frontend,
+    events: &Receiver<u8>,
+    label: &'static str,
+    url: String,
+    complete: impl FnOnce(tokio::sync::mpsc::Receiver<String>) -> F + Send + 'static,
+    save: impl FnOnce(T) -> Result<()> + 'static,
+) -> Result<AuthOutcome> {
     output.set_auth_url(&url)?;
     let (manual_tx, manual_rx) = tokio::sync::mpsc::channel(1);
     let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let result = (|| -> Result<oauth::Token> {
+        let result = (|| -> Result<T> {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
             runtime.block_on(async {
                 tokio::select! {
                     biased;
-                    _ = cancelled.changed() => Err("Codex sign-in cancelled".into()),
-                    result = tokio::time::timeout(Duration::from_secs(600), sign_in.complete(manual_rx)) =>
-                        result.map_err(|_| "Codex sign-in timed out. Retry /login.")?,
+                    _ = cancelled.changed() => Err(format!("{label} sign-in cancelled").into()),
+                    result = tokio::time::timeout(Duration::from_secs(600), complete(manual_rx)) =>
+                        result.map_err(|_| format!("{label} sign-in timed out. Retry /login."))?,
                 }
             })
         })();
@@ -78,7 +114,7 @@ fn codex(output: &mut Frontend, events: &Receiver<u8>) -> Result<AuthOutcome> {
             };
             let answer = output.auth_prompt(
                 events,
-                "Codex browser sign-in · Ctrl+Y copy link",
+                &format!("{label} browser sign-in · Ctrl+Y copy link"),
                 placeholder,
                 true,
                 || match done_rx.try_recv() {
@@ -87,7 +123,7 @@ fn codex(output: &mut Frontend, events: &Receiver<u8>) -> Result<AuthOutcome> {
                         Ok(true)
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => Ok(false),
-                    Err(_) => Err("Codex login worker stopped unexpectedly".into()),
+                    Err(_) => Err("Sign-in worker stopped unexpectedly".into()),
                 },
             )?;
             if completed.is_some() || answer.is_none() {
@@ -96,7 +132,7 @@ fn codex(output: &mut Frontend, events: &Receiver<u8>) -> Result<AuthOutcome> {
             if !submitted {
                 manual_tx
                     .try_send(answer.unwrap())
-                    .map_err(|_| "Codex login is no longer waiting for a redirect")?;
+                    .map_err(|_| "Sign-in is no longer waiting for a redirect")?;
                 submitted = true;
             }
         }
@@ -106,14 +142,13 @@ fn codex(output: &mut Frontend, events: &Receiver<u8>) -> Result<AuthOutcome> {
     let joined = worker.join();
     let cleared = output.clear_auth_url();
     ui_result?;
-    joined.map_err(|_| "Codex login worker stopped unexpectedly")?;
+    joined.map_err(|_| "Sign-in worker stopped unexpectedly")?;
     cleared?;
     let Some(token) = completed else {
         return Ok(AuthOutcome::Cancelled);
     };
-    let token = token?;
     // Cancellation never commits, and failed attempts preserve the previous login.
-    oauth::save(&token)?;
+    save(token?)?;
     Ok(AuthOutcome::Success)
 }
 

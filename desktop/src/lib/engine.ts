@@ -102,6 +102,18 @@ export const codexCancel = () => invoke<void>("codex_cancel");
 /** `null` once signed in, else the error. */
 export const onCodexLogin = (listener: (error: string | null) => void) =>
   listen<string | null>("codex-login", (e) => listener(e.payload));
+/** The Reka Bytes account for Rooxcode models; its tokens never reach the window. */
+export type RekaAccount = { name: string | null; email: string | null };
+export const rekaAccount = () => invoke<RekaAccount | null>("reka_account");
+/** The error a Rooxcode prompt gets without a session. */
+export const rekaSignInError = () => invoke<string>("reka_sign_in_error");
+/** Opens Reka Bytes sign-in in the browser; returns its link. Watch `onRekaLogin` for the result. */
+export const rekaStart = () => invoke<string>("reka_start");
+export const rekaPaste = (url: string) => invoke<void>("reka_paste", { url });
+export const rekaCancel = () => invoke<void>("reka_cancel");
+/** `null` once signed in, else the error. */
+export const onRekaLogin = (listener: (error: string | null) => void) =>
+  listen<string | null>("reka-login", (e) => listener(e.payload));
 export type Changes = { base: string | null; bases: string[]; branch: string | null; diff: string; truncated: boolean };
 /** `base` is the branch the user picked; `null` lets the app pick the nearest one. */
 export const gitChanges = (folder: string, base: string | null = null) => invoke<Changes | null>("git_changes", { folder, base });

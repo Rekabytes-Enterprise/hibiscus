@@ -36,7 +36,10 @@ pub(super) fn inline_login<R: BufRead>(
         return Ok(());
     };
     let choices = if method == 0 {
-        vec!["Codex · ChatGPT account".into()]
+        vec![
+            "Codex · ChatGPT account".into(),
+            "Reka Bytes · Rooxcode models".into(),
+        ]
     } else {
         providers
             .iter()
@@ -53,7 +56,7 @@ pub(super) fn inline_login<R: BufRead>(
         return Ok(());
     };
     let provider = if method == 0 {
-        "openai-codex"
+        ["openai-codex", "rooxcode"][index]
     } else {
         choices[index].as_str()
     };
@@ -63,6 +66,23 @@ pub(super) fn inline_login<R: BufRead>(
         .as_ref()
         .ok_or("terminal events unavailable")?
         .receiver;
+    if provider == "rooxcode" {
+        // The engine reads the session on every request: no reconnect needed.
+        match sign_in(output, keys, provider, auth_type)? {
+            AuthOutcome::Success => {
+                let who = crate::engine::reka::account()
+                    .and_then(|a| a.email.or(a.name))
+                    .map(|who| format!(" as {who}"))
+                    .unwrap_or_default();
+                ui.info(
+                    output,
+                    &format!("Signed in with Reka Bytes{who}. Send your prompt again."),
+                )?;
+            }
+            AuthOutcome::Cancelled => ui.info(output, "Reka Bytes sign-in cancelled.")?,
+        }
+        return Ok(());
+    }
     match sign_in(output, keys, provider, auth_type)? {
         AuthOutcome::Success => {
             let start = state["sessionFile"]

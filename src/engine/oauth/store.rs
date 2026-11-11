@@ -1,5 +1,5 @@
 use crate::Result;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fs,
     io::Read,
@@ -32,23 +32,35 @@ impl Token {
         Ok(())
     }
 }
-pub(super) struct Store {
+/// A private, locked credential file in the Hibiscus home. Codex uses
+/// `codex-auth.json`; the Reka Bytes sign-in (engine/reka.rs) its own file.
+pub(in crate::engine) struct Store {
     path: PathBuf,
 }
 impl Store {
     pub(super) fn app() -> Result<Self> {
+        Self::named("codex-auth.json")
+    }
+    pub(in crate::engine) fn named(file: &str) -> Result<Self> {
         Ok(Self {
-            path: crate::paths::home()?.join("codex-auth.json"),
+            path: crate::paths::home()?.join(file),
         })
     }
     #[cfg(test)]
-    pub(super) fn at(path: PathBuf) -> Self {
+    pub(in crate::engine) fn at(path: PathBuf) -> Self {
         Self { path }
     }
-    pub(super) fn path(&self) -> &Path {
+    pub(in crate::engine) fn path(&self) -> &Path {
         &self.path
     }
     pub(super) fn read(&self) -> Result<Option<Token>> {
+        let token: Option<Token> = self.read_json()?;
+        if let Some(token) = &token {
+            token.validate()?;
+        }
+        Ok(token)
+    }
+    pub(in crate::engine) fn read_json<T: DeserializeOwned>(&self) -> Result<Option<T>> {
         let file = match fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -57,31 +69,38 @@ impl Store {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => {
-                return Err(
-                    "Cannot read native Codex credentials. Check codex-auth.json permissions."
-                        .into(),
+                return Err(format!(
+                    "Cannot read {}. Check its permissions.",
+                    self.path.display()
                 )
+                .into())
             }
         };
         let meta = file.metadata()?;
         if !meta.is_file() || meta.permissions().mode() & 0o077 != 0 || meta.len() > 128 * 1024 {
-            return Err("codex-auth.json must be a bounded regular private file, mode 0600".into());
+            return Err(format!(
+                "{} must be a bounded regular private file, mode 0600",
+                self.path.display()
+            )
+            .into());
         }
         let mut bytes = vec![];
         file.take(128 * 1024 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > 128 * 1024 {
-            return Err("Codex credential exceeds supported bounds".into());
+            return Err("Stored credential exceeds supported bounds".into());
         }
-        let token: Token = serde_json::from_slice(&bytes)
-            .map_err(|_| "Invalid codex-auth.json. Use /login to replace it.")?;
-        token.validate()?;
-        Ok(Some(token))
+        let value = serde_json::from_slice(&bytes)
+            .map_err(|_| format!("Invalid {}. Use /login to replace it.", self.path.display()))?;
+        Ok(Some(value))
     }
     pub(super) fn write(&self, token: &Token) -> Result<()> {
         token.validate()?;
-        super::super::config::atomic(&self.path, &serde_json::to_vec(token)?)
+        self.write_json(token)
     }
-    pub(super) fn try_lock(&self) -> Result<fs::File> {
+    pub(in crate::engine) fn write_json<T: Serialize>(&self, value: &T) -> Result<()> {
+        super::super::config::atomic(&self.path, &serde_json::to_vec(value)?)
+    }
+    pub(in crate::engine) fn try_lock(&self) -> Result<fs::File> {
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -95,7 +114,7 @@ impl Store {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(self.path.with_extension("lock"))?;
         if !file.metadata()?.is_file() || file.metadata()?.permissions().mode() & 0o077 != 0 {
-            return Err("Codex credential lock must be a regular private file".into());
+            return Err("Credential lock must be a regular private file".into());
         }
         // Advisory locks survive atomic auth-file replacement and cover processes.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
@@ -103,7 +122,7 @@ impl Store {
         }
         Ok(file)
     }
-    pub(super) async fn lock(&self) -> Result<fs::File> {
+    pub(in crate::engine) async fn lock(&self) -> Result<fs::File> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
             match self.try_lock() {

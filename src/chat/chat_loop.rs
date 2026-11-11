@@ -473,11 +473,18 @@ pub(super) fn chat<R: BufRead>(
                 }
             }
             Err(error) => {
+                // A Rooxcode prompt refused for sign-in goes back in the input (#185).
+                let sign_in = submitted
+                    && output.is_full()
+                    && error.to_string().contains(crate::engine::reka::SIGN_IN);
+                if sign_in {
+                    output.restore_draft(message.to_owned(), images.clone());
+                }
                 if submitted {
                     last_failed = Some((message.to_owned(), images));
                 }
                 handle_chat_error(error, rpc, output, ui)?;
-                if submitted && output.is_full() {
+                if submitted && output.is_full() && !sign_in {
                     ui.info(output, "Use /restore to review the failed prompt and attachments. Nothing is resent automatically.")?;
                 }
             }

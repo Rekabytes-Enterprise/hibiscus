@@ -13,7 +13,7 @@ use tokio::{
 // Public Codex OAuth client identifier, not a secret or a Pi client identity.
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const REDIRECT: &str = "http://localhost:1455/auth/callback";
-pub(super) struct Endpoints {
+pub(in crate::engine) struct Endpoints {
     authorize: String,
     token: String,
 }
@@ -32,24 +32,27 @@ impl Endpoints {
         }
     }
 }
-pub(super) fn now() -> u64 {
+pub(in crate::engine) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
-fn random() -> Result<String> {
+pub(in crate::engine) fn random() -> Result<String> {
     let mut bytes = [0u8; 32];
     rand::rngs::SysRng
         .try_fill_bytes(&mut bytes)
-        .map_err(|_| "Cannot obtain secure randomness for Codex login")?;
+        .map_err(|_| "Cannot obtain secure randomness for sign-in")?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
-pub(super) struct Pending {
+/// A browser sign-in waiting for its loopback callback. Codex and Reka Bytes
+/// (engine/reka.rs) share it; `label` names the service in errors.
+pub(in crate::engine) struct Pending {
     listener: std::net::TcpListener,
-    state: String,
-    verifier: String,
-    redirect: String,
+    pub(in crate::engine) state: String,
+    pub(in crate::engine) verifier: String,
+    pub(in crate::engine) redirect: String,
+    label: &'static str,
 }
 enum Callback {
     Code(String),
@@ -59,25 +62,33 @@ impl Pending {
     pub(super) fn bind() -> Result<Self> {
         let listener = std::net::TcpListener::bind("127.0.0.1:1455")
             .map_err(|_| "Codex login needs loopback port 1455. Close other pending Codex sign-ins and retry /login.")?;
-        Self::new(listener, REDIRECT.into())
+        Self::new(listener, REDIRECT.into(), "Codex")
     }
-    fn new(listener: std::net::TcpListener, redirect: String) -> Result<Self> {
+    pub(in crate::engine) fn new(
+        listener: std::net::TcpListener,
+        redirect: String,
+        label: &'static str,
+    ) -> Result<Self> {
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,
             state: random()?,
             verifier: random()?,
             redirect,
+            label,
         })
     }
     #[cfg(test)]
     pub(super) fn local() -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let redirect = format!("http://{}/auth/callback", listener.local_addr().unwrap());
-        Self::new(listener, redirect).unwrap()
+        Self::new(listener, redirect, "Codex").unwrap()
+    }
+    pub(in crate::engine) fn challenge(&self) -> String {
+        URL_SAFE_NO_PAD.encode(Sha256::digest(self.verifier.as_bytes()))
     }
     pub(super) fn url(&self, endpoints: &Endpoints) -> Result<reqwest::Url> {
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(self.verifier.as_bytes()));
+        let challenge = self.challenge();
         let mut url = reqwest::Url::parse(&endpoints.authorize)?;
         url.query_pairs_mut().extend_pairs([
             ("response_type", "code"),
@@ -96,21 +107,36 @@ impl Pending {
     fn code(&self, input: &str) -> Result<String> {
         match self.callback(input)? {
             Callback::Code(code) => Ok(code),
-            Callback::Denied => Err("Codex sign-in was denied. Retry /login when ready.".into()),
+            Callback::Denied => Err(self.denied()),
         }
     }
+    fn denied(&self) -> Box<dyn std::error::Error + Send + Sync> {
+        format!(
+            "{} sign-in was denied. Retry /login when ready.",
+            self.label
+        )
+        .into()
+    }
     fn callback(&self, input: &str) -> Result<Callback> {
-        callback(input, &self.redirect, &self.state)
+        callback(input, &self.redirect, &self.state, self.label)
     }
     pub(super) async fn complete(
         self,
-        mut manual: Receiver<String>,
+        manual: Receiver<String>,
         endpoints: &Endpoints,
     ) -> Result<Token> {
+        let code = self.wait(manual).await?;
+        exchange(endpoints, &code, &self.verifier, &self.redirect).await
+    }
+    /// The authorization code from the browser callback or a pasted redirect URL.
+    pub(in crate::engine) async fn wait(&self, mut manual: Receiver<String>) -> Result<String> {
         let listener = tokio::net::TcpListener::from_std(self.listener.try_clone()?)?;
-        let code = loop {
+        let path = reqwest::Url::parse(&self.redirect)?.path().to_owned();
+        let origin = self.redirect.trim_end_matches(path.as_str()).to_owned();
+        let prefix = format!("{path}?");
+        Ok(loop {
             tokio::select! {
-                answer = manual.recv() => break self.code(&answer.ok_or("Codex login input closed")?)?,
+                answer = manual.recv() => break self.code(&answer.ok_or("Sign-in input closed")?)?,
                 accepted = listener.accept() => {
                     let (mut socket, peer) = accepted?;
                     if !peer.ip().is_loopback() { continue; }
@@ -128,8 +154,8 @@ impl Pending {
                         let mut parts = line.split_whitespace();
                         if parts.next()? != "GET" { return None; }
                         let target = parts.next()?;
-                        if !target.starts_with("/auth/callback?") { return None; }
-                        self.callback(&format!("{}{}",self.redirect.trim_end_matches("/auth/callback"),target)).ok()
+                        if !target.starts_with(&prefix) { return None; }
+                        self.callback(&format!("{origin}{target}")).ok()
                     });
                     let (status, text) = if code.is_some() { ("200 OK", "Return to Hibiscus to finish sign-in. You can close this tab.") }
                         else { ("400 Bad Request", "This callback does not match the pending sign-in. Return to Hibiscus.") };
@@ -137,13 +163,12 @@ impl Pending {
                     let _ = tokio::time::timeout(Duration::from_secs(1),socket.write_all(reply.as_bytes())).await;
                     match code {
                         Some(Callback::Code(code)) => break code,
-                        Some(Callback::Denied) => return Err("Codex sign-in was denied. Retry /login when ready.".into()),
+                        Some(Callback::Denied) => return Err(self.denied()),
                         None => {},
                     }
                 }
             }
-        };
-        exchange(endpoints, &code, &self.verifier, &self.redirect).await
+        })
     }
 }
 
@@ -253,14 +278,14 @@ fn account_id(access: &str) -> Result<String> {
 }
 
 #[cfg(test)]
-pub(super) mod tests;
+pub(in crate::engine) mod tests;
 
-fn callback(input: &str, redirect: &str, state: &str) -> Result<Callback> {
+fn callback(input: &str, redirect: &str, state: &str, label: &str) -> Result<Callback> {
     if input.len() > 16384 || input.chars().any(char::is_control) {
-        return Err("Invalid Codex redirect URL".into());
+        return Err(format!("Invalid {label} redirect URL").into());
     }
     let url = reqwest::Url::parse(input.trim())
-        .map_err(|_| "Paste the full Codex redirect URL, including its state")?;
+        .map_err(|_| format!("Paste the full {label} redirect URL, including its state"))?;
     let expected = reqwest::Url::parse(redirect)?;
     if url.scheme() != expected.scheme()
         || url.host_str() != expected.host_str()
@@ -270,7 +295,7 @@ fn callback(input: &str, redirect: &str, state: &str) -> Result<Callback> {
         || url.password().is_some()
         || url.fragment().is_some()
     {
-        return Err("Codex redirect does not match this login attempt".into());
+        return Err(format!("{label} redirect does not match this login attempt").into());
     }
     let mut params = HashMap::new();
     for (key, value) in url.query_pairs() {
@@ -278,11 +303,11 @@ fn callback(input: &str, redirect: &str, state: &str) -> Result<Callback> {
             .insert(key.into_owned(), value.into_owned())
             .is_some()
         {
-            return Err("Duplicate Codex redirect parameter".into());
+            return Err(format!("Duplicate {label} redirect parameter").into());
         }
     }
     if params.get("state").map(String::as_str) != Some(state) {
-        return Err("Codex login state mismatch. Retry /login.".into());
+        return Err(format!("{label} login state mismatch. Retry /login.").into());
     }
     if params.contains_key("error") {
         return Ok(Callback::Denied);
@@ -291,18 +316,18 @@ fn callback(input: &str, redirect: &str, state: &str) -> Result<Callback> {
         .remove("code")
         .filter(|s| !s.is_empty() && s.len() <= 8192 && !s.chars().any(char::is_control))
         .map(Callback::Code)
-        .ok_or_else(|| "Missing Codex authorization code".into())
+        .ok_or_else(|| format!("Missing {label} authorization code").into())
 }
 
 #[cfg(feature = "fuzzing")]
 pub(super) fn fuzz_callback(bytes: &[u8]) {
     if let Ok(input) = std::str::from_utf8(bytes) {
-        let _ = callback(input, REDIRECT, "fuzz-state");
+        let _ = callback(input, REDIRECT, "fuzz-state", "Codex");
         if matches!(
-            callback(input, REDIRECT, "fuzz-state"),
+            callback(input, REDIRECT, "fuzz-state", "Codex"),
             Ok(Callback::Code(_))
         ) {
-            assert!(callback(input, REDIRECT, "different-state").is_err());
+            assert!(callback(input, REDIRECT, "different-state", "Codex").is_err());
         }
     }
 }

@@ -1,4 +1,5 @@
-//! Anonymous Rooxcode catalog and client metadata. These headers are not authentication.
+//! Rooxcode catalog and chat requests. The catalog is anonymous; chat sends the
+//! Reka Bytes session (reka.rs). The client headers are metadata, not authentication.
 use super::config::{Api, Authentication, Config, Model, Provider};
 use crate::Result;
 use rand::TryRng;
@@ -93,13 +94,16 @@ fn client(timeout: u64) -> Result<reqwest::Client> {
         .build()?)
 }
 
+/// A chat request. `token` is attached only when the provider points at the
+/// Rooxcode service itself, never at another address.
 pub(super) fn chat_request(
     provider: &Provider,
     body: &Value,
     session: &SessionId,
+    token: Option<&str>,
 ) -> Result<reqwest::RequestBuilder> {
     validate_provider(provider)?;
-    Ok(client(CHAT_TIMEOUT_SECONDS)?
+    let request = client(CHAT_TIMEOUT_SECONDS)?
         .post(format!(
             "{}/chat/completions",
             provider.base_url.trim_end_matches('/')
@@ -107,10 +111,47 @@ pub(super) fn chat_request(
         .header("x-rooxcode-client", "hibiscus")
         .header("x-rooxcode-version", env!("CARGO_PKG_VERSION"))
         .header("x-rooxcode-session", session.as_str())
-        .json(body))
+        .json(body);
+    Ok(match token {
+        Some(token) if provider.base_url.trim_end_matches('/') == URL => request.bearer_auth(token),
+        _ => request,
+    })
 }
 
-async fn bounded_body(response: &mut reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+/// Sends a chat request with the signed-in session. An access token the
+/// gateway reports expired is refreshed and the request sent once more: the
+/// gateway refused it before queueing, so nothing ran.
+pub(super) async fn send_chat(
+    provider: &Provider,
+    body: &Value,
+    session: &SessionId,
+) -> Result<reqwest::Response> {
+    let mut rejected = None;
+    loop {
+        let token = super::reka::access(rejected.as_deref()).await?;
+        let response = chat_request(provider, body, session, Some(&token))?
+            .send()
+            .await
+            .map_err(|_| "Rooxcode network request failed. Check service connectivity; nothing was retried automatically.")?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let (_, code, message) = response_parts(response).await;
+        match code.as_deref() {
+            Some("rooxcode_session_expired") if rejected.is_none() => rejected = Some(token),
+            Some("rooxcode_sign_in_required") => {
+                super::reka::forget();
+                return Err(super::reka::SIGN_IN.into());
+            }
+            _ => return Err(message.into()),
+        }
+    }
+}
+
+pub(super) async fn bounded_body(
+    response: &mut reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>> {
     let mut bytes = vec![];
     while let Some(chunk) = response
         .chunk()
@@ -244,6 +285,7 @@ pub(super) fn code_message(status: u16, code: Option<&str>) -> String {
         Some("request_too_large") => "the conversation exceeds the gateway request size limit. Compact the conversation before continuing",
         Some("hibiscus_client_required") => "client metadata was rejected. Update Hibiscus; no account or API key is needed",
         Some("inference_disabled") => "inference is disabled by the operator",
+        Some("rooxcode_sign_in_required" | "rooxcode_session_expired") => "the Reka Bytes session is missing or expired. Sign in again with /login",
         Some("model_not_found" | "model_unavailable" | "model_ineligible") => "the selected model is unavailable. Open /models and explicitly choose an available model",
         Some("queue_full") => "the shared waiting queue is full. Retry manually later",
         Some("network_queue_full") => "your network already has its maximum number of waiting requests. Let those requests finish before retrying manually",
@@ -304,7 +346,12 @@ pub(super) fn stream_error(event: &Value) -> String {
     )
 }
 
-pub(super) async fn response_error(mut response: reqwest::Response) -> String {
+pub(super) async fn response_error(response: reqwest::Response) -> String {
+    response_parts(response).await.2
+}
+
+/// The status, error code and the message to show for a failed response.
+async fn response_parts(mut response: reqwest::Response) -> (u16, Option<String>, String) {
     let status = response.status().as_u16();
     let retry = response
         .headers()
@@ -315,11 +362,12 @@ pub(super) async fn response_error(mut response: reqwest::Response) -> String {
         .await
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-    let message = code_message(
-        status,
-        body.as_ref().and_then(|b| b["error"]["code"].as_str()),
-    );
-    with_retry(message, retry)
+    let code = body
+        .as_ref()
+        .and_then(|b| b["error"]["code"].as_str())
+        .map(str::to_owned);
+    let message = with_retry(code_message(status, code.as_deref()), retry);
+    (status, code, message)
 }
 
 #[cfg(test)]
@@ -375,7 +423,7 @@ mod tests {
         assert!(super::super::config::access(provider).is_ok());
         assert!(super::super::config::key(provider).is_err());
         let id = SessionId::new().unwrap();
-        let request = chat_request(provider, &json!({"model":"discovered"}), &id)
+        let request = chat_request(provider, &json!({"model":"discovered"}), &id, None)
             .unwrap()
             .build()
             .unwrap();

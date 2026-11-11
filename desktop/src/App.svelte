@@ -4,7 +4,7 @@
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
+  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaSignInError, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -19,10 +19,18 @@
   import Models from "./lib/Models.svelte";
   import NewSession from "./lib/NewSession.svelte";
   import Settings from "./lib/Settings.svelte";
+  import SignIn from "./lib/SignIn.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
 
   const RECENT = "hibiscus.recentFolders";
+  // Set by "Continue with my own provider": no sign-in screen at launch (#185).
+  const OWN_PROVIDER = "hibiscus.ownProvider";
+
+  // The Reka Bytes sign-in screen: null until the stored account is checked.
+  let gate = $state<boolean | null>(null);
+  // The engine's error for a Rooxcode prompt without a session.
+  let signInError = "";
 
   let home = $state("");
   let folder = $state<string | null>(null);
@@ -74,6 +82,20 @@
     (folder && saved[folder]?.find((s) => s.path === (pending ?? sessionFile))?.title) || "New session",
   );
 
+  onMount(async () => {
+    signInError = await rekaSignInError().catch(() => "");
+    const account = await rekaAccount().catch(() => null);
+    gate = !account && !localStorage.getItem(OWN_PROVIDER);
+  });
+
+  /** Shows the sign-in screen again, after signing out or for a Rooxcode prompt. */
+  function showSignIn() {
+    localStorage.removeItem(OWN_PROVIDER);
+    gate = true;
+  }
+
+  const needsSignIn = (text: unknown) => !!signInError && String(text ?? "").includes(signInError);
+
   // Like a new chat: start in the last folder, or home the first time.
   onMount(async () => {
     home = await homeDir();
@@ -86,6 +108,8 @@
     onEvent((event) => {
       chat = apply(chat, event);
       if (event.type === "agent_settled") void refresh();
+      // A session revoked or expired on the gateway mid-run.
+      if (event.type === "message_end" && needsSignIn(event.message?.errorMessage)) showSignIn();
       if (event.type === "agent_start") browserShown = false;
       if (event.type === "tool_execution_start" && event.toolName === "browser") browsing(event.toolCallId, event.args?.args);
       // Hibi starting the dev server opens the pane, where its output shows.
@@ -318,7 +342,11 @@
     try {
       await post(command);
     } catch (e) {
-      notice(message(e));
+      // Refused before it was sent: the text goes back in the message box.
+      if (needsSignIn(message(e))) {
+        composer?.add(text, images);
+        showSignIn();
+      } else notice(message(e));
     }
   }
 
@@ -395,7 +423,7 @@
     <UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />
     <div class="body">
   {#if page === "settings"}
-    <Settings onback={() => (page = "chat")} onsaved={signedIn} />
+    <Settings onback={() => (page = "chat")} onsaved={signedIn} onsignin={showSignIn} />
   {:else}
     <div class="center">
     {#if error}<div class="banner error">{error}</div>{/if}
@@ -498,6 +526,12 @@
     </div>
   </main>
 </div>
+
+{#if gate === null}
+  <div style="position: fixed; inset: 0; z-index: 50; background: var(--bg);"></div>
+{:else if gate}
+  <SignIn onsignedin={() => { gate = false; page = "chat"; }} onskip={() => { localStorage.setItem(OWN_PROVIDER, "1"); gate = false; }} />
+{/if}
 
 {#if dialog === "models"}
   <Models current={model} onclose={() => (dialog = null)} onchosen={async () => { dialog = null; await refresh(); }} />

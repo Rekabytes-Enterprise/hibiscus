@@ -4,8 +4,9 @@ Version 0.3.5 replaces Pi's SDK and subprocess runtime with Hibiscus-owned Rust 
 
 ## Provider configuration
 
-Rooxcode is built in at `https://api-rooxcode.reka-bytes.my/v1`. No account,
-login, key or config entry is needed. Hibiscus fetches `GET /models` when needed
+Rooxcode is built in at `https://api-rooxcode.reka-bytes.my/v1`. No key or
+config entry is needed, and the model list loads without an account. Sending a
+prompt to a Rooxcode model needs a Reka Bytes sign-in (see below). Hibiscus fetches `GET /models` when needed
 at startup and when opening `/models`, then uses the existing streaming Chat
 Completions adapter. With no explicit model, the first discovered Rooxcode model starts a new
 conversation, even if another provider key exists in the environment. Explicit selections
@@ -19,6 +20,31 @@ Older sessions receive a UUID when loaded and persist it before generation.
 These copyable headers are client metadata, not authentication or separate quota
 buckets. No provider key, Codex token or shared product secret is attached.
 Rooxcode does not appear in the API-key login choices.
+
+### Reka Bytes sign-in
+
+Rooxcode chat requests carry `Authorization: Bearer` with the signed-in Reka
+Bytes device session. Sign in from `/login` → Browser Login → Reka Bytes in the
+terminal, or from the desktop app's sign-in screen. Both use the browser with
+PKCE, `state` and `nonce` and a loopback callback on `127.0.0.1` port 14565,
+14566 or 14567 at `/oauth/callback` (the first free one), with a paste-the-URL
+fallback. The issuer and client ID come from the gateway's
+`GET /api/hibiscus/auth`, and the gateway exchanges the code for its own
+tokens. They're stored in `rooxcode-auth.json` (mode 0600) in the Hibiscus home,
+shared by the desktop app and the terminal, and sent only to the built-in
+Rooxcode origin, never to a provider configured at another address.
+
+- A prompt to a Rooxcode model without a session is refused before it's added
+  to the conversation. The TUI puts it back in the input; the desktop app puts
+  it back in the message box and shows the sign-in screen.
+- The access token is refreshed when it expires within a minute, under a lock
+  shared across processes, because refresh tokens rotate. If the gateway
+  reports the access token expired, Hibiscus refreshes and sends the same
+  request once more; the gateway refused it before queueing.
+- A revoked or unknown session (`rooxcode_sign_in_required`) removes the local
+  session and asks for sign-in again. Nothing is resent.
+- `/logout` → `rooxcode`, or Sign out in the desktop settings, deletes the local
+  session and revokes the device on the gateway when it can be reached.
 
 The catalog supplies IDs and may advertise verified context, request-byte and
 message limits. Missing context stays unknown; image and reasoning capabilities

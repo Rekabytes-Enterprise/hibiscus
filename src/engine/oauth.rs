@@ -1,8 +1,8 @@
 //! Native Codex subscription OAuth. No external agent or credential-store import.
 //! Protocol reference: Pi 1.1.0's legacy openai-codex adapter, not its separate
 //! dynamically registered openai-chatgpt flow. Client ID is a public identifier.
-mod protocol;
-mod store;
+pub(super) mod protocol;
+pub(super) mod store;
 
 use crate::Result;
 pub(super) const RESOURCE: &str = "https://chatgpt.com/backend-api/codex";

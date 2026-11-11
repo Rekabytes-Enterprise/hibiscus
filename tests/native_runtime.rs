@@ -31,6 +31,16 @@ impl Fixture {
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
         fs::write(home.join("config.json"),serde_json::to_vec(&json!({"model":"test/model","providers":[{"id":"test","baseUrl":format!("http://{address}/v1"),"api":api,"apiKeyEnv":"HIBISCUS_TEST_NATIVE_KEY","models":[{"id":"model","contextWindow":128000,"maxTokens":4096,"images":true}]},{"id":"rooxcode","baseUrl":format!("http://{address}/v1"),"api":"chat_completions","authentication":"rooxcode"}]})).unwrap()).unwrap();
+        // A signed-in Reka Bytes session, so Rooxcode prompts are sent (#185).
+        // The mock isn't the Rooxcode origin, so it never receives the token.
+        let auth = home.join("rooxcode-auth.json");
+        fs::write(
+            &auth,
+            json!({"access":"a".repeat(43),"refresh":"r".repeat(43),"expires":4_000_000_000u64})
+                .to_string(),
+        )
+        .unwrap();
+        fs::set_permissions(&auth, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
         let requests = Arc::new(Mutex::new(vec![]));
         let captured = requests.clone();
         let headers = Arc::new(Mutex::new(vec![]));

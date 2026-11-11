@@ -232,18 +232,24 @@ async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -
                     .selected(&config)
                     .and_then(|(p, m)| {
                         config::access(p)?;
+                        // Refused before it's added to the conversation, so
+                        // the prompt can be sent again after sign-in (#185).
+                        if p.authentication == config::Authentication::Rooxcode {
+                            super::reka::signed_in()?;
+                        }
                         if !images.is_empty() && !m.images {
                             return Err("Selected model does not support images".into());
                         }
                         Ok(())
                     });
                 if let Err(e) = validation {
-                    let message = if session
-                        .lock()
-                        .unwrap()
-                        .model
-                        .as_ref()
-                        .is_none_or(|(p, _)| p == super::rooxcode::ID)
+                    let message = if e.to_string() != super::reka::SIGN_IN
+                        && session
+                            .lock()
+                            .unwrap()
+                            .model
+                            .as_ref()
+                            .is_none_or(|(p, _)| p == super::rooxcode::ID)
                     {
                         catalog_error.as_deref().unwrap_or("").to_owned()
                     } else {

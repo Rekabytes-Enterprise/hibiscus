@@ -24,8 +24,8 @@ pub(super) async fn exchange(
     out: &Sender<Value>,
 ) -> Result<Stream> {
     let anonymous = provider.authentication == crate::engine::config::Authentication::Rooxcode;
-    let req = if anonymous {
-        crate::engine::rooxcode::chat_request(provider, body, &conversation.rooxcode_session)?
+    let mut response = if anonymous {
+        crate::engine::rooxcode::send_chat(provider, body, &conversation.rooxcode_session).await?
     } else {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -37,24 +37,20 @@ pub(super) async fn exchange(
         } else {
             crate::engine::config::key(provider)?
         };
-        authenticated_request(&client, url, body.clone(), &key, codex)?
-    };
-    let req = if provider.api == Api::Anthropic {
-        req.header("anthropic-version", "2023-06-01")
-    } else {
-        req
-    };
-    let mut response = req.send().await.map_err(|_| {
-        if anonymous { "Rooxcode network request failed. Check service connectivity; nothing was retried automatically." } else { "Provider network request failed. Check connectivity and endpoint configuration." }
-    })?;
-    if !response.status().is_success() {
-        if anonymous {
-            return Err(crate::engine::rooxcode::response_error(response)
-                .await
-                .into());
+        let req = authenticated_request(&client, url, body.clone(), &key, codex)?;
+        let req = if provider.api == Api::Anthropic {
+            req.header("anthropic-version", "2023-06-01")
+        } else {
+            req
+        };
+        let response = req.send().await.map_err(|_| {
+            "Provider network request failed. Check connectivity and endpoint configuration."
+        })?;
+        if !response.status().is_success() {
+            return Err(format!("Provider returned HTTP {}. Check authentication, model access, quota and endpoint configuration.",response.status().as_u16()).into());
         }
-        return Err(format!("Provider returned HTTP {}. Check authentication, model access, quota and endpoint configuration.",response.status().as_u16()).into());
-    }
+        response
+    };
     let mut decoder = Decoder::default();
     let mut state = Stream::default();
     let mut capacity = Capacity::Pending;
