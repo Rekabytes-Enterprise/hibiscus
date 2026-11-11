@@ -13,7 +13,7 @@ use tokio::{
 // Public Codex OAuth client identifier, not a secret or a Pi client identity.
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const REDIRECT: &str = "http://localhost:1455/auth/callback";
-pub(super) struct Endpoints {
+pub(in crate::engine) struct Endpoints {
     authorize: String,
     token: String,
 }
