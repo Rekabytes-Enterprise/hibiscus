@@ -23,6 +23,15 @@
   // While a run is active: steer = delivered before its next step, else after it finishes.
   let steer = $state(false);
 
+  let input: HTMLTextAreaElement;
+
+  /** Adds text and images from elsewhere in the app, such as browser comments, for the user to send. */
+  export function add(more: string, moreImages: Image[]) {
+    text = text.trim() ? `${text.trim()}\n\n${more}` : more;
+    images = [...images, ...moreImages];
+    input?.focus();
+  }
+
   function submit() {
     const message = text.trim();
     if (disabled) return;
@@ -89,6 +98,7 @@
     <button class="plain attach" onclick={() => picker.click()} {disabled} title="Attach images" aria-label="Attach images"><Icon name="paperclip" size={16} /></button>
     <input bind:this={picker} type="file" accept="image/*" multiple hidden onchange={(e) => { void attach(Array.from(e.currentTarget.files ?? [])); e.currentTarget.value = ""; }} />
     <textarea
+      bind:this={input}
       bind:value={text}
       {onkeydown}
       {onpaste}
