@@ -1,6 +1,6 @@
 [package]
 name = "hibiscus"
-version = "0.3.37"
+version = "0.3.38"
 edition = "2021"
 description = "A standalone Rust coding agent"
 license = "MIT"

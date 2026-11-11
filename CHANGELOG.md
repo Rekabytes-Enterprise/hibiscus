@@ -4,6 +4,8 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.38] - 2026-11-12
+
 ### Added
 
 - Sign in with Reka Bytes to use Rooxcode models (#185). The desktop app opens on a sign-in screen with "Sign in with Reka Bytes", or "Continue with my own provider" for people who only use their own API key or Codex. Sign-in happens in the browser and uses the same account as the Rooxcode website. In the terminal, the model list still loads without an account; the first prompt to a Rooxcode model asks you to sign in with `/login` → Browser Login → Reka Bytes and puts the prompt back in the input. One sign-in covers the desktop app and the terminal on the same computer. Sign out from Settings → Providers in the desktop app, or `/logout` in the terminal.
