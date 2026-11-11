@@ -120,6 +120,24 @@ For other providers, optionally create `~/.hibiscus/config.json`, or the equival
 }
 ```
 
+### Training-data opt-out (terminal and desktop)
+
+The terminal client uses the same privacy preference as the desktop app's
+Settings → Privacy switch. To request that OpenRouter use only providers that
+do not store or train on your prompts, create `privacy.json` in the Hibiscus
+home directory (`~/.hibiscus` by default, or `$HIBISCUS_HOME` when set):
+
+```json
+{"denyTraining": true}
+```
+
+When enabled, OpenRouter request bodies include
+`"provider": {"data_collection": "deny"}`. This changes **OpenRouter
+requests only**; requests to other providers are unaffected. The preference
+is **off by default**, including when the file is missing, unreadable or
+invalid. Some free OpenRouter models may not be available under this restriction.
+Hibiscus reads `privacy.json` on every request, so no restart is needed.
+
 Supported `api` values are `responses`, `chat_completions` and `anthropic`. A custom OpenAI-compatible provider uses its own ID, base URL, key environment variable and model IDs. These providers use explicit configuration; Rooxcode and the OpenRouter and OpenCode Go providers below discover their catalogs. Only configure endpoints you trust to receive your prompts and credential. HTTPS is required except on loopback for local providers and tests. Redirects are disabled.
 
 `model` is `provider/model-id`; `HIBISCUS_MODEL` can override it at launch. Explicit model preferences and resumed-session selections are preserved. Otherwise a new session discovers and selects an available Rooxcode model, with no paid-provider fallback. The header shows no active model when neither provider credentials nor an available Rooxcode catalog provide access. Credential presence does not prove remote model access. Model IDs may contain slashes. `maxSteps` bounds provider/tool iterations per user turn, from 1 to 1024. `maxTokens` is the output limit. Optional `contextWindow` must exceed `maxTokens` and should match the provider's actual capability. Unknown context limits stay unknown. `reasoning: true` enables off/low/medium/high for the Responses adapter; it is not inferred from a model name. Only mark `images: true` when the model supports them.
