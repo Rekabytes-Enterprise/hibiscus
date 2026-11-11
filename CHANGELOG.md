@@ -4,6 +4,14 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.37] - 2026-11-12
+
+The 0.3.36 desktop build never finished, so this is the first desktop release with the 0.3.36 changes below.
+
+### Fixed
+
+- Release: the desktop Linux build skips the GitHub runner's Azure Ubuntu mirror and downloads its libraries from archive.ubuntu.com. The Azure mirror stalled the 0.3.36 build for over 30 minutes.
+
 ## [0.3.36] - 2026-11-11
 
 ### Added
