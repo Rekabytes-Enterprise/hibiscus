@@ -7,13 +7,18 @@
     codexStart,
     listProviders,
     onCodexLogin,
+    rekaAccount,
     saveApiKey,
     signOut,
     type ProviderInfo,
+    type RekaAccount,
   } from "./engine";
   import Icon from "./Icon.svelte";
 
-  let { onsaved }: { onsaved: () => Promise<void> } = $props();
+  // onsignin shows the Reka Bytes sign-in screen.
+  let { onsaved, onsignin }: { onsaved: () => Promise<void>; onsignin: () => void } = $props();
+
+  let reka = $state<RekaAccount | null>(null);
 
   let providers = $state<ProviderInfo[]>([]);
   let chosen = $state<string | null>(null);
@@ -30,6 +35,7 @@
     try {
       // rooxcode is built in: nothing to set up.
       providers = (await listProviders()).filter((p) => p.apiKey || p.browser);
+      reka = await rekaAccount();
     } catch (e) {
       error = message(e);
     }
@@ -104,6 +110,18 @@
     copied = true;
   }
 
+  /** Signing out of Reka Bytes brings back the sign-in screen. */
+  async function rekaSignOut() {
+    error = null;
+    try {
+      await signOut("rooxcode");
+      reka = null;
+      onsignin();
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
   async function remove(p: ProviderInfo) {
     error = null;
     try {
@@ -118,6 +136,18 @@
 <h2>Providers</h2>
 <p class="muted small">Keys and logins are stored in Hibiscus's private files, the same ones the terminal app uses.</p>
 <ul class="settings-list">
+  <li>
+    <div class="provider">
+      <Icon name="log-in" />
+      <span class="grow">Reka Bytes · Rooxcode models</span>
+      <span class="small" class:ok={reka} class:muted={!reka}>{reka ? `Signed in${reka.email || reka.name ? ` as ${reka.email ?? reka.name}` : ""}` : "Not signed in"}</span>
+      {#if reka}
+        <button onclick={rekaSignOut}>Sign out</button>
+      {:else}
+        <button onclick={onsignin}>Sign in</button>
+      {/if}
+    </div>
+  </li>
   {#each providers as p}
     <li>
       <div class="provider">

@@ -6,7 +6,7 @@
   import Privacy from "./Privacy.svelte";
   import Providers from "./Providers.svelte";
 
-  let { onback, onsaved }: { onback: () => void; onsaved: () => Promise<void> } = $props();
+  let { onback, onsaved, onsignin }: { onback: () => void; onsaved: () => Promise<void>; onsignin: () => void } = $props();
   let page = $state<"providers" | "privacy" | "terms" | "about">("providers");
 </script>
 
@@ -21,7 +21,7 @@
   </nav>
   <section>
     {#if page === "providers"}
-      <Providers {onsaved} />
+      <Providers {onsaved} {onsignin} />
     {:else if page === "privacy"}
       <Privacy />
     {:else if page === "about"}

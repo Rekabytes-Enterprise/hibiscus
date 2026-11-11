@@ -15,8 +15,10 @@ pub(in crate::engine::oauth) fn access(account: &str) -> String {
         URL_SAFE_NO_PAD.encode(claims.to_string())
     )
 }
-pub(in crate::engine::oauth) struct Server {
+pub(in crate::engine) struct Server {
     pub endpoint: Endpoints,
+    /// `http://127.0.0.1:<port>`, for mocks other than the Codex endpoints.
+    pub base: String,
     pub requests: Arc<Mutex<Vec<HashMap<String, String>>>>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
@@ -24,12 +26,14 @@ pub(in crate::engine::oauth) struct Server {
 impl Server {
     pub fn new(replies: Vec<(u16, String)>) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = Endpoints::local(&format!("http://{}", listener.local_addr().unwrap()));
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let endpoint = Endpoints::local(&base);
         listener.set_nonblocking(true).unwrap();
         let requests = Arc::new(Mutex::new(vec![]));
         let captured = requests.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
+        let own = base.clone();
         let worker = thread::spawn(move || {
             let mut replies = std::collections::VecDeque::from(replies);
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -52,6 +56,7 @@ impl Server {
                 }
                 let route = line.clone();
                 let mut len = 0;
+                let mut authorization = None;
                 loop {
                     line.clear();
                     if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
@@ -60,30 +65,39 @@ impl Server {
                     if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
                         len = v.trim().parse::<usize>().unwrap();
                     }
+                    if let Some(v) = line.to_lowercase().strip_prefix("authorization:") {
+                        authorization = Some(v.trim().to_owned());
+                    }
                 }
                 assert!(len < 65536);
                 let mut bytes = vec![0; len];
                 if reader.read_exact(&mut bytes).is_err() {
                     continue;
                 }
-                let mut form: HashMap<String, String> = reqwest::Url::parse(&format!(
-                    "http://test/?{}",
-                    String::from_utf8(bytes).unwrap()
-                ))
-                .unwrap()
-                .query_pairs()
-                .map(|(k, v)| (k.into_owned(), v.into_owned()))
-                .collect();
+                let raw = String::from_utf8(bytes).unwrap();
+                let mut form: HashMap<String, String> =
+                    reqwest::Url::parse(&format!("http://test/?{raw}"))
+                        .unwrap()
+                        .query_pairs()
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect();
                 form.insert("route".into(), route);
+                form.insert("body".into(), raw);
+                if let Some(value) = authorization {
+                    form.insert("authorization".into(), value);
+                }
                 captured.lock().unwrap().push(form);
                 let (status, body) = replies
                     .pop_front()
                     .unwrap_or((500, "unexpected request".into()));
+                // Replies can point back at this server, as discovery documents do.
+                let body = body.replace("{base}", &own);
                 let _=write!(stream,"HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
             }
         });
         Self {
             endpoint,
+            base,
             requests,
             stop,
             worker: Some(worker),
@@ -105,7 +119,7 @@ pub(in crate::engine::oauth) fn receipt(account: &str, refresh: &str) -> String 
     serde_json::json!({"access_token":access(account),"refresh_token":refresh,"expires_in":3600})
         .to_string()
 }
-pub(in crate::engine::oauth) fn runtime() -> tokio::runtime::Runtime {
+pub(in crate::engine) fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

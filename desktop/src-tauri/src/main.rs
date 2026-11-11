@@ -1,7 +1,7 @@
 //! Thin glue between the window and `hibiscus::desktop`. The engine runs in
 //! this process on its own thread; the frontend only sees JSON records.
 
-use hibiscus::desktop::{self, CodexSignIn, Engine, Start};
+use hibiscus::desktop::{self, CodexSignIn, Engine, RekaSignIn, Start};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -235,6 +235,64 @@ async fn codex_paste(codex: State<'_, Codex>, url: String) -> Result<(), String>
 #[tauri::command]
 async fn codex_cancel(codex: State<'_, Codex>) -> Result<(), String> {
     codex.cancel();
+    Ok(())
+}
+
+/// The pending Reka Bytes sign-in, kept like the Codex one.
+#[derive(Default)]
+struct Reka(Codex);
+
+#[derive(Serialize)]
+struct RekaAccount {
+    name: Option<String>,
+    email: Option<String>,
+}
+
+/// The signed-in Reka Bytes account, or `null`. Tokens never reach the window.
+#[tauri::command]
+async fn reka_account() -> Option<RekaAccount> {
+    desktop::reka_account().map(|a| RekaAccount {
+        name: a.name,
+        email: a.email,
+    })
+}
+
+/// The error text of a Rooxcode prompt sent without a session.
+#[tauri::command]
+fn reka_sign_in_error() -> &'static str {
+    desktop::REKA_SIGN_IN
+}
+
+/// Opens Reka Bytes sign-in in the browser and returns its link. The result
+/// arrives as a `reka-login` event: `null` once signed in, else the error.
+#[tauri::command]
+async fn reka_start(app: AppHandle, reka: State<'_, Reka>) -> Result<String, String> {
+    reka.0.cancel();
+    let sign_in = RekaSignIn::start().await.map_err(|e| e.to_string())?;
+    let url = sign_in.url().to_owned();
+    let paste = sign_in.paste();
+    let done = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let error = sign_in.finish().await.err().map(|e| e.to_string());
+        let _ = done.emit("reka-login", error);
+    });
+    *reka.0 .0.lock().unwrap() = Some((paste, task));
+    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| e.to_string())?;
+    Ok(url)
+}
+
+#[tauri::command]
+async fn reka_paste(reka: State<'_, Reka>, url: String) -> Result<(), String> {
+    let paste = reka.0 .0.lock().unwrap().as_ref().map(|(paste, _)| paste.clone());
+    paste
+        .ok_or("No Reka Bytes sign-in is waiting.")?
+        .try_send(url)
+        .map_err(|_| "Reka Bytes sign-in is no longer waiting for a link.".into())
+}
+
+#[tauri::command]
+async fn reka_cancel(reka: State<'_, Reka>) -> Result<(), String> {
+    reka.0.cancel();
     Ok(())
 }
 
@@ -686,6 +744,7 @@ fn main() {
         .plugin(tauri_plugin_websocket::init())
         .manage(App::default())
         .manage(Codex::default())
+        .manage(Reka::default())
         .invoke_handler(tauri::generate_handler![
             open_project,
             send,
@@ -706,6 +765,11 @@ fn main() {
             codex_start,
             codex_paste,
             codex_cancel,
+            reka_account,
+            reka_sign_in_error,
+            reka_start,
+            reka_paste,
+            reka_cancel,
             git_changes,
             open_file,
             browser,

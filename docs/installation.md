@@ -13,8 +13,10 @@ The native binary needs neither Pi nor Node. It connects directly to configured 
 
 ## Prebuilt installer
 
-On startup, Hibiscus can discover and use Rooxcode models without login, keys or
-manual configuration. The public service endpoint is built into the provider.
+On startup, Hibiscus lists Rooxcode models without keys or manual configuration.
+Using them needs a free Reka Bytes sign-in: `/login` → Browser Login → Reka Bytes
+in the terminal, or the sign-in screen in the desktop app. The public service
+endpoint is built into the provider.
 See [provider behavior and limits](native-runtime.md#provider-configuration).
 
 For a published native release, the bundled `install.sh` downloads a platform archive and verifies its SHA-256 checksum before atomic replacement. Supported targets are Linux musl and macOS on x86_64/aarch64. The installer needs curl, tar, install and shasum or sha256sum. It does not bootstrap Pi, Node or credentials.

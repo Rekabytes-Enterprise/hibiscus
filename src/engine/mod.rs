@@ -12,6 +12,7 @@ mod paging;
 mod policy;
 pub(crate) mod privacy;
 mod provider;
+pub(crate) mod reka;
 mod rooxcode;
 pub(crate) mod session;
 mod thinking;
@@ -19,6 +20,7 @@ pub(crate) mod tool_output;
 mod tools;
 
 pub use oauth::CodexSignIn;
+pub use reka::RekaSignIn;
 pub(crate) use session::SessionStart;
 
 /// Quota derives from the actual native catalog, including extension authoring tools.

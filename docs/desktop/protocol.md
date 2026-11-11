@@ -21,7 +21,10 @@ engine.shutdown();
 - `shutdown()` (or dropping the engine) stops the run and waits for its tools to stop.
 - `desktop::save_api_key(provider, key)` stores a key in `auth.json` (`0600`) after the same checks as `/login`. Start a new engine afterwards, as the TUI reconnects after `/login`.
 - `desktop::key_page(provider)` gives the page where a built-in provider's key is created.
-- `desktop::sign_out(provider)` removes a stored API key, or the Codex login for `openai-codex`.
+- `desktop::sign_out(provider)` removes a stored API key, the Codex login for `openai-codex`, or the Reka Bytes session for `rooxcode` (also revoked on the gateway when it can be reached).
+- `desktop::RekaSignIn::start().await` starts Reka Bytes sign-in for Rooxcode models: it asks the gateway for the issuer and listens on `127.0.0.1` port 14565, 14566 or 14567. Open `url()`, then await `finish()`; `paste()` takes the redirect URL by hand. It times out after 10 minutes and saves `rooxcode-auth.json`, which the terminal app shares.
+- `desktop::reka_account()` gives the signed-in account's name and email, never its tokens. Engines read the session on every Rooxcode request, so no restart is needed after sign-in.
+- `desktop::REKA_SIGN_IN` is the error a Rooxcode `prompt` gets without a session. The prompt was not added to the conversation, so it can be sent again after sign-in.
 - `desktop::training_denied()` / `desktop::set_training_denied(deny)` read and save the "don't let providers train on my prompts" choice in `privacy.json` in the Hibiscus home. While it is on, OpenRouter requests carry `"provider": {"data_collection": "deny"}`. Engines read it on every request, in the terminal app too, so no restart is needed.
 - `desktop::CodexSignIn::start()` listens on `localhost:1455` and builds the Codex sign-in link (`url()`). Open it in the browser, then await `finish()`. `paste()` takes the redirect URL by hand when the browser cannot reach the app. Dropping `finish()` cancels and frees the port; a failed or cancelled sign-in keeps the previous login. It times out after 10 minutes.
 - `desktop::sessions(workspace)` lists saved sessions (path, title, modified time), newest first.
