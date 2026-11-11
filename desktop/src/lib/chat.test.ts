@@ -80,8 +80,16 @@ describe("fromMessages", () => {
     expect(chat.items).toEqual([
       { kind: "user", text: "fix it", images: 1 },
       { kind: "assistant", text: "Reading.", streaming: false },
-      { kind: "tool", id: "c1", name: "read", args: { path: "a.rs" }, running: false, error: false, output: "fn main() {}", diff: "", ms: null },
+      { kind: "tool", id: "c1", name: "read", args: { path: "a.rs" }, running: false, error: false, output: "fn main() {}", diff: "", image: "", ms: null },
     ]);
+  });
+
+  it("keeps a screenshot a tool returned", () => {
+    const chat = fromMessages([
+      { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "browser", arguments: { args: ["screenshot"] } }] },
+      { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "saved" }, { type: "image", mimeType: "image/jpeg", data: "AAAA" }] },
+    ]);
+    expect(chat.items[0]).toMatchObject({ output: "saved", image: "data:image/jpeg;base64,AAAA" });
   });
 });
 
@@ -111,7 +119,7 @@ describe("outputs", () => {
 });
 
 const tool = (name: string, args: any, extra: Partial<Tool> = {}): Tool => ({
-  kind: "tool", id: name + JSON.stringify(args), name, args, running: false, error: false, output: "", diff: "", ms: null, ...extra,
+  kind: "tool", id: name + JSON.stringify(args), name, args, running: false, error: false, output: "", diff: "", image: "", ms: null, ...extra,
 });
 
 describe("tool calls", () => {
