@@ -1,9 +1,36 @@
 <script lang="ts">
-  import { toolHunks, toolView, type Tool } from "./chat";
+  import { result, toolHunks, toolView, type Tool } from "./chat";
+  import { request } from "./engine";
   import Hunks from "./Hunks.svelte";
   import Icon from "./Icon.svelte";
 
-  let { tool, folder }: { tool: Tool; folder: string | null } = $props();
+  let { tool: row, folder }: { tool: Tool; folder: string | null } = $props();
+
+  // A page of a long session may cut this row's output or leave its image out
+  // (#171); the full result loads when the row opens, is copied, or its
+  // screenshot scrolls into view.
+  let full = $state<ReturnType<typeof result> | null>(null);
+  const tool = $derived(full ? { ...row, ...full } : row);
+  let loading: Promise<void> | null = null;
+  let tries = 0;
+  function load(): Promise<void> {
+    loading ??= request({ type: "get_tool_result", toolCallId: row.id }).then(
+      (m) => void (full = result(m)),
+      // A cached chat shows before the engine has switched to its session, so try again shortly.
+      () => {
+        loading = null;
+        if (++tries < 3) return new Promise((done) => setTimeout(done, 1000)).then(load);
+      },
+    );
+    return loading;
+  }
+  let placeholder = $state<HTMLDivElement>();
+  $effect(() => {
+    if (!placeholder) return;
+    const watch = new IntersectionObserver((seen) => seen.some((e) => e.isIntersecting) && void load(), { rootMargin: "200px" });
+    watch.observe(placeholder);
+    return () => watch.disconnect();
+  });
 
   const view = $derived(toolView(tool, folder));
   const hunks = $derived(tool.error ? [] : toolHunks(tool));
@@ -15,6 +42,7 @@
   );
   let copied = $state(false);
   async function copy() {
+    if (row.trimmed) await load();
     await navigator.clipboard.writeText(String(copyable ?? ""));
     copied = true;
     setTimeout(() => (copied = false), 1500);
@@ -25,6 +53,9 @@
   let open = $state(false);
   $effect(() => {
     if (tool.error) open = true;
+  });
+  $effect(() => {
+    if (open && row.trimmed) void load();
   });
 </script>
 
@@ -41,7 +72,9 @@
     <span class="grow"></span>
     {#if tool.ms != null && tool.ms >= 100}<span class="ms">{(tool.ms / 1000).toFixed(1)}s</span>{/if}
   </button>
-  {#if tool.image}
+  {#if tool.pendingImage && !tool.image}
+    <div class="shot pending" bind:this={placeholder} aria-label="Loading the screenshot"></div>
+  {:else if tool.image}
     <button class="shot" onclick={() => (zoomed = true)} title="Show full size" aria-label="Show the screenshot full size"><img src={tool.image} alt="What Hibi saw" /></button>
   {/if}
   {#if zoomed}

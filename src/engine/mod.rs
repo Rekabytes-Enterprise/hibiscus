@@ -8,6 +8,7 @@ mod context;
 mod event;
 pub(crate) mod logout;
 pub(crate) mod oauth;
+mod paging;
 mod policy;
 pub(crate) mod privacy;
 mod provider;

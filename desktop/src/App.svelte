@@ -246,7 +246,7 @@
       }
       folder = path;
       saveRecent(opened(recent, path));
-      const fresh = session ? fromMessages((await request({ type: "get_messages" })).messages ?? []) : empty();
+      const fresh = session ? await latest() : empty();
       // Set together, so the chat view is rebuilt once, with the new conversation.
       if (session) sessionFile = session;
       chat = cached ? newer(cached, fresh) : fresh;
@@ -264,6 +264,28 @@
     } finally {
       settle();
       opening = false;
+    }
+  }
+
+  // Messages per page of a saved session: the latest first, older ones on scroll (#171).
+  const PAGE = 60;
+
+  /** The latest page of the engine's open session. */
+  async function latest(): Promise<Chat> {
+    const page = await request({ type: "get_messages", limit: PAGE });
+    return { ...fromMessages(page.messages ?? []), start: page.start ?? 0, edited: page.edited ?? [] };
+  }
+
+  /** Adds the page before the oldest loaded message, as the user scrolls up. */
+  async function older() {
+    const session = sessionFile;
+    if (!chat.start) return;
+    try {
+      const page = await request({ type: "get_messages", limit: PAGE, before: chat.start });
+      if (sessionFile !== session) return;
+      chat = { ...chat, items: [...fromMessages(page.messages ?? []).items, ...chat.items], start: page.start ?? 0 };
+    } catch (e) {
+      notice(message(e));
     }
   }
 
@@ -390,7 +412,7 @@
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>
       {/if}
-      {#key sessionFile}<ChatView {chat} {folder} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} />{/key}
+      {#key sessionFile}<ChatView {chat} {folder} onolder={older} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} />{/key}
     {/if}
     {#if folder}
       <div class="dock">

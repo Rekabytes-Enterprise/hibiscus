@@ -39,7 +39,8 @@ Every command gets exactly one `response` with the same `id`:
 | `abort` | | Cancels the active run. The run still ends with `agent_settled`. |
 | `clear_queue` | | Drops queued prompts. |
 | `get_state` | | Session state, including extension commands. |
-| `get_messages` | | `data.messages`: the conversation. |
+| `get_messages` | optional `limit`, `before` | Without `limit`, `data.messages` is the whole conversation. With `limit` (at most 1000), it's one page for the desktop chat: up to `limit` messages ending before position `before` (default: the end), moved back so it never starts with a tool result. `data.start` is the page's first position, `data.total` the conversation's length, and `data.edited` the files written or edited without error, newest first. In a page, tool output over 2 KB is cut (`trimmed: true`), edit diffs over 16 KB are left out, tool images are left out (`omittedImages: n`), and prompt images keep only their type. |
+| `get_tool_result` | `toolCallId` | `data`: that tool result in full, as stored. For rows a page trimmed. |
 | `get_tool_outputs` / `get_tool_output` | `index` (1-based, optional) | Stored tool output. |
 | `get_session_stats` | | Token usage and context. |
 | `get_available_models` | | `data.models: [{provider, id, contextWindow, reasoning, images}]` for providers the user can use; `data.catalogError` if a catalog refresh failed. Refreshes catalogs when idle. |
