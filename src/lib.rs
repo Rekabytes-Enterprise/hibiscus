@@ -5,6 +5,7 @@ mod checkpoints;
 mod cli;
 mod client;
 pub mod desktop;
+mod devserver;
 mod engine;
 mod extensions;
 mod paths;

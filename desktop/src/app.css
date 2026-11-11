@@ -377,6 +377,12 @@ aside.browser .empty .detect { display: flex; flex-wrap: wrap; justify-content: 
 aside.browser .note { padding: 8px 16px; font-size: 12px; }
 aside.browser .note.error { color: var(--error); }
 .body:has(aside.browser) .center { min-width: 320px; }
+/* Dev server output under the browser pane (#176). */
+aside.browser .output { flex: none; height: 32%; min-height: 120px; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+aside.browser .output header { gap: 8px; padding: 4px 10px; font-size: 12px; }
+aside.browser .output code { min-width: 0; font: 12px ui-monospace, Menlo, monospace; }
+aside.browser .output pre { flex: 1; min-height: 0; margin: 0; padding: 8px 12px; overflow: auto; background: var(--code-bg); font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+aside.browser .detect code { font: 11.5px ui-monospace, Menlo, monospace; }
 /* Comment mode in the browser pane (#175). */
 aside.browser .screen.commenting { cursor: crosshair; }
 aside.browser .outline { position: absolute; pointer-events: none; border: 2px solid var(--raspberry); border-radius: 3px; }

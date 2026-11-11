@@ -16,11 +16,19 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
     if agent_browser().is_some() {
-        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] or [\"errors\"]. [\"screenshot\"] returns the visible page as an image you can see; [\"screenshot\",\"#app\"] captures one element and [\"screenshot\",\"--full\"] the whole page. Take one to check how a page looks: layout, overlap, colours, blank areas. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the dev server with bash in the background first.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
+        definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches live in the app's browser pane. Pass one agent-browser command as args, for example [\"open\",\"http://localhost:5173\"], [\"snapshot\",\"-i\"] (interactive elements with refs such as @e1), [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"], [\"console\"] or [\"errors\"]. [\"screenshot\"] returns the visible page as an image you can see; [\"screenshot\",\"#app\"] captures one element and [\"screenshot\",\"--full\"] the whole page. Take one to check how a page looks: layout, overlap, colours, blank areas. Refs last until the page changes, so snapshot again after navigating. Use it to check web pages you build: start the project's dev server with the dev_server tool first, not with bash.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
+        definitions.push(json!({"name":"dev_server","description":"Run the project's dev server in the background, owned by the app: one per folder, kept running between tool calls and shown to the user in the browser pane. `start` runs `command`, or the project's usual one (package.json dev/start script, Django, Rails, or a static index.html) when omitted, waits until it prints its local URL and returns it; if a server is already running it returns that one. `status` reports it, `output` returns its last lines (build errors show up here), `stop` stops it. Open the URL with the browser tool.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["start","status","output","stop"]},"command":{"type":"string","maxLength":4096},"lines":{"type":"integer","minimum":1,"maximum":500}},"required":["action"],"additionalProperties":false}}));
     }
     definitions.extend(crate::extensions::agent_definitions());
     definitions.extend(crate::checkpoints::definitions());
     definitions
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevServer {
+    action: String,
+    command: Option<String>,
+    lines: Option<usize>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,6 +208,15 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
                 return Err(format!("The browser tool does not accept {flag}").into());
             }
         }
+        "dev_server" => {
+            let a: DevServer = serde_json::from_value(args.clone())?;
+            if !["start", "status", "output", "stop"].contains(&a.action.as_str())
+                || a.command.as_ref().is_some_and(|c| c.len() > 4096)
+                || !(1..=500).contains(&a.lines.unwrap_or(50))
+            {
+                return Err("Invalid dev_server action, command or lines".into());
+            }
+        }
         _ => return Err("Unknown tool".into()),
     }
     Ok(())
@@ -365,6 +382,46 @@ pub async fn execute(
                     details,
                 ),
             })
+        }
+
+        "dev_server" => {
+            use crate::devserver;
+            let a: DevServer = serde_json::from_value(args.clone())?;
+            let tail = |n| devserver::output(cwd, n).join("\n");
+            let describe = |s: &devserver::Status| {
+                let state = match (s.running, s.exit_code, &s.url) {
+                    (true, _, Some(url)) => format!("running at {url}"),
+                    (true, _, None) => "running, but it hasn't printed a local URL yet".into(),
+                    (false, code, _) => format!(
+                        "stopped (exit code {})",
+                        code.map_or("unknown".into(), |c| c.to_string())
+                    ),
+                };
+                format!("`{}` is {state}.", s.command)
+            };
+            let text = match a.action.as_str() {
+                "start" => {
+                    devserver::start(cwd, a.command.as_deref())?;
+                    let s = tokio::select! {
+                        s = devserver::ready(cwd, Duration::from_secs(60)) => s.ok_or("The dev server is gone")?,
+                        _ = cancel.changed() => return Err("Tool cancelled; the dev server keeps running".into()),
+                    };
+                    format!("{}\nLast output:\n{}", describe(&s), tail(20))
+                }
+                "status" => devserver::status(cwd)
+                    .map_or("No dev server is running for this folder.".into(), |s| {
+                        describe(&s)
+                    }),
+                "output" => match devserver::status(cwd) {
+                    Some(s) => format!("{}\n{}", describe(&s), tail(a.lines.unwrap_or(50))),
+                    None => "No dev server is running for this folder.".into(),
+                },
+                _ => {
+                    devserver::stop(cwd);
+                    "Stopped the dev server.".into()
+                }
+            };
+            Ok(result(text, json!({})))
         }
 
         "goal" => {
@@ -538,6 +595,15 @@ mod tests {
         let small = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
         assert_eq!((small.width(), small.height()), (1568, 392));
         assert!(note.contains("scaled from 4000x1000 to 1568x392"), "{note}");
+    }
+    #[test]
+    fn dev_server_tool_checks_its_action() {
+        let ok = |args: Value| validate("dev_server", &args).is_ok();
+        assert!(ok(json!({"action":"start","command":"npm run dev"})));
+        assert!(ok(json!({"action":"output","lines":100})));
+        assert!(!ok(json!({"action":"restart"})));
+        assert!(!ok(json!({"action":"output","lines":0})));
+        assert!(!ok(json!({"action":"start","cwd":"/"})));
     }
     #[test]
     fn browser_tool_refuses_commands_outside_its_own_headless_chrome() {

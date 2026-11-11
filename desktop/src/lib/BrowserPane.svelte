@@ -8,6 +8,7 @@
   import Icon from "./Icon.svelte";
 
   let {
+    folder,
     pointer,
     poke,
     wide,
@@ -16,6 +17,8 @@
     onclose,
     onnotes,
   }: {
+    /** The open folder, whose dev server the pane can start. */
+    folder: string;
     /** The element Hibi is acting on; `seq` changes for every action. */
     pointer: { target: string; seq: number } | null;
     /** Changes after each browser tool call, to connect once a browser exists. */
@@ -44,6 +47,54 @@
   // Dev servers found on this computer: null before a search, then the ports.
   let servers = $state<number[] | null>(null);
   let searching = $state(false);
+
+  // The folder's dev server run by the app (#176), and the command to start one.
+  type Server = { command: string; running: boolean; exitCode: number | null; url: string | null };
+  let server = $state<Server | null>(null);
+  let startCommand = $state<string | null>(null);
+  let starting = $state(false);
+  let showOutput = $state(false);
+  let output = $state<string[]>([]);
+  let log = $state<HTMLPreElement>();
+
+  const checkServer = async () => {
+    server = await invoke<Server | null>("dev_server_status", { folder }).catch(() => null);
+  };
+
+  async function startServer() {
+    starting = true;
+    error = null;
+    try {
+      server = await invoke<Server | null>("dev_server_start", { folder });
+      if (server?.url) return void go(["open", server.url]);
+      error = server?.running ? "The dev server is running but hasn't printed its address yet." : "The dev server stopped. Its output is below.";
+      showOutput = true;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      starting = false;
+    }
+  }
+
+  async function stopServer() {
+    await invoke("dev_server_stop", { folder }).catch(() => {});
+    server = null;
+    showOutput = false;
+  }
+
+  // The output panel follows the server while it's open.
+  $effect(() => {
+    if (!showOutput) return;
+    const read = async () => {
+      output = await invoke<string[]>("dev_server_output", { folder }).catch(() => []);
+      await checkServer();
+      await tick();
+      log?.scrollTo({ top: log.scrollHeight });
+    };
+    void read();
+    const timer = setInterval(read, 1000);
+    return () => clearInterval(timer);
+  });
 
   const run = (args: string[]) => invoke<any>("browser", { args });
 
@@ -232,6 +283,7 @@
   $effect(() => {
     void poke;
     void connect();
+    void checkServer();
   });
 
   // Moves the cursor onto the element, then pulses where Hibi clicks.
@@ -303,6 +355,7 @@
     searching = false;
     servers = found;
     if (found.length === 1) void go(["open", `http://localhost:${found[0]}`]);
+    if (!found.length) startCommand = await invoke<string | null>("dev_server_detect", { folder }).catch(() => null);
   }
 
   function submit(e: SubmitEvent) {
@@ -322,6 +375,9 @@
     <form class="address" onsubmit={submit}>
       <input bind:value={address} onfocus={() => (editing = true)} onblur={() => (editing = false)} placeholder="Type a URL" aria-label="Address" spellcheck="false" />
     </form>
+    {#if server}
+      <button class="iconbtn" class:on={showOutput} onclick={() => (showOutput = !showOutput)} title="Dev server output" aria-label="Dev server output" aria-pressed={showOutput}><Icon name="terminal" size={14} /></button>
+    {/if}
     <button class="iconbtn" onclick={onwide} title={wide ? "Shrink" : "Expand"} aria-label={wide ? "Shrink" : "Expand"}><Icon name={wide ? "minimize" : "maximize"} size={14} /></button>
     <button class="iconbtn" onclick={onclose} title="Close" aria-label="Close browser"><Icon name="x" size={14} /></button>
   </header>
@@ -407,8 +463,13 @@
           {:else if servers && servers.length > 1}
             <span class="muted">Open a dev server:</span>
             {#each servers as port (port)}<button class="link" onclick={() => go(["open", `http://localhost:${port}`])}>localhost:{port}</button>{/each}
+          {:else if starting}
+            <span class="muted">Starting <code>{startCommand}</code>…</span>
+          {:else if servers && !servers.length && startCommand}
+            <span class="muted">No dev server is running.</span>
+            <button class="link" onclick={startServer}>Start <code>{startCommand}</code></button>
           {:else if servers && !servers.length}
-            <span class="muted">No dev server found on the usual ports. Ask Hibi to start one.</span>
+            <span class="muted">No dev server found, and this folder has no start command Hibiscus knows. Ask Hibi to start one.</span>
             <button class="link" onclick={detect}>Try again</button>
           {:else}
             <span class="muted">Preview your app instead?</span>
@@ -419,5 +480,17 @@
         <span class="muted">Connecting to the browser…</span>
       {/if}
     </div>
+  {/if}
+  {#if showOutput && server}
+    <section class="output">
+      <header>
+        <code class="ellipsis">{server.command}</code>
+        <span class="muted">{server.running ? (server.url ?? "running") : `stopped${server.exitCode != null ? ` (exit ${server.exitCode})` : ""}`}</span>
+        <span class="grow"></span>
+        {#if server.running}<button class="plain" onclick={stopServer}>Stop</button>{/if}
+        <button class="iconbtn" onclick={() => (showOutput = false)} title="Hide output" aria-label="Hide output"><Icon name="x" size={13} /></button>
+      </header>
+      <pre bind:this={log}>{output.join("\n") || "No output yet."}</pre>
+    </section>
   {/if}
 </aside>

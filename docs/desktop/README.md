@@ -65,3 +65,12 @@ The engine's `browser` tool lets Hibi open and test web pages, and the browser p
 - The tool runs every command in the `hibiscus` agent-browser session, headless. It refuses commands that manage agent-browser itself and flags that would attach the user's own Chrome or profile (`--profile`, `--cdp`, `--auto-connect` and similar).
 - agent-browser uses its own Chrome for Testing, or Google Chrome when it's installed. If it finds neither, the tool downloads Chrome for Testing once, about 150 MB, into `~/.agent-browser/browsers`, and retries.
 - The pane reads the session's stream port with `agent-browser stream status` and connects through the Tauri WebSocket plugin from Rust, because the stream accepts only localhost page origins and the Linux app's origin is `http://tauri.localhost`. The pane sizes the page to fit itself with `set viewport`, and uses ack pacing so the stream sends a new frame only after the last one is drawn. Frames are shown and never stored. Closing the pane, or quitting the app, closes the browser, so it starts blank next time.
+
+### Dev servers
+
+The app runs one dev server per folder for the pane and for Hibi's `dev_server` tool (`src/devserver.rs`).
+
+- The pane's empty state offers to start the project's usual command when no server is running: the `dev`, `start`, `serve` or `preview` script from `package.json` (run with pnpm, yarn, bun or npm by lockfile), `python3 manage.py runserver`, `bin/rails server`, or `python3 -m http.server 8000` for a folder with an `index.html`.
+- Hibi's tool starts, checks, reads and stops the same server. `start` waits up to 60 seconds for the first local URL in the output and returns it. A running server is reused, not started twice.
+- The server runs in its own process group with `BROWSER=none` and `PYTHONUNBUFFERED=1`. The app keeps its last 1,000 lines of output, which the pane shows under the page.
+- Opening another folder, removing the folder from the sidebar, or quitting the app stops the folder's server and everything it started.

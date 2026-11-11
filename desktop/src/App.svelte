@@ -88,6 +88,11 @@
       if (event.type === "agent_settled") void refresh();
       if (event.type === "agent_start") browserShown = false;
       if (event.type === "tool_execution_start" && event.toolName === "browser") browsing(event.toolCallId, event.args?.args);
+      // Hibi starting the dev server opens the pane, where its output shows.
+      if (event.type === "tool_execution_start" && event.toolName === "dev_server") {
+        browserCalls.add(event.toolCallId);
+        if (event.args?.action === "start") browserOpen = true;
+      }
       if (event.type === "tool_execution_end" && browserCalls.delete(event.toolCallId)) poke++;
     }),
   );
@@ -144,7 +149,11 @@
   }
 
   /** Takes a folder out of the list only; its files and saved sessions stay. */
+  /** A folder's dev server stops when the folder closes. */
+  const stopServer = (path: string) => void invoke("dev_server_stop", { folder: path }).catch(() => {});
+
   function removeFolder(path: string) {
+    stopServer(path);
     saveRecent(removed(recent, path));
     delete saved[path];
   }
@@ -206,6 +215,7 @@
     error = null;
     const t = timer(`open ${session ? "session" : "folder"}`);
     const inPlace = path === folder && !!session && !restart;
+    if (folder && path !== folder) stopServer(folder);
     const before = { chat, sessionFile };
     remember();
     // A session opened before shows at once; the engine's copy replaces it below if the file changed.
@@ -453,6 +463,7 @@
   {/if}
   {#if showBrowser}
     <BrowserPane
+      folder={folder!}
       {pointer}
       {poke}
       wide={browserWide}
