@@ -1,7 +1,8 @@
 <script lang="ts">
-  import type { SavedSession } from "./engine";
+  import type { RekaAccount, SavedSession } from "./engine";
   import Icon from "./Icon.svelte";
   import Menu from "./Menu.svelte";
+  import PixelAvatar from "./PixelAvatar.svelte";
   import { name, where } from "./paths";
 
   let {
@@ -16,6 +17,10 @@
     onaddfolder,
     onremovefolder,
     onsettings,
+    onaccount,
+    account,
+    onsignin,
+    onsignout,
   }: {
     home: string;
     groups: { folder: string; sessions: SavedSession[] }[];
@@ -30,10 +35,27 @@
     /** Takes the folder out of the list; nothing on disk changes. */
     onremovefolder: (folder: string) => void;
     onsettings: () => void;
+    /** Opens the Account page in Settings. */
+    onaccount: () => void;
+    /** The signed-in Reka Bytes account; without one the footer shows the computer's user. */
+    account: RekaAccount | null;
+    onsignin: () => void;
+    onsignout: () => void;
   } = $props();
 
-  // Hibiscus has no account; the footer shows the computer's user.
-  const user = $derived(home.split("/").filter(Boolean).pop() ?? "");
+  // Signed out, the footer shows the computer's user.
+  const user = $derived(account?.name || account?.email || home.split("/").filter(Boolean).pop() || "");
+  let profileOpen = $state(false);
+  let profile: HTMLElement;
+
+  function pick(action: () => void) {
+    profileOpen = false;
+    action();
+  }
+
+  function outside(e: PointerEvent) {
+    if (profileOpen && !profile.contains(e.target as Node)) profileOpen = false;
+  }
   let closed = $state<Record<string, boolean>>({});
   // The session whose title is being edited.
   let editing = $state<string | null>(null);
@@ -53,6 +75,8 @@
 
   const label = (path: string) => `${name(path)} · ${where(path, home)}`;
 </script>
+
+<svelte:window onpointerdown={outside} onkeydown={(e) => { if (profileOpen && e.key === "Escape") profileOpen = false; }} />
 
 <aside class="left">
   <div class="traffic" data-tauri-drag-region></div>
@@ -104,8 +128,37 @@
     {/each}
   </div>
   <footer>
-    <span class="avatar">{user.slice(0, 1).toUpperCase()}</span>
-    <span class="grow username">{user}</span>
+    <div class="menu profile grow" bind:this={profile}>
+      <button class="profilebtn" aria-haspopup="menu" aria-expanded={profileOpen} onclick={() => (profileOpen = !profileOpen)}>
+        {#if account}
+          <span class="avatar pixel"><PixelAvatar id={account.avatar} size={20} /></span>
+        {:else}
+          <span class="avatar">{user.slice(0, 1).toUpperCase()}</span>
+        {/if}
+        <span class="username">{user}</span>
+        <Icon name="chevron-down" size={12} />
+      </button>
+      {#if profileOpen}
+        <div class="popover" role="menu" aria-label="Account">
+          {#if account}
+            <div class="who">
+              <PixelAvatar id={account.avatar} size={32} />
+              <div class="grow">
+                <div class="ellipsis">{account.name || "Reka Bytes account"}</div>
+                {#if account.email}<div class="small muted ellipsis">{account.email}</div>{/if}
+              </div>
+            </div>
+            <button role="menuitem" onclick={() => pick(onaccount)}><Icon name="user" size={14} /> Manage account</button>
+          {:else}
+            <button role="menuitem" onclick={() => pick(onsignin)}><Icon name="log-in" size={14} /> Sign in with Reka Bytes</button>
+          {/if}
+          <button role="menuitem" onclick={() => pick(onsettings)}><Icon name="settings" size={14} /> Settings</button>
+          {#if account}
+            <button role="menuitem" onclick={() => pick(onsignout)}><Icon name="log-out" size={14} /> Sign out</button>
+          {/if}
+        </div>
+      {/if}
+    </div>
     <button class="iconbtn" onclick={onsettings} title="Settings" aria-label="Settings"><Icon name="settings" /></button>
   </footer>
 </aside>

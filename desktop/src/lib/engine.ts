@@ -103,8 +103,22 @@ export const codexCancel = () => invoke<void>("codex_cancel");
 export const onCodexLogin = (listener: (error: string | null) => void) =>
   listen<string | null>("codex-login", (e) => listener(e.payload));
 /** The Reka Bytes account for Rooxcode models; its tokens never reach the window. */
-export type RekaAccount = { name: string | null; email: string | null };
+/** `avatar` is the pixel character picked on the Rooxcode account page; `null` is the default. */
+export type RekaAccount = { name: string | null; email: string | null; avatar: string | null };
 export const rekaAccount = () => invoke<RekaAccount | null>("reka_account");
+/** Like `rekaAccount`, with the name and avatar reloaded from Rooxcode first. */
+export const rekaProfile = () => invoke<RekaAccount | null>("reka_profile");
+/** A budget window in percent; `dropsAt` is Unix seconds, `retryAfter` seconds while full. */
+export type RekaWindow = { percent: number; dropsAt: number | null; retryAfter: number | null };
+/** The Account page: a window is `null` when its limit is off. */
+export type RekaUsage = {
+  account: RekaAccount;
+  fiveHours: RekaWindow | null;
+  week: RekaWindow | null;
+  credits: number | null;
+  device: string | null;
+};
+export const rekaUsage = () => invoke<RekaUsage>("reka_usage");
 /** The error a Rooxcode prompt gets without a session. */
 export const rekaSignInError = () => invoke<string>("reka_sign_in_error");
 /** Opens Reka Bytes sign-in in the browser; returns its link. Watch `onRekaLogin` for the result. */

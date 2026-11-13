@@ -136,6 +136,26 @@ aside.left { width: 260px; flex: none; background: var(--sidebar); border-right:
 aside.left footer { display: flex; align-items: center; gap: 8px; padding: 8px 6px 0; border-top: 1px solid var(--line); margin-top: 6px; }
 .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--hover); display: grid; place-items: center; font-size: 11px; flex: none; }
 .username { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+/* Footer profile: a pill with the avatar, name and a chevron that opens the account menu. */
+aside.left footer .profile { min-width: 0; }
+.profilebtn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; height: 34px; padding: 0 10px 0 5px; border: none; border-radius: 999px; background: none; color: var(--text); }
+.profilebtn:hover, .profilebtn[aria-expanded="true"] { background: var(--hover); }
+.profilebtn .username { min-width: 0; font-weight: 500; }
+.profilebtn > svg:last-child { color: var(--muted); flex: none; }
+.avatar.pixel { background: var(--raspberry-soft); overflow: hidden; }
+.profile .popover { min-width: 230px; }
+.profile .popover .who { display: flex; align-items: center; gap: 10px; padding: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--line); min-width: 0; }
+.profile .popover .who .grow { min-width: 0; }
+/* Settings → Account. */
+.account-head { display: flex; align-items: center; gap: 14px; margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.account-avatar { width: 64px; height: 64px; border-radius: 50%; background: var(--raspberry-soft); display: grid; place-items: center; flex: none; }
+.account-name { font-size: 15px; font-weight: 600; }
+.usage-row { display: flex; align-items: center; gap: 8px; }
+.usage-bar { height: 6px; margin: 8px 0 6px; border-radius: 999px; background: var(--hover); overflow: hidden; }
+.usage-bar span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.usage-bar.full span { background: var(--error); }
+.account-actions { display: flex; gap: 8px; margin-top: 16px; }
+.account-actions .plain, .account-head .plain { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .iconbtn { border: none; background: none; padding: 5px; border-radius: 6px; display: grid; place-items: center; color: var(--muted); }
 .iconbtn:hover { background: var(--hover); color: var(--text); }
 .send { display: grid; place-items: center; }
