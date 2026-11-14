@@ -4,7 +4,7 @@
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaSignInError, renameSession, request, type Changes, type SavedSession } from "./lib/engine";
+  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -33,6 +33,10 @@
   let signInError = "";
 
   let home = $state("");
+  /** The signed-in Reka Bytes account for the sidebar profile, or null. */
+  let account = $state<RekaAccount | null>(null);
+  /** The Settings page to open on. */
+  let settingsStart = $state<"account" | "providers">("providers");
   let folder = $state<string | null>(null);
   let recent = $state<string[]>(JSON.parse(localStorage.getItem(RECENT) ?? "[]"));
   // Saved sessions per recent folder, for the sidebar.
@@ -84,13 +88,31 @@
 
   onMount(async () => {
     signInError = await rekaSignInError().catch(() => "");
-    const account = await rekaAccount().catch(() => null);
+    account = await rekaAccount().catch(() => null);
     gate = !account && !localStorage.getItem(OWN_PROVIDER);
+    // The saved profile shows at once; a name or avatar changed on the website follows.
+    if (account) account = await rekaProfile().catch(() => account);
   });
+
+  async function loadAccount() {
+    account = await rekaProfile().catch(() => null);
+  }
+
+  async function rekaSignOut() {
+    try {
+      await signOut("rooxcode");
+    } catch (e) {
+      error = message(e);
+      return;
+    }
+    account = null;
+    showSignIn();
+  }
 
   /** Shows the sign-in screen again, after signing out or for a Rooxcode prompt. */
   function showSignIn() {
     localStorage.removeItem(OWN_PROVIDER);
+    void loadAccount();
     gate = true;
   }
 
@@ -408,7 +430,11 @@
     ondelete={remove}
     onaddfolder={addFolder}
     onremovefolder={removeFolder}
-    onsettings={() => (page = "settings")}
+    onsettings={() => { settingsStart = "providers"; page = "settings"; }}
+    onaccount={() => { settingsStart = "account"; page = "settings"; }}
+    {account}
+    onsignin={showSignIn}
+    onsignout={rekaSignOut}
   />
   <main>
     <div class="titlebar" data-tauri-drag-region>
@@ -423,7 +449,9 @@
     <UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />
     <div class="body">
   {#if page === "settings"}
-    <Settings onback={() => (page = "chat")} onsaved={signedIn} onsignin={showSignIn} />
+    {#key settingsStart}
+      <Settings onback={() => (page = "chat")} onsaved={signedIn} onsignin={showSignIn} onsignout={rekaSignOut} {account} onaccount={(a) => (account = a)} start={settingsStart} />
+    {/key}
   {:else}
     <div class="center">
     {#if error}<div class="banner error">{error}</div>{/if}
@@ -530,7 +558,7 @@
 {#if gate === null}
   <div style="position: fixed; inset: 0; z-index: 50; background: var(--bg);"></div>
 {:else if gate}
-  <SignIn onsignedin={() => { gate = false; page = "chat"; }} onskip={() => { localStorage.setItem(OWN_PROVIDER, "1"); gate = false; }} />
+  <SignIn onsignedin={() => { gate = false; page = "chat"; void loadAccount(); }} onskip={() => { localStorage.setItem(OWN_PROVIDER, "1"); gate = false; }} />
 {/if}
 
 {#if dialog === "models"}

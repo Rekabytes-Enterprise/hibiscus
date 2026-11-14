@@ -35,6 +35,9 @@ pub(crate) struct Account {
     pub name: Option<String>,
     #[serde(default)]
     pub email: Option<String>,
+    /// The pixel character picked on the Rooxcode account page; None is the default.
+    #[serde(default)]
+    pub avatar: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +65,7 @@ impl Session {
             expires: now().saturating_add(self.expires_in),
             name: previous.and_then(|a| a.name.clone()),
             email: previous.and_then(|a| a.email.clone()),
+            avatar: previous.and_then(|a| a.avatar.clone()),
         })
     }
 }
@@ -125,7 +129,7 @@ async fn access_at(store: &Store, gateway: &str, rejected: Option<&str>) -> Resu
             return Err(format!(
                 "Rooxcode session refresh returned HTTP {status}. Nothing was sent; try again."
             )
-            .into())
+            .into());
         }
     }
     let session: Session = serde_json::from_value(json_body(response).await?)
@@ -301,25 +305,123 @@ impl BrowserSignIn {
             .map_err(|_| "Rooxcode returned an invalid session. Start sign-in again.")?;
         let mut account = session.account(None)?;
         // "Signed in as" is a nicety: sign-in still works without it.
-        if let Ok(response) = client()?
-            .get(format!("{}/api/hibiscus/auth/me", self.gateway))
-            .bearer_auth(&account.access)
-            .send()
-            .await
-        {
-            if response.status().is_success() {
-                let me = json_body(response).await.unwrap_or_default();
-                let text = |v: &Value| {
-                    v.as_str()
-                        .filter(|s| s.len() <= 320 && !s.chars().any(char::is_control))
-                        .map(str::to_owned)
-                };
-                account.name = text(&me["name"]);
-                account.email = text(&me["email"]);
-            }
+        if let Some(me) = me(&self.gateway, &account.access).await {
+            me.apply(&mut account);
         }
         Ok(account)
     }
+}
+
+/// The gateway's `/me`: the profile, plus usage for the Account page.
+struct Me {
+    name: Option<String>,
+    email: Option<String>,
+    avatar: Option<String>,
+    usage: Usage,
+}
+
+/// One budget window: how much is used, never the amounts behind it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Window {
+    /// 0 to 100.
+    pub percent: u8,
+    /// Unix seconds when the oldest counted usage leaves the window.
+    pub drops_at: Option<i64>,
+    /// Seconds until a request fits again, when the window is full.
+    pub retry_after: Option<u64>,
+}
+
+/// Account usage from `/me`. A window whose limit is off is None.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Usage {
+    pub five_hours: Option<Window>,
+    pub week: Option<Window>,
+    pub credits: Option<f64>,
+    pub device: Option<String>,
+}
+
+fn window(v: &Value) -> Option<Window> {
+    let limit = v["limit"].as_i64().filter(|l| *l > 0)?;
+    let used = v["used"].as_i64().unwrap_or(0).max(0);
+    Some(Window {
+        percent: (used.saturating_mul(100) / limit).min(100) as u8,
+        drops_at: v["drops_at"].as_i64(),
+        retry_after: v["retry_after"].as_u64(),
+    })
+}
+impl Me {
+    fn apply(self, account: &mut Account) {
+        account.name = self.name;
+        account.email = self.email;
+        account.avatar = self.avatar;
+    }
+}
+
+/// Pixel characters the Rooxcode account page offers. Anything else is the default.
+const AVATARS: [&str; 6] = ["slime", "cat", "bunny", "frog", "ghost", "bloom"];
+
+async fn me(gateway: &str, access: &str) -> Option<Me> {
+    let response = client()
+        .ok()?
+        .get(format!("{gateway}/api/hibiscus/auth/me"))
+        .bearer_auth(access)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let me = json_body(response).await.ok()?;
+    let text = |v: &Value| {
+        v.as_str()
+            .filter(|s| s.len() <= 320 && !s.chars().any(char::is_control))
+            .map(str::to_owned)
+    };
+    Some(Me {
+        name: text(&me["name"]),
+        email: text(&me["email"]),
+        avatar: me["avatar"]
+            .as_str()
+            .filter(|a| AVATARS.contains(a))
+            .map(str::to_owned),
+        usage: Usage {
+            five_hours: window(&me["allowance"]["five_hours"]),
+            week: window(&me["allowance"]["week"]),
+            credits: me["wallet"]["credits"].as_f64().filter(|c| c.is_finite()),
+            device: text(&me["device_name"]),
+        },
+    })
+}
+
+/// The signed-in account and its usage, fresh from the gateway, for the Account page.
+/// The saved profile is updated on the way.
+pub(crate) async fn usage() -> Result<(Account, Usage)> {
+    let store = store()?;
+    let access = access_at(&store, gateway(), None).await?;
+    let me = me(gateway(), &access).await.ok_or(
+        "Can't load your Rooxcode account right now. Check your connection and try again.",
+    )?;
+    let usage = me.usage.clone();
+    let _lock = store.lock().await?;
+    let mut account: Account = store.read_json()?.ok_or(SIGN_IN)?;
+    me.apply(&mut account);
+    store.write_json(&account)?;
+    Ok((account, usage))
+}
+
+/// Reloads the name and avatar from the gateway, so changes made on the
+/// account page show up. Keeps the saved profile when the gateway can't be reached.
+pub(crate) async fn refresh_profile() -> Option<Account> {
+    let store = store().ok()?;
+    let access = access_at(&store, gateway(), None).await.ok()?;
+    if let Some(me) = me(gateway(), &access).await {
+        let _lock = store.lock().await.ok()?;
+        // Re-read under the lock: a refresh may have rotated the tokens meanwhile.
+        let mut account: Account = store.read_json().ok().flatten()?;
+        me.apply(&mut account);
+        let _ = store.write_json(&account);
+    }
+    account()
 }
 
 fn bind() -> Result<Pending> {
@@ -388,6 +490,30 @@ mod tests {
     use super::*;
     use crate::engine::oauth::protocol::tests::{runtime, Server};
 
+    #[test]
+    fn usage_windows_show_percent_only() {
+        let full = window(
+            &json!({"used":9_000_000,"limit":8_000_000,"retry_after":120,"drops_at":1_800_000_000}),
+        );
+        assert_eq!(
+            full,
+            Some(Window {
+                percent: 100,
+                drops_at: Some(1_800_000_000),
+                retry_after: Some(120)
+            })
+        );
+        let some =
+            window(&json!({"used":2_000_000,"limit":8_000_000,"retry_after":null,"drops_at":null}));
+        assert_eq!(some.map(|w| w.percent), Some(25));
+        assert_eq!(
+            window(&json!({"used":5,"limit":0})),
+            None,
+            "a limit that is off"
+        );
+        assert_eq!(window(&Value::Null), None);
+    }
+
     struct Temp(std::path::PathBuf);
     impl Temp {
         fn new() -> Self {
@@ -418,6 +544,7 @@ mod tests {
             expires,
             name: None,
             email: Some("me@example.com".into()),
+            avatar: None,
         }
     }
 
@@ -492,7 +619,7 @@ mod tests {
             session('a'),
             (
                 200,
-                json!({"name":"Me","email":"me@example.com"}).to_string(),
+                json!({"name":"Me","email":"me@example.com","avatar":"frog"}).to_string(),
             ),
         ]);
         let local = || {
@@ -545,6 +672,7 @@ mod tests {
         let (account, verifier) = account;
         assert_eq!(account.access, token('a'));
         assert_eq!(account.email.as_deref(), Some("me@example.com"));
+        assert_eq!(account.avatar.as_deref(), Some("frog"));
         let requests = server.requests.lock().unwrap();
         assert_eq!(requests.len(), 6, "a wrong state sends nothing");
         let exchange = &requests[4];

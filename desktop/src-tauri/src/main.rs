@@ -246,15 +246,64 @@ struct Reka(Codex);
 struct RekaAccount {
     name: Option<String>,
     email: Option<String>,
+    avatar: Option<String>,
+}
+impl From<desktop::RekaAccount> for RekaAccount {
+    fn from(a: desktop::RekaAccount) -> Self {
+        Self {
+            name: a.name,
+            email: a.email,
+            avatar: a.avatar,
+        }
+    }
 }
 
 /// The signed-in Reka Bytes account, or `null`. Tokens never reach the window.
 #[tauri::command]
 async fn reka_account() -> Option<RekaAccount> {
-    desktop::reka_account().map(|a| RekaAccount {
-        name: a.name,
-        email: a.email,
+    desktop::reka_account().map(Into::into)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RekaWindow {
+    percent: u8,
+    drops_at: Option<i64>,
+    retry_after: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RekaUsage {
+    account: RekaAccount,
+    five_hours: Option<RekaWindow>,
+    week: Option<RekaWindow>,
+    credits: Option<f64>,
+    device: Option<String>,
+}
+
+/// The Account page in Settings: profile and usage in percent, never amounts or tokens.
+#[tauri::command]
+async fn reka_usage() -> Result<RekaUsage, String> {
+    let u = desktop::reka_usage().await.map_err(|e| e.to_string())?;
+    let window = |w: desktop::RekaWindow| RekaWindow {
+        percent: w.percent,
+        drops_at: w.drops_at,
+        retry_after: w.retry_after,
+    };
+    Ok(RekaUsage {
+        account: u.account.into(),
+        five_hours: u.five_hours.map(window),
+        week: u.week.map(window),
+        credits: u.credits,
+        device: u.device,
     })
+}
+
+/// The account with its name and avatar reloaded from Rooxcode, or `null`.
+#[tauri::command]
+async fn reka_profile() -> Option<RekaAccount> {
+    desktop::reka_profile().await.map(Into::into)
 }
 
 /// The error text of a Rooxcode prompt sent without a session.
@@ -766,6 +815,8 @@ fn main() {
             codex_paste,
             codex_cancel,
             reka_account,
+            reka_profile,
+            reka_usage,
             reka_sign_in_error,
             reka_start,
             reka_paste,

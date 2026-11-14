@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.39] - 2026-11-14
+
+### Added
+
+- The desktop sidebar shows who is signed in (#192). The footer has a profile button with your Reka Bytes pixel avatar and name. Click it for Manage account, Settings and Sign out. The avatar idles with a small dip and blink, and stays still when your system asks for reduced motion.
+- Settings → Account shows your Rooxcode usage: the 5-hour and weekly limits as percent bars with the next refresh time, your wallet credits, and links to change your avatar or open the account website.
+
 ## [0.3.38] - 2026-11-12
 
 ### Added
