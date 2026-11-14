@@ -4,12 +4,12 @@
 //! `rooxcode-auth.json` (0600) and shared by the desktop app and the terminal.
 //! The tokens only ever go to the Rooxcode gateway.
 use super::oauth::{
-    protocol::{now, random, Pending},
+    protocol::{Pending, now, random},
     store::Store,
 };
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 /// The error for a Rooxcode prompt without an account. The desktop app and
@@ -129,7 +129,7 @@ async fn access_at(store: &Store, gateway: &str, rejected: Option<&str>) -> Resu
             return Err(format!(
                 "Rooxcode session refresh returned HTTP {status}. Nothing was sent; try again."
             )
-            .into())
+            .into());
         }
     }
     let session: Session = serde_json::from_value(json_body(response).await?)
@@ -398,9 +398,9 @@ async fn me(gateway: &str, access: &str) -> Option<Me> {
 pub(crate) async fn usage() -> Result<(Account, Usage)> {
     let store = store()?;
     let access = access_at(&store, gateway(), None).await?;
-    let me = me(gateway(), &access)
-        .await
-        .ok_or("Can't load your Rooxcode account right now. Check your connection and try again.")?;
+    let me = me(gateway(), &access).await.ok_or(
+        "Can't load your Rooxcode account right now. Check your connection and try again.",
+    )?;
     let usage = me.usage.clone();
     let _lock = store.lock().await?;
     let mut account: Account = store.read_json()?.ok_or(SIGN_IN)?;
@@ -488,18 +488,29 @@ impl RekaSignIn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::oauth::protocol::tests::{runtime, Server};
+    use crate::engine::oauth::protocol::tests::{Server, runtime};
 
     #[test]
     fn usage_windows_show_percent_only() {
-        let full = window(&json!({"used":9_000_000,"limit":8_000_000,"retry_after":120,"drops_at":1_800_000_000}));
+        let full = window(
+            &json!({"used":9_000_000,"limit":8_000_000,"retry_after":120,"drops_at":1_800_000_000}),
+        );
         assert_eq!(
             full,
-            Some(Window { percent: 100, drops_at: Some(1_800_000_000), retry_after: Some(120) })
+            Some(Window {
+                percent: 100,
+                drops_at: Some(1_800_000_000),
+                retry_after: Some(120)
+            })
         );
-        let some = window(&json!({"used":2_000_000,"limit":8_000_000,"retry_after":null,"drops_at":null}));
+        let some =
+            window(&json!({"used":2_000_000,"limit":8_000_000,"retry_after":null,"drops_at":null}));
         assert_eq!(some.map(|w| w.percent), Some(25));
-        assert_eq!(window(&json!({"used":5,"limit":0})), None, "a limit that is off");
+        assert_eq!(
+            window(&json!({"used":5,"limit":0})),
+            None,
+            "a limit that is off"
+        );
         assert_eq!(window(&Value::Null), None);
     }
 
@@ -629,9 +640,11 @@ mod tests {
             let wrong = BrowserSignIn::start_at(&server.base, "terminal", local)
                 .await
                 .unwrap();
-            assert!(wrong
-                .url()
-                .starts_with(&format!("{}/authorize?", server.base)));
+            assert!(
+                wrong
+                    .url()
+                    .starts_with(&format!("{}/authorize?", server.base))
+            );
             assert_eq!(query(&wrong, "client_id"), "hibiscus");
             assert_eq!(query(&wrong, "code_challenge_method"), "S256");
             let (tx, rx) = tokio::sync::mpsc::channel(1);
