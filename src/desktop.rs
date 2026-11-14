@@ -26,14 +26,64 @@ pub fn save_api_key(provider: &str, key: &str) -> Result<()> {
 pub struct RekaAccount {
     pub name: Option<String>,
     pub email: Option<String>,
+    /// The pixel character picked on the Rooxcode account page; None is the default.
+    pub avatar: Option<String>,
+}
+fn reka(a: crate::engine::reka::Account) -> RekaAccount {
+    RekaAccount {
+        name: a.name,
+        email: a.email,
+        avatar: a.avatar,
+    }
 }
 
 /// The signed-in Reka Bytes account, shared with the terminal app.
 pub fn reka_account() -> Option<RekaAccount> {
-    crate::engine::reka::account().map(|a| RekaAccount {
-        name: a.name,
-        email: a.email,
+    crate::engine::reka::account().map(reka)
+}
+
+/// One budget window of the Rooxcode account, in percent only.
+pub struct RekaWindow {
+    pub percent: u8,
+    /// Unix seconds when the oldest counted usage leaves the window.
+    pub drops_at: Option<i64>,
+    /// Seconds until a request fits again, when the window is full.
+    pub retry_after: Option<u64>,
+}
+
+/// The Account page: the profile and usage, fresh from Rooxcode.
+pub struct RekaUsage {
+    pub account: RekaAccount,
+    /// None when that limit is off.
+    pub five_hours: Option<RekaWindow>,
+    pub week: Option<RekaWindow>,
+    /// Wallet credits, which pay for requests once a window is full.
+    pub credits: Option<f64>,
+    /// This device's name on the website's device list.
+    pub device: Option<String>,
+}
+
+/// Loads the Account page. Fails when signed out or when Rooxcode can't be reached.
+pub async fn reka_usage() -> Result<RekaUsage> {
+    let (account, usage) = crate::engine::reka::usage().await?;
+    let window = |w: crate::engine::reka::Window| RekaWindow {
+        percent: w.percent,
+        drops_at: w.drops_at,
+        retry_after: w.retry_after,
+    };
+    Ok(RekaUsage {
+        account: reka(account),
+        five_hours: usage.five_hours.map(window),
+        week: usage.week.map(window),
+        credits: usage.credits,
+        device: usage.device,
     })
+}
+
+/// The signed-in account with its name and avatar reloaded from Rooxcode.
+/// Falls back to the saved profile offline.
+pub async fn reka_profile() -> Option<RekaAccount> {
+    crate::engine::reka::refresh_profile().await.map(reka)
 }
 
 /// Removes the stored credential for `provider`: its API key, the Codex
