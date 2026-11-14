@@ -4,12 +4,12 @@
 //! `rooxcode-auth.json` (0600) and shared by the desktop app and the terminal.
 //! The tokens only ever go to the Rooxcode gateway.
 use super::oauth::{
-    protocol::{Pending, now, random},
+    protocol::{now, random, Pending},
     store::Store,
 };
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::Duration;
 
 /// The error for a Rooxcode prompt without an account. The desktop app and
@@ -488,7 +488,7 @@ impl RekaSignIn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::oauth::protocol::tests::{Server, runtime};
+    use crate::engine::oauth::protocol::tests::{runtime, Server};
 
     #[test]
     fn usage_windows_show_percent_only() {
@@ -640,11 +640,9 @@ mod tests {
             let wrong = BrowserSignIn::start_at(&server.base, "terminal", local)
                 .await
                 .unwrap();
-            assert!(
-                wrong
-                    .url()
-                    .starts_with(&format!("{}/authorize?", server.base))
-            );
+            assert!(wrong
+                .url()
+                .starts_with(&format!("{}/authorize?", server.base)));
             assert_eq!(query(&wrong, "client_id"), "hibiscus");
             assert_eq!(query(&wrong, "code_challenge_method"), "S256");
             let (tx, rx) = tokio::sync::mpsc::channel(1);

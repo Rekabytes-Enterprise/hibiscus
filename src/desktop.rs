@@ -10,7 +10,7 @@ pub const BROWSER_SESSION: &str = crate::engine::BROWSER_SESSION;
 
 /// Dev servers the app runs per folder, shared with the engine's `dev_server` tool.
 pub mod dev_server {
-    pub use crate::devserver::{Status, detect, output, ready, start, status, stop, stop_all};
+    pub use crate::devserver::{detect, output, ready, start, status, stop, stop_all, Status};
 }
 use crate::Result;
 use std::path::{Path, PathBuf};
