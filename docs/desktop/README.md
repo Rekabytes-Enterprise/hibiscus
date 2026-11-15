@@ -2,7 +2,7 @@
 
 Status: Phase 0 done; Phase 1 in progress (the app runs from source; packaging in releases is next). The engine protocol is in [protocol.md](protocol.md).
 
-Hibiscus gets a desktop app for **macOS Apple Silicon** and **Linux x86_64**. Windows comes later (see [Windows](later-windows.md)). The CLI and TUI stay as they are; the desktop app is an extra way to use the same engine.
+Hibiscus has a desktop app for **macOS Apple Silicon**, **Linux x86_64** and **Windows x64** (see [Windows](later-windows.md)). The CLI and TUI stay as they are; the desktop app is an extra way to use the same engine.
 
 ## Phases
 
@@ -11,7 +11,7 @@ Hibiscus gets a desktop app for **macOS Apple Silicon** and **Linux x86_64**. Wi
 | 0 | [Library API](phase-0-library.md) (done) | The engine can be driven from code other than the terminal UI | No |
 | 1 | [Desktop MVP](phase-1-mvp.md) | Tauri app, `.dmg` and `.AppImage` in the release ([Desktop release](release.md)), desktop install script | Yes |
 | 2 | [Updates and polish](phase-2-updates.md) | Signed auto-updates, window state, notifications | Yes |
-| Later | [Windows](later-windows.md) | Native Windows port and `.exe` installer | Yes |
+| Windows | [Windows](later-windows.md) | Native Windows port and `.exe` installer | Yes |
 
 Each phase ships on its own and leaves `main` releasable.
 
