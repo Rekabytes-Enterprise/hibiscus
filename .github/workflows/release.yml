@@ -907,6 +907,7 @@ jobs:
           | | |
           |---|---|
           | **Mac** (Apple Silicon) | [hibiscus-desktop-aarch64-apple-darwin.dmg]($base/hibiscus-desktop-aarch64-apple-darwin.dmg) |
+          | **Windows** (10 and 11, x64) | [hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe]($base/hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe) |
           | **Linux** (x86_64) | [hibiscus-desktop-x86_64.AppImage]($base/hibiscus-desktop-x86_64.AppImage) |
           | **Terminal** (macOS, Linux) | \`curl -fsSL https://raw.githubusercontent.com/$GH_REPO/$RELEASE_TAG/install.sh \| HIBISCUS_VERSION=$RELEASE_TAG sh\` |
 

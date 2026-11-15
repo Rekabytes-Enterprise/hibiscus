@@ -320,7 +320,7 @@ class DesktopReleasePolicy(unittest.TestCase):
         self.assertIn('contents: write', job(self.source, 'publish'))
         self.assertEqual(self.source.count('id-token: write'), 1)
         self.assertIn('id-token: write', job(self.source, 'provenance'))
-        for name in ['verify', 'macos_arm64', 'linux_x64', 'sign_updates']:
+        for name in ['verify', 'macos_arm64', 'linux_x64', 'windows_x64', 'sign_updates']:
             block = job(self.source, name)
             self.assertNotIn(': write', block)
             if name != 'verify':
@@ -344,19 +344,24 @@ class DesktopReleasePolicy(unittest.TestCase):
         self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign the update files'))
 
     def test_builds_use_the_authorized_commit_and_pinned_toolchains(self):
-        for name in ['macos_arm64', 'linux_x64']:
+        for name in ['macos_arm64', 'linux_x64', 'windows_x64']:
             block = job(self.source, name)
             self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', block)
             self.assertIn('toolchain: 1.99.1', block)
             self.assertIn('npm ci', block)
         self.assertIn('--bundles app,dmg', job(self.source, 'macos_arm64'))
         self.assertIn('--bundles appimage', job(self.source, 'linux_x64'))
+        self.assertIn('--bundles nsis', job(self.source, 'windows_x64'))
+        # Every build is part of a tag release, and the updater gets every platform.
+        self.assertNotIn("if: github.event_name == 'workflow_dispatch'", self.source)
+        self.assertIn('needs: [verify, macos_arm64, linux_x64, windows_x64]', job(self.source, 'sign_updates'))
+        self.assertIn('"windows-x86_64": {signature: $windows_sig, url: $windows_url}', job(self.source, 'sign_updates'))
         self.assertNotIn('cargo ', job(self.source, 'publish'))
 
     def test_signed_files_are_receipt_checked_and_published_only_into_a_draft(self):
         signer = job(self.source, 'provenance')
         self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign desktop files'))
-        self.assertIn('test "${#files[@]}" -eq 9', signer)
+        self.assertIn('test "${#files[@]}" -eq 12', signer)
         self.assertIn('sign_updates', signer)
         # GitHub's attestation API rejects SLSA provenance without internalParameters.
         self.assertIn('"internalParameters":{"github":{"event_name":', signer)
@@ -548,6 +553,7 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
                     self.assertTrue(notes.startswith('## Download\n'))
                     base = 'https://github.com/fixture/repo/releases/download/v1.2.3/'
                     for name in ['hibiscus-desktop-aarch64-apple-darwin.dmg',
+                                 'hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe',
                                  'hibiscus-desktop-x86_64.AppImage']:
                         self.assertIn('](' + base + name + ')', notes)
                     self.assertIn('`curl -fsSL https://raw.githubusercontent.com/fixture/repo/v1.2.3/install.sh '

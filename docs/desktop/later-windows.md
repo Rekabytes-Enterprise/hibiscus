@@ -1,6 +1,6 @@
-# Later: Windows
+# Windows
 
-Draft. Nothing here is built yet. Start only after macOS and Linux are stable.
+The engine port, the installer and the public release are done. Code signing is not.
 
 Back to the [desktop plan](README.md).
 
@@ -8,7 +8,7 @@ The goal is a Windows x64 installer, `hibiscus-desktop-x86_64-pc-windows-msvc-se
 
 ## Why it is separate
 
-The engine does not compile on Windows today. About 21 files rely on Unix-only features:
+Before the port (#195), the engine did not compile on Windows. About 21 files relied on Unix-only features:
 
 - the Unix socket between the UI and the engine (`client/bridge/`, `client/transport.rs`, `client/embed.rs`, `engine/agent.rs`);
 - `/bin/sh` for the shell tool (`engine/tools.rs`) and the dev server (`devserver.rs`);
@@ -19,12 +19,12 @@ The engine does not compile on Windows today. About 21 files rely on Unix-only f
 
 ## Decision: unsigned, internal first
 
-The first Windows builds are unsigned and go to the team only, for testing and feedback. Code signing waits until the app is ready for a public release. See [Code signing](#code-signing) for the options when that time comes.
+The first Windows builds were unsigned and went to the team only, for testing and feedback. Windows now ships unsigned in every tag release (the public stage). Code signing comes later. See [Code signing](#code-signing) for the options when that time comes.
 
 | Stage | Who gets it | How |
 |---|---|---|
-| Internal | The team | `windows_x64` runs only on manual `workflow_dispatch` runs. A team member runs **Desktop release** by hand on `dev` or `main` and downloads the `desktop-x86_64-pc-windows-msvc` artifact from the run page. Only people with access to the repository can download it. Tag releases keep shipping macOS and Linux only, so the release stays at 14 files. |
-| Public | Everyone | Remove the `workflow_dispatch` condition. `windows_x64` runs on `v*` tags and the release grows to 16 files. Still unsigned unless signing is set up by then. |
+| Internal (done) | The team | `windows_x64` runs only on manual `workflow_dispatch` runs. A team member runs **Desktop release** by hand on `dev` or `main` and downloads the `desktop-x86_64-pc-windows-msvc` artifact from the run page. Only people with access to the repository can download it. Tag releases keep shipping macOS and Linux only, so the release stays at 14 files. |
+| Public (current) | Everyone | Remove the `workflow_dispatch` condition. `windows_x64` runs on `v*` tags and the release grows to 16 files. Still unsigned unless signing is set up by then. |
 | Signed | Everyone | Add Authenticode signing. |
 
 During the internal stage:
@@ -74,19 +74,19 @@ Keep the `workflow_dispatch` condition until the port passes and the team signs 
 
 npm runs scripts through `cmd.exe` on Windows, and a bare `bash` there can be the WSL launcher, so the build step sets `NPM_CONFIG_SCRIPT_SHELL` to Git Bash for the agent-browser fetch.
 
-For the public stage, the job drops its `workflow_dispatch` condition, writes a `receipt-windows` like the other builds, and exposes its digest as the `sha256` output. Add a **Windows** row with the `-setup.exe` link to the Download table that `release.yml` writes into the release notes.
+In the public stage the job runs on every tag, writes a `receipt-windows` like the other builds, and exposes its digest as the `sha256` output. The Download table that `release.yml` writes into the release notes has a **Windows** row with the `-setup.exe` link.
 
 ### Changes to the later jobs
 
-These changes are for the public stage only. During the internal stage, leave `sign_updates`, `provenance` and `publish` as they are. GitHub skips every job that `needs` a skipped job, so if they listed `windows_x64` while it is limited to manual runs, tag releases would publish nothing.
+These are in place for the public stage. During the internal stage, `sign_updates`, `provenance` and `publish` did not list `windows_x64`. GitHub skips every job that `needs` a skipped job, so if they listed `windows_x64` while it is limited to manual runs, tag releases would publish nothing.
 
 | Job | Change |
 |---|---|
 | `sign_updates` | `needs` adds `windows_x64`. Expects 7 files (4 built, 3 receipts). Checks `receipt-windows` (1 line). Signs the `-setup.exe`: on Windows the Tauri updater runs the NSIS installer itself. `latest.json` gets a `windows-x86_64` platform with that file's URL and signature. `receipt-updates` has 4 lines. |
-| `provenance` | `needs` adds `windows_x64`. Expects 13 files (8 release files, 4 build receipts, `receipt-updates`). The upload list adds the `.exe` and its `.sig`. |
+| `provenance` | `needs` adds `windows_x64`. Expects 12 files (8 release files, 3 build receipts, `receipt-updates`). The upload list adds the `.exe` and its `.sig`. |
 | `publish` | Expects 10 files. |
 
-A full release grows from 14 files to 16. Update the count in [Desktop release](release.md) when this lands, and publish the draft only once all 16 are there.
+A full release has 16 files. Publish the draft only once all 16 are there.
 
 ### Opening the unsigned installer
 
