@@ -13,6 +13,7 @@ use super::{
     run::{RunOutcome, RunState},
     transport::{self, Events, Inbox, Limits, PipeWriter, WireWrite},
 };
+use crate::client::socket::{self, Ready, Socket};
 use crate::{
     ui::{
         dialog::Dialogs,
@@ -28,7 +29,6 @@ use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use std::os::{fd::AsRawFd, unix::net::UnixStream};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -41,10 +41,10 @@ pub(super) fn spawn_engine(
     start: &SessionStart,
     workspace: &std::path::Path,
     on_error: impl FnOnce(String) + Send + 'static,
-) -> Result<(JoinHandle<()>, UnixStream)> {
+) -> Result<(JoinHandle<()>, Socket)> {
     let config = crate::engine::config::load()?;
     let session = crate::engine::session::Session::open(start, workspace, &config)?;
-    let (client, worker_socket) = UnixStream::pair()?;
+    let (client, worker_socket) = socket::pair()?;
     let worker = thread::spawn(move || {
         if let Err(error) = crate::engine::agent::serve(worker_socket, config, session) {
             on_error(error.to_string());
@@ -55,8 +55,8 @@ pub(super) fn spawn_engine(
 
 pub(crate) struct Client {
     worker: Option<JoinHandle<()>>,
-    control: UnixStream,
-    input: Option<PipeWriter<UnixStream>>,
+    control: Socket,
+    input: Option<PipeWriter<Socket>>,
     output: Inbox,
     next_id: u64,
     resume: SessionStart,
@@ -521,26 +521,14 @@ impl Drop for Client {
 // A partially sent JSONL record cannot be followed by an abort command without
 // corrupting framing. Esc while sending invalidates the connection instead.
 
-// A cloned Unix socket shares O_NONBLOCK with its writer. Poll readiness in
+// A cloned socket shares O_NONBLOCK with its writer. Poll readiness in
 // the dedicated ingress thread rather than interpreting WouldBlock as EOF.
-pub(super) struct SocketReader(pub(super) UnixStream);
+pub(super) struct SocketReader(pub(super) Socket);
 impl std::io::Read for SocketReader {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         loop {
             match std::io::Read::read(&mut self.0, bytes) {
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    let mut fd = libc::pollfd {
-                        fd: self.0.as_raw_fd(),
-                        events: libc::POLLIN,
-                        revents: 0,
-                    };
-                    if unsafe { libc::poll(&mut fd, 1, 100) } < 0 {
-                        let e = io::Error::last_os_error();
-                        if e.kind() != io::ErrorKind::Interrupted {
-                            return Err(e);
-                        }
-                    }
-                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.0.wait(false, 100)?,
                 result => return result,
             }
         }

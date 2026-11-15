@@ -4,7 +4,7 @@ mod environment;
 mod manifest;
 pub(crate) use agent::{definitions as agent_definitions, AgentTool, Catalog};
 mod process;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 mod validation;
 mod versions;
@@ -62,7 +62,7 @@ pub(crate) fn is_command_token(name: &str) -> bool {
 
 impl Registry {
     pub(crate) fn discover() -> Result<Self> {
-        use std::os::unix::fs::DirBuilderExt;
+        use crate::sys::DirBuilderExt;
         let root = crate::paths::home()?.join("extensions");
         std::fs::DirBuilder::new()
             .recursive(true)

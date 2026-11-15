@@ -1600,7 +1600,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hibiscus"
-version = "0.3.35"
+version = "0.3.39"
 dependencies = [
  "base64 0.23.1",
  "image",
@@ -1613,6 +1613,7 @@ dependencies = [
  "sha2 0.11.1",
  "tokio",
  "unicode-width",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

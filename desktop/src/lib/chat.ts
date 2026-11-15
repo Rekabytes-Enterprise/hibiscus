@@ -285,16 +285,16 @@ const VERBS: { [tool: string]: [string, string, string] } = {
 
 /** `path` relative to the session folder when it is inside it. */
 export function relative(path: string, folder: string | null): string {
-  const root = folder?.replace(/\/$/, "");
-  return root && path.startsWith(root + "/") ? path.slice(root.length + 1) : path;
+  const root = folder?.replace(/[\\/]$/, "");
+  return root && (path.startsWith(root + "/") || path.startsWith(root + "\\")) ? path.slice(root.length + 1) : path;
 }
 
 /** `command` with paths inside the session folder written relative to it, and the folder itself as `.`. */
 function shorten(command: string, folder: string | null): string {
-  const root = folder?.replace(/\/$/, "");
+  const root = folder?.replace(/[\\/]$/, "");
   if (!root) return command;
   const at = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return command.replace(new RegExp(at + "/", "g"), "").replace(new RegExp(at + "(?=$|[\\s'\"])", "g"), ".");
+  return command.replace(new RegExp(at + "[\\\\/]", "g"), "").replace(new RegExp(at + "(?=$|[\\s'\"])", "g"), ".");
 }
 
 /** One tool call as a sentence: "Read src/main.rs", "Ran npm test". */

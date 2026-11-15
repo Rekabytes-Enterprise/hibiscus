@@ -80,8 +80,12 @@ jobs:
         os:
           - ubuntu-latest
           - macos-15
+          # The desktop app's engine. The PTY and Unix-fixture tests are
+          # cfg(unix), so this runs the unit tests and tests/desktop_api.rs.
+          - windows-latest
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Cold Rust builds on Windows runners take about twice as long.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,7 +101,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Test npm installer without downloads
+        # The npm package ships macOS and Linux binaries only.
+        if: runner.os != 'Windows'
         run: node tests/npm-install.mjs
+      - name: Build Rust tests
+        run: cargo test --locked --no-run
       - name: Run Rust tests
         timeout-minutes: 5
         # PTY fixtures must configure their own terminal, not inherit the runner's.

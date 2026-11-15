@@ -8,3 +8,10 @@ it("labels folders relative to home", () => {
   expect(where("/Users/meow/project", "/Users/me")).toBe("/Users/meow");
   expect(where("/opt/x", "")).toBe("/opt");
 });
+
+it("labels Windows folders relative to home", () => {
+  expect(name("C:\\Users\\me\\Desktop\\Github\\")).toBe("Github");
+  expect(where("C:\\Users\\me\\Desktop\\Github", "C:\\Users\\me")).toBe("~\\Desktop");
+  expect(where("C:\\Users\\me\\project", "C:\\Users\\me\\")).toBe("~");
+  expect(where("D:\\work\\x", "C:\\Users\\me")).toBe("D:\\work");
+});

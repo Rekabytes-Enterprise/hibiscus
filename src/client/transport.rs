@@ -1,13 +1,13 @@
 //! Bounded RPC ingress and deadline-controlled duplex writes. The reader never
 //! blocks on a full mailbox: overload invalidates the connection explicitly.
 use super::error;
+use super::socket::Ready;
 use crate::Result;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{value::RawValue, Value};
 use std::{
     collections::VecDeque,
     io::{self, BufRead, BufReader, Read, Write},
-    os::fd::AsRawFd,
     sync::{mpsc::RecvTimeoutError, Arc, Condvar, Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
@@ -177,15 +177,8 @@ impl Inbox {
     pub fn failed(&self) -> bool {
         self.shared.state.lock().unwrap().failure.is_some()
     }
-    pub fn writer<W: Write + AsRawFd>(&self, pipe: W) -> io::Result<PipeWriter<W>> {
-        let fd = pipe.as_raw_fd();
-        // SAFETY: this is the owned stdin write end, not a cloned terminal fd.
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-        }
+    pub fn writer<W: Write + Ready>(&self, pipe: W) -> io::Result<PipeWriter<W>> {
+        pipe.nonblocking()?;
         Ok(PipeWriter {
             pipe,
             shared: self.shared.clone(),
@@ -539,7 +532,7 @@ pub(super) struct PipeWriter<W> {
     timeout: Duration,
     last_service: Option<Instant>,
 }
-impl<W: Write + AsRawFd> PipeWriter<W> {
+impl<W: Write + Ready> PipeWriter<W> {
     fn write_checked(
         &mut self,
         bytes: &[u8],
@@ -576,27 +569,15 @@ impl<W: Write + AsRawFd> PipeWriter<W> {
             };
             match written {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    let mut poll = libc::pollfd {
-                        fd: self.pipe.as_raw_fd(),
-                        events: libc::POLLOUT,
-                        revents: 0,
-                    };
-                    // SAFETY: one live owned pipe/socket descriptor. A short
-                    // wait services cancellation/failure even without POLLOUT.
-                    if unsafe { libc::poll(&mut poll, 1, 10) } < 0 {
-                        let error = io::Error::last_os_error();
-                        if error.kind() != io::ErrorKind::Interrupted {
-                            return Err(error);
-                        }
-                    }
-                }
+                // A short wait services cancellation/failure even when the
+                // socket never becomes writable.
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.pipe.wait(true, 10)?,
                 result => return result,
             }
         }
     }
 }
-impl<W: Write + AsRawFd> Write for PipeWriter<W> {
+impl<W: Write + Ready> Write for PipeWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.write_checked(bytes, &mut || Ok(()))
     }
@@ -627,7 +608,7 @@ pub(super) trait WireWrite: Write {
         }
     }
 }
-impl<W: Write + AsRawFd> WireWrite for PipeWriter<W> {
+impl<W: Write + Ready> WireWrite for PipeWriter<W> {
     fn write_serviced(
         &mut self,
         bytes: &[u8],
@@ -674,8 +655,8 @@ pub(super) fn fuzz_record(bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::socket;
     use serde_json::json;
-    use std::os::unix::net::UnixStream;
     fn wait_closed(inbox: &Inbox) {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut state = inbox.shared.state.lock().unwrap();
@@ -954,7 +935,7 @@ mod tests {
     fn full_stdin_has_a_deadline_and_services_cancellation() {
         for cancel in [false, true] {
             let inbox = empty();
-            let (pipe, _unread_peer) = UnixStream::pair().unwrap();
+            let (pipe, _unread_peer) = socket::pair().unwrap();
             let mut writer = inbox.writer(pipe).unwrap();
             writer.timeout = Duration::from_millis(500);
             let mut calls = 0;
@@ -980,8 +961,8 @@ mod tests {
 
     #[test]
     fn duplex_stdout_flood_breaks_blocked_stdin_without_waiting_for_write_deadline() {
-        let (peer_output, our_output) = UnixStream::pair().unwrap();
-        let (our_input, _peer_input) = UnixStream::pair().unwrap();
+        let (peer_output, our_output) = socket::pair().unwrap();
+        let (our_input, _peer_input) = socket::pair().unwrap();
         let inbox = Inbox::start(
             our_output,
             Limits {
@@ -1014,7 +995,7 @@ mod tests {
     #[test]
     fn large_nonblocking_write_is_complete_when_peer_drains() {
         let inbox = empty();
-        let (pipe, mut peer) = UnixStream::pair().unwrap();
+        let (pipe, mut peer) = socket::pair().unwrap();
         let reader = thread::spawn(move || {
             let mut bytes = Vec::new();
             peer.read_to_end(&mut bytes).unwrap();

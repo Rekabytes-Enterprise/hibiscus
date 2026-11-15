@@ -1,3 +1,5 @@
+// Drives the CLI through a PTY and Unix fixtures; Windows runs the unit tests only.
+#![cfg(unix)]
 mod support;
 use serde_json::{json, Value};
 use std::{

@@ -1,13 +1,8 @@
 //! Native tools for agent-authored extensions. No user-facing setup commands.
 use super::*;
+use crate::sys::{DirBuilderExt, OpenOptionsExt};
 use serde::Deserialize;
-use std::{
-    collections::HashSet,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::Component,
-    sync::RwLock,
-};
+use std::{collections::HashSet, io::Write, path::Component, sync::RwLock};
 
 #[derive(Clone, Copy)]
 pub(crate) enum AgentTool {

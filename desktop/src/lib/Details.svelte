@@ -57,7 +57,6 @@
   }
 
   const count = (n: number | null | undefined) => (n == null ? "–" : n.toLocaleString());
-  const base = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
 </script>
 
 <aside class="right">
@@ -103,7 +102,7 @@
     <section>
       <h3>Outputs</h3>
       {#each showAll ? files : files.slice(0, 5) as path}
-        <button class="item" onclick={() => onopenfile(path)} title={`Open ${path}`}><Icon name="file-text" /> <span class="grow ellipsis">{base(path)}</span></button>
+        <button class="item" onclick={() => onopenfile(path)} title={`Open ${path}`}><Icon name="file-text" /> <span class="grow ellipsis">{name(path)}</span></button>
       {/each}
       {#if files.length > 5}
         <button class="item muted" onclick={() => (showAll = !showAll)}>{showAll ? "Show less" : "Show more"}</button>
