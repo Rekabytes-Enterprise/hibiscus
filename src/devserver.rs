@@ -5,9 +5,8 @@ use crate::Result;
 use std::{
     collections::{HashMap, VecDeque},
     io::{BufRead, BufReader, Read},
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -18,6 +17,7 @@ const KEEP: usize = 1000;
 struct Server {
     command: String,
     child: Child,
+    tree: crate::sys::ProcessTree,
     output: Arc<Mutex<Output>>,
 }
 
@@ -86,8 +86,10 @@ pub fn start(folder: &Path, command: Option<&str>) -> Result<Status> {
         Some(c) if !c.trim().is_empty() => c.trim().to_string(),
         _ => detect(folder).ok_or("No start command found. Pass the command to run.")?,
     };
-    let mut child = Command::new("/bin/sh")
-        .args(["-c", &command])
+    let mut child = crate::sys::shell(&command);
+    // Its own group, so stopping it also stops what the shell started.
+    crate::sys::own_group(&mut child);
+    let mut child = child
         .current_dir(folder)
         // Keep tools from opening their own browser or buffering their output.
         .env("BROWSER", "none")
@@ -95,9 +97,8 @@ pub fn start(folder: &Path, command: Option<&str>) -> Result<Status> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // Its own group, so stopping it also stops what the shell started.
-        .process_group(0)
         .spawn()?;
+    let tree = crate::sys::ProcessTree::new(child.id());
     let output = Arc::new(Mutex::new(Output::default()));
     for stream in [
         child
@@ -133,6 +134,7 @@ pub fn start(folder: &Path, command: Option<&str>) -> Result<Status> {
             Server {
                 command,
                 child,
+                tree,
                 output,
             },
         )
@@ -196,14 +198,11 @@ fn end(mut server: Server) {
     if server.child.try_wait().ok().flatten().is_some() {
         return;
     }
-    let group = -(server.child.id() as i32);
-    // SAFETY: signals the server's own process group, created at spawn.
-    unsafe { libc::kill(group, libc::SIGTERM) };
+    server.tree.terminate();
     let deadline = Instant::now() + Duration::from_secs(3);
     while server.child.try_wait().ok().flatten().is_none() {
         if Instant::now() > deadline {
-            // SAFETY: as above.
-            unsafe { libc::kill(group, libc::SIGKILL) };
+            server.tree.kill();
             let _ = server.child.wait();
             return;
         }

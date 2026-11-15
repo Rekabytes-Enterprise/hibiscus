@@ -1,3 +1,5 @@
+// Release builds on Windows are a GUI app, so no console window opens beside it.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Thin glue between the window and `hibiscus::desktop`. The engine runs in
 //! this process on its own thread; the frontend only sees JSON records.
 
@@ -372,7 +374,7 @@ async fn git_changes(folder: PathBuf, base: Option<String>) -> Option<Changes> {
 
 /// Runs git in `folder`; `ok` lists the exit codes that still mean success.
 fn git(folder: &Path, args: &[&str], ok: &[i32]) -> Option<Vec<u8>> {
-    let out = std::process::Command::new("git")
+    let out = command("git")
         .arg("-C")
         .arg(folder)
         .args(args)
@@ -543,11 +545,25 @@ fn inside(folder: &Path, path: &Path) -> Option<PathBuf> {
 }
 
 /// The agent-browser the app bundles next to its own binary (`externalBin`).
+/// A child process command. On Windows it opens no console window: this is a
+/// GUI app, and each console child would otherwise show one.
+fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut command = std::process::Command::new(program);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000);
+    command
+}
+
 fn agent_browser() -> Option<PathBuf> {
     let path = std::env::current_exe()
         .ok()?
         .parent()?
-        .join("agent-browser");
+        .join(if cfg!(windows) {
+            "agent-browser.exe"
+        } else {
+            "agent-browser"
+        });
     path.is_file().then_some(path)
 }
 
@@ -559,7 +575,7 @@ async fn browser(args: Vec<String>) -> Result<Value, String> {
     let argv = browser_args(&args)?;
     let bin = agent_browser().ok_or("The bundled agent-browser is missing")?;
     let output = tauri::async_runtime::spawn_blocking(move || {
-        std::process::Command::new(bin)
+        command(bin)
             .args(&argv)
             .stdin(std::process::Stdio::null())
             .output()
@@ -647,7 +663,7 @@ fn close_browser() {
     let Some(bin) = agent_browser() else {
         return;
     };
-    let Ok(mut child) = std::process::Command::new(bin)
+    let Ok(mut child) = command(bin)
         .args(["--session", desktop::BROWSER_SESSION, "close"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -777,8 +793,9 @@ fn apply_environment(output: &[u8]) {
 }
 
 fn main() {
-    // Before any thread starts: set_var is not thread-safe.
-    if std::env::var_os("HIBISCUS_DESKTOP_KEEP_ENV").is_none() {
+    // Before any thread starts: set_var is not thread-safe. A Start-menu launch
+    // on Windows already has the user's environment, and there is no login shell.
+    if cfg!(unix) && std::env::var_os("HIBISCUS_DESKTOP_KEEP_ENV").is_none() {
         import_login_environment();
     }
     // Gives the engine its browser tool.
@@ -848,7 +865,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
         std::fs::create_dir_all(&repo).unwrap();
         let run = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let ok = command("git")
                 .arg("-C")
                 .arg(&repo)
                 .args([
@@ -898,7 +915,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
         std::fs::create_dir_all(&repo).unwrap();
         let run = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let ok = command("git")
                 .arg("-C")
                 .arg(&repo)
                 .args([

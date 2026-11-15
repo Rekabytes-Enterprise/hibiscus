@@ -1,11 +1,7 @@
+use crate::sys::{DirBuilderExt, OpenOptionsExt};
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::Path,
-};
+use std::{fs, io::Write, path::Path};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

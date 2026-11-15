@@ -10,21 +10,23 @@
 | `hibiscus-desktop-aarch64-apple-darwin.app.tar.gz` and `.sig` | macOS update, and its updater signature | `macos-15` |
 | `hibiscus-desktop-x86_64.AppImage` | Linux x86_64 | `ubuntu-22.04`, the oldest supported Ubuntu, so the AppImage runs on more distributions |
 | `hibiscus-desktop-x86_64.AppImage.sig` | updater signature for the AppImage | `ubuntu-22.04` |
+| `hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe` | Windows x64 installer, also the file the updater installs | `windows-latest` |
+| `hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe.sig` | updater signature for the installer | `windows-latest` |
 | `latest.json` | the update manifest installed apps read | |
 | `SHA256SUMS-desktop` | checksums of the files above | |
 | `hibiscus-desktop-provenance.sigstore.json` | signed build provenance for the files above | |
 
-With the CLI's files, a full release has 14 files.
+With the CLI's files, a full release has 16 files.
 
 The app's version comes from the root `package.json` (`"version": "../../package.json"` in `tauri.conf.json`), which `scripts/bump-version.sh` already updates. The bundle ID is `com.rooxcode.hibiscus`.
 
 ## How a release runs
 
 1. **verify** takes the commit that triggered the run and accepts it only if it is on `main`. A manual build-only run may also use `dev`.
-2. **macos_arm64** and **linux_x64** check out that same triggering commit, without credentials, confirm it is the authorized one, run `npm ci`, and build with Tauri. macOS also packs the `.app` into the `.app.tar.gz` the updater installs. Each job writes a receipt listing the SHA-256 of its files, and records the receipt's own digest.
-3. **sign_updates** checks the build receipts, then signs the `.app.tar.gz` and the AppImage with the updater key and writes `latest.json`. It is the only job that sees a secret. It has no checkout and runs no repository code: only the pinned Tauri CLI, installed without install scripts. It fails at once if the key secret is missing. It records a receipt for the files it adds.
+2. **macos_arm64**, **linux_x64** and **windows_x64** check out that same triggering commit, without credentials, confirm it is the authorized one, run `npm ci`, and build with Tauri. macOS also packs the `.app` into the `.app.tar.gz` the updater installs. Each job writes a receipt listing the SHA-256 of its files, and records the receipt's own digest.
+3. **sign_updates** checks the build receipts, then signs the `.app.tar.gz`, the AppImage and the Windows installer with the updater key and writes `latest.json`. It is the only job that sees a secret. It has no checkout and runs no repository code: only the pinned Tauri CLI, installed without install scripts. It fails at once if the key secret is missing. It records a receipt for the files it adds.
 4. **provenance** checks all three receipts against their digests and every file against its receipt, signs the files with `actions/attest`, and writes `SHA256SUMS-desktop`.
-5. **publish** waits up to 30 minutes for `release.yml` to create the draft release, then uploads the eight files into it. It never creates a release and refuses one that is already published.
+5. **publish** waits up to 30 minutes for `release.yml` to create the draft release, then uploads the ten files into it. It never creates a release and refuses one that is already published.
 
 Only `publish` can write to the repository, only `provenance` can sign provenance, and only `sign_updates` holds the updater key.
 
@@ -52,7 +54,7 @@ Builds never see the key, so local builds and the release build jobs work the sa
 
 ## Opening the unsigned files
 
-The app is not signed with an Apple Developer ID or notarised.
+The app is not signed with an Apple Developer ID or notarised, and the Windows installer has no Authenticode signature.
 
 ### macOS
 
@@ -80,6 +82,12 @@ Make the AppImage executable, then run it:
 ```bash
 chmod +x hibiscus-desktop-x86_64.AppImage && ./hibiscus-desktop-x86_64.AppImage
 ```
+
+### Windows
+
+Run `hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe`. SmartScreen says "Windows protected your PC" because the installer is unsigned. Click **More info**, then **Run anyway**. It installs for the current user, so it needs no administrator rights.
+
+On Windows 11 with Smart App Control turned on, unsigned apps are blocked and there is no **Run anyway** button.
 
 ### Checking a download
 

@@ -12,7 +12,7 @@ pub fn definitions() -> Vec<Value> {
         json!({"name":"read","description":"Read a UTF-8 text file. Offset and limit are one-based line bounds. Output is bounded.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
-        json!({"name":"bash","description":"Run a POSIX /bin/sh command in the workspace. Output and duration are bounded.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
+        json!({"name":"bash","description":crate::sys::shell_description(),"parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
     if agent_browser().is_some() {
@@ -298,8 +298,8 @@ pub async fn execute(
         }
         "bash" => {
             let a: Bash = serde_json::from_value(args.clone())?;
-            let mut cmd = Command::new("/bin/sh");
-            cmd.args(["-c", &a.command]).current_dir(cwd);
+            let mut cmd = Command::from(crate::sys::shell(&a.command));
+            cmd.current_dir(cwd);
             let output = crate::process::run(
                 cmd,
                 None,

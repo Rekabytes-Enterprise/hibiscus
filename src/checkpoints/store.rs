@@ -1,8 +1,6 @@
 use super::*;
-use std::{
-    collections::BTreeSet,
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
-};
+use crate::sys::OpenOptionsExt;
+use std::collections::BTreeSet;
 
 pub(super) struct Store {
     workspace: PathBuf,
@@ -12,9 +10,7 @@ pub(super) struct Store {
 struct Lock(fs::File);
 impl Drop for Lock {
     fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-        }
+        let _ = self.0.unlock();
     }
 }
 fn lease(path: &Path) -> Result<fs::File> {
@@ -23,10 +19,9 @@ fn lease(path: &Path) -> Result<fs::File> {
         .truncate(false)
         .write(true)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(crate::sys::O_NOFOLLOW)
         .open(path)?;
-    // SAFETY: the owned descriptor remains open for the lifetime of the lease.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if file.try_lock().is_err() {
         return Err("Another checkpoint operation is active; retry after it finishes".into());
     }
     Ok(file)
@@ -520,6 +515,6 @@ impl Store {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "tests.rs"]
 mod tests;

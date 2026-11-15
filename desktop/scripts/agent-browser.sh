@@ -13,13 +13,18 @@ aarch64-apple-darwin)
 x86_64-unknown-linux-gnu)
     asset=agent-browser-linux-x64
     sum=c4351f3802ffa5254d8c69f20a52e2fcf56925c6016fcf4203db25a07d811379 ;;
+x86_64-pc-windows-msvc)
+    asset=agent-browser-win32-x64.exe
+    sum=c2eadee7b67e326dfff02d5dd51a16ce7673eb165699d134b3ea5f05b4a7a9d0
+    # Tauri's externalBin adds .exe on Windows.
+    ext=.exe ;;
 *)
     echo "agent-browser is not bundled for $target" >&2
     exit 1 ;;
 esac
 
 dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)/src-tauri/binaries
-out=$dir/agent-browser-$target
+out=$dir/agent-browser-$target${ext:-}
 sha256() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -d ' ' -f 1; }
 
 [ -f "$out" ] && [ "$(sha256 "$out")" = "$sum" ] && exit 0

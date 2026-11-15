@@ -7,6 +7,21 @@ use tokio::process::Command;
 const BASELINE: &[&str] = &[
     "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
 ];
+/// Windows programs, Node and Python among them, fail to start without these.
+#[cfg(windows)]
+const WINDOWS_BASELINE: &[&str] = &[
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "TEMP",
+    "TMP",
+];
 
 /// Only names are retained in manifests and registry snapshots. Values are
 /// resolved at invocation time and never added to extension metadata.
@@ -50,7 +65,11 @@ impl Environment {
     ) -> Result<Command> {
         let mut command = Command::new(program);
         command.env_clear();
-        for name in BASELINE {
+        #[cfg(windows)]
+        let baseline = BASELINE.iter().chain(WINDOWS_BASELINE);
+        #[cfg(unix)]
+        let baseline = BASELINE.iter();
+        for name in baseline {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }

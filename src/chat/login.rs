@@ -154,10 +154,17 @@ fn browser<T: Send + 'static, F: Future<Output = Result<T>> + 'static>(
 
 fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
-    let program = "/usr/bin/open";
-    #[cfg(not(target_os = "macos"))]
-    let program = "xdg-open";
-    if let Ok(mut child) = std::process::Command::new(program)
+    let mut command = std::process::Command::new("/usr/bin/open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    // Unlike `cmd /c start`, this passes a URL containing `&` through intact.
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("rundll32.exe");
+        c.arg("url.dll,FileProtocolHandler");
+        c
+    };
+    if let Ok(mut child) = command
         .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

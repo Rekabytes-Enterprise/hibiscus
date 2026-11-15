@@ -44,7 +44,7 @@
   } = $props();
 
   // Signed out, the footer shows the computer's user.
-  const user = $derived(account?.name || account?.email || home.split("/").filter(Boolean).pop() || "");
+  const user = $derived(account?.name || account?.email || name(home) || "");
   let profileOpen = $state(false);
   let profile: HTMLElement;
 

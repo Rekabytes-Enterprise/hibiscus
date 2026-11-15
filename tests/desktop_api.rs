@@ -1,14 +1,12 @@
 //! The library API used by the desktop app. One test per binary: it sets
 //! process-wide environment variables, which the in-process engine reads.
-#[allow(dead_code)] // Only the temp-dir helper is used here.
-mod support;
+//! Runs on Windows too, so it doesn't use the Unix PTY harness in `support`.
 use hibiscus::desktop::{self, Engine, Start};
 use serde_json::{json, Value};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
-    os::unix::fs::PermissionsExt,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,6 +15,16 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("{prefix}-{}-{tick}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    root.canonicalize().unwrap()
+}
 
 fn sse(v: Value) -> String {
     format!("data: {v}\n\n")
@@ -101,7 +109,7 @@ fn prompt(engine: &mut Engine, text: &str) -> String {
 
 #[test]
 fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
-    let root = support::unique_temp_dir("hibiscus-desktop");
+    let root = unique_temp_dir("hibiscus-desktop");
     let home = root.join("app");
     let (a, b) = (root.join("a"), root.join("b"));
     for dir in [&home, &a, &b] {
@@ -185,11 +193,15 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     desktop::save_api_key("test", "SAVED-KEY").unwrap();
     let auth: Value = serde_json::from_slice(&fs::read(home.join("auth.json")).unwrap()).unwrap();
     assert_eq!(auth["test"], "SAVED-KEY");
-    let mode = fs::metadata(home.join("auth.json"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(home.join("auth.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     assert_eq!(
         desktop::key_page("openrouter"),
         Some("openrouter.ai/settings/keys")

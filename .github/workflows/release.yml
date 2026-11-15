@@ -897,5 +897,22 @@ jobs:
             test "$draft" = true
             gh release upload "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --clobber
           else
-            gh release create "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --draft --verify-tag --generate-notes --title "$RELEASE_TAG"
+            # A download guide above GitHub's generated notes. Outside dist/,
+            # so it is never uploaded as a file.
+            notes=$(mktemp)
+            base="https://github.com/$GH_REPO/releases/download/$RELEASE_TAG"
+            cat > "$notes" <<NOTES
+          ## Download
+
+          | | |
+          |---|---|
+          | **Mac** (Apple Silicon) | [hibiscus-desktop-aarch64-apple-darwin.dmg]($base/hibiscus-desktop-aarch64-apple-darwin.dmg) |
+          | **Windows** (10 and 11, x64) | [hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe]($base/hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe) |
+          | **Linux** (x86_64) | [hibiscus-desktop-x86_64.AppImage]($base/hibiscus-desktop-x86_64.AppImage) |
+          | **Terminal** (macOS, Linux) | \`curl -fsSL https://raw.githubusercontent.com/$GH_REPO/$RELEASE_TAG/install.sh \| HIBISCUS_VERSION=$RELEASE_TAG sh\` |
+
+          The desktop app is unsigned. See [opening the unsigned files](https://github.com/$GH_REPO/blob/main/docs/desktop/release.md#opening-the-unsigned-files) for the first launch. The other files are for the CLI installer, app updates and verification: \`SHA256SUMS\` and \`SHA256SUMS-desktop\` hold checksums, and the \`.sigstore.json\` files are signed build provenance.
+
+          NOTES
+            gh release create "$RELEASE_TAG" dist/* provenance/hibiscus-provenance.sigstore.json --draft --verify-tag --notes-file "$notes" --generate-notes --title "$RELEASE_TAG"
           fi

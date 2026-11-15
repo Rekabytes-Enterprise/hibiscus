@@ -5,6 +5,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod embed;
 pub(crate) mod error;
 mod run;
+pub(crate) mod socket;
 pub(crate) mod transport;
 
 #[cfg(feature = "fuzzing")]
