@@ -8,6 +8,12 @@ pub use crate::engine::{CodexSignIn, RekaSignIn};
 /// The agent-browser session the engine's browser tool uses, for the browser pane.
 pub const BROWSER_SESSION: &str = crate::engine::BROWSER_SESSION;
 
+/// WSL 2 connections for the Windows app: detect distros, connect a folder,
+/// and find a distro's home for the folder picker.
+pub mod wsl {
+    pub use crate::wsl::{connect, detect, home, Distro};
+}
+
 /// Dev servers the app runs per folder, shared with the engine's `dev_server` tool.
 pub mod dev_server {
     pub use crate::devserver::{detect, output, ready, start, status, stop, stop_all, Status};
