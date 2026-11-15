@@ -11,7 +11,7 @@ Hibiscus gets a desktop app for **macOS Apple Silicon** and **Linux x86_64**. Wi
 | 0 | [Library API](phase-0-library.md) (done) | The engine can be driven from code other than the terminal UI | No |
 | 1 | [Desktop MVP](phase-1-mvp.md) | Tauri app, `.dmg` and `.AppImage` in the release ([Desktop release](release.md)), desktop install script | Yes |
 | 2 | [Updates and polish](phase-2-updates.md) | Signed auto-updates, window state, notifications | Yes |
-| Later | [Windows](later-windows.md) | Native Windows port and `.msi`/`.exe` | Yes |
+| Later | [Windows](later-windows.md) | Native Windows port and `.exe` installer | Yes |
 
 Each phase ships on its own and leaves `main` releasable.
 
