@@ -609,6 +609,31 @@ async fn dev_server_detect(folder: PathBuf) -> Option<String> {
     dev_server::detect(&folder)
 }
 
+/// WSL 2 distros on this computer; empty outside Windows or without WSL. Runs
+/// off the main thread: `wsl.exe` can take a few seconds to answer.
+#[tauri::command]
+async fn wsl_distros() -> Vec<desktop::wsl::Distro> {
+    tauri::async_runtime::spawn_blocking(desktop::wsl::detect)
+        .await
+        .unwrap_or_default()
+}
+
+/// Connects `folder` to a distro, or disconnects it with no distro. The shell
+/// tool and dev server then run inside that distro.
+#[tauri::command]
+fn wsl_connect(folder: PathBuf, distro: Option<String>) {
+    desktop::wsl::connect(&folder, distro);
+}
+
+/// The distro's home folder as a Windows path, for the folder picker.
+#[tauri::command]
+async fn wsl_home(distro: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || desktop::wsl::home(&distro))
+        .await
+        .ok()
+        .flatten()
+}
+
 /// Starts the folder's dev server, or keeps the running one, and waits for its URL.
 #[tauri::command]
 async fn dev_server_start(folder: PathBuf) -> Result<Option<dev_server::Status>, String> {
@@ -815,6 +840,9 @@ fn main() {
             open_project,
             send,
             dev_server_detect,
+            wsl_distros,
+            wsl_connect,
+            wsl_home,
             dev_server_start,
             dev_server_status,
             dev_server_output,
