@@ -74,7 +74,7 @@ Keep the `workflow_dispatch` condition until the port passes and the team signs 
 
 npm runs scripts through `cmd.exe` on Windows, and a bare `bash` there can be the WSL launcher, so the build step sets `NPM_CONFIG_SCRIPT_SHELL` to Git Bash for the agent-browser fetch.
 
-For the public stage, the job drops its `workflow_dispatch` condition, writes a `receipt-windows` like the other builds, and exposes its digest as the `sha256` output.
+For the public stage, the job drops its `workflow_dispatch` condition, writes a `receipt-windows` like the other builds, and exposes its digest as the `sha256` output. Add a **Windows** row with the `-setup.exe` link to the Download table that `release.yml` writes into the release notes.
 
 ### Changes to the later jobs
 
