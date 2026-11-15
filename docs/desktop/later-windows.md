@@ -70,58 +70,11 @@ Keep the `workflow_dispatch` condition until the port passes and the team signs 
 
 ### New job
 
-`windows_x64` runs beside `macos_arm64` and `linux_x64`, and works the same way:
+`windows_x64` in `release-desktop.yml` runs beside `macos_arm64` and `linux_x64` and checks out the authorized commit the same way. It builds with `--bundles nsis` and uploads `hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe` with a `SHA256SUMS-windows` file as the `desktop-x86_64-pc-windows-msvc` artifact.
 
-```yaml
-  windows_x64:
-    # Internal stage: manual runs only. Remove for the public stage.
-    if: github.event_name == 'workflow_dispatch'
-    needs: verify
-    runs-on: windows-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    outputs:
-      sha256: ${{ steps.receipt.outputs.sha256 }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check out the authorized commit
-        shell: bash
-        env:
-          AUTHORIZED_COMMIT: ${{ needs.verify.outputs.source_commit }}
-        run: test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: 1.99.1
-      - name: Build the app
-        shell: bash
-        working-directory: desktop
-        run: |
-          npm ci
-          npm run tauri -- build --ci --bundles nsis
-      - name: Name the file and record its digest
-        id: receipt
-        shell: bash
-        run: |
-          shopt -s nullglob
-          built=(desktop/src-tauri/target/release/bundle/nsis/*-setup.exe)
-          test "${#built[@]}" -eq 1
-          mkdir -p dist
-          cp "${built[0]}" dist/hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe
-          (cd dist && sha256sum hibiscus-desktop-* > receipt-windows)
-          printf 'sha256=%s\n' "$(sha256sum dist/receipt-windows | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: desktop-x86_64-pc-windows-msvc
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 5
-```
+npm runs scripts through `cmd.exe` on Windows, and a bare `bash` there can be the WSL launcher, so the build step sets `NPM_CONFIG_SCRIPT_SHELL` to Git Bash for the agent-browser fetch.
+
+For the public stage, the job drops its `workflow_dispatch` condition, writes a `receipt-windows` like the other builds, and exposes its digest as the `sha256` output.
 
 ### Changes to the later jobs
 
