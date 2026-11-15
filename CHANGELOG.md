@@ -4,6 +4,21 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.40] - 2026-11-16
+
+### Added
+
+- Hibiscus Desktop for Windows (#195, #196, #198). Download `hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe` from the release; it installs for your user without administrator rights and updates itself like the macOS and Linux apps. The installer is not code-signed yet, so Windows SmartScreen asks you to click **More info**, then **Run anyway** the first time. The shell tool uses Git Bash when it is installed and PowerShell otherwise. The terminal UI is not available on Windows yet; use WSL for the CLI.
+- Release notes start with a Download table that links the right file for macOS, Windows, Linux and the terminal installer (#197).
+
+### Fixed
+
+- Browser sign-in no longer hangs on Windows (#195).
+
+### Documentation
+
+- How terminal users turn on the training-data opt-out (#190, thanks @jdotc1).
+
 ## [0.3.39] - 2026-11-14
 
 ### Added
