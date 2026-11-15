@@ -543,6 +543,15 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
                 if not exists:
                     self.assertIn('--verify-tag', calls[-1])
                     self.assertIn('--draft', calls[-1])
+                    self.assertIn('--generate-notes', calls[-1])
+                    notes = Path(calls[-1][calls[-1].index('--notes-file') + 1]).read_text()
+                    self.assertTrue(notes.startswith('## Download\n'))
+                    base = 'https://github.com/fixture/repo/releases/download/v1.2.3/'
+                    for name in ['hibiscus-desktop-aarch64-apple-darwin.dmg',
+                                 'hibiscus-desktop-x86_64.AppImage']:
+                        self.assertIn('](' + base + name + ')', notes)
+                    self.assertIn('`curl -fsSL https://raw.githubusercontent.com/fixture/repo/v1.2.3/install.sh '
+                                  '\\| HIBISCUS_VERSION=v1.2.3 sh`', notes)
                 self.assertEqual(len((self.root / 'dist/SHA256SUMS').read_text().splitlines()), 4)
 
     def test_normal_rebuild_also_refuses_an_already_published_release(self):
