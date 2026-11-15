@@ -130,7 +130,11 @@ impl Pending {
     }
     /// The authorization code from the browser callback or a pasted redirect URL.
     pub(in crate::engine) async fn wait(&self, mut manual: Receiver<String>) -> Result<String> {
-        let listener = tokio::net::TcpListener::from_std(self.listener.try_clone()?)?;
+        let listener = self.listener.try_clone()?;
+        // tokio needs a nonblocking socket, and on Windows a duplicated
+        // socket doesn't keep the original's nonblocking mode.
+        listener.set_nonblocking(true)?;
+        let listener = tokio::net::TcpListener::from_std(listener)?;
         let path = reqwest::Url::parse(&self.redirect)?.path().to_owned();
         let origin = self.redirect.trim_end_matches(path.as_str()).to_owned();
         let prefix = format!("{path}?");

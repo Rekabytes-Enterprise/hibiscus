@@ -277,6 +277,8 @@ fn local_directory(cwd: &Path, query: &str) -> Vec<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The TUI isn't available on Windows yet, and these are `/` display paths.
+    #[cfg(unix)]
     #[test]
     fn scoped_directory_and_fallback_keep_display_paths() {
         let root = std::env::temp_dir().join(format!(
