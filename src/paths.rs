@@ -12,8 +12,11 @@ pub(crate) fn home() -> io::Result<PathBuf> {
         }
         return Ok(path);
     }
+    // Windows usually has no HOME; home_dir reads the user profile there.
     env::var_os("HOME")
         .filter(|value| !value.is_empty())
-        .map(|home| PathBuf::from(home).join(".hibiscus"))
+        .map(PathBuf::from)
+        .or_else(|| if cfg!(windows) { env::home_dir() } else { None })
+        .map(|home| home.join(".hibiscus"))
         .ok_or_else(|| io::Error::other("HOME or HIBISCUS_HOME is required"))
 }

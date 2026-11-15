@@ -10,7 +10,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
-    os::unix::net::UnixStream,
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -107,15 +106,23 @@ fn failure(id: &str, message: &str) -> Value {
 fn queued(q: &Queue) -> Value {
     json!({"type":"queue_update","steering":q.items.iter().filter(|p|p.steer).map(|p|&p.text).collect::<Vec<_>>(),"followUp":q.items.iter().filter(|p|!p.steer).map(|p|&p.text).collect::<Vec<_>>()})
 }
-pub fn serve(socket: UnixStream, config: Config, session: Session) -> Result<()> {
+pub fn serve(
+    socket: crate::client::socket::Socket,
+    config: Config,
+    session: Session,
+) -> Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(serve_async(socket, config, session))
 }
-async fn serve_async(socket: UnixStream, mut config: Config, session: Session) -> Result<()> {
+async fn serve_async(
+    socket: crate::client::socket::Socket,
+    mut config: Config,
+    session: Session,
+) -> Result<()> {
     socket.set_nonblocking(true)?;
-    let (reader, mut writer) = tokio::net::UnixStream::from_std(socket)?.into_split();
+    let (reader, mut writer) = crate::client::socket::AsyncSocket::from_std(socket)?.into_split();
     let (commands, mut input) = mpsc::channel(64);
     let reading = tokio::spawn(async move {
         let mut reader = tokio::io::BufReader::new(reader);

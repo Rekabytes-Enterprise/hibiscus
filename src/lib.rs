@@ -10,6 +10,7 @@ mod engine;
 mod extensions;
 mod paths;
 mod process;
+mod sys;
 mod tui;
 mod ui;
 mod update;

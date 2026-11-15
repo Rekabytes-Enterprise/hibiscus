@@ -113,7 +113,7 @@ impl CodexSignIn {
             pasted,
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with(pending: protocol::Pending, endpoints: &protocol::Endpoints) -> Result<Self> {
         Ok(Self::from(BrowserSignIn::with(pending, endpoints)?))
     }
@@ -148,7 +148,7 @@ impl CodexSignIn {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 #[cfg(feature = "fuzzing")]

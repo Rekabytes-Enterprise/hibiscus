@@ -69,10 +69,10 @@ pub(crate) async fn run(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .process_group(0);
+        .kill_on_drop(true);
+    crate::sys::own_group(command.as_std_mut());
     let mut child = command.spawn()?;
-    let group = Group(
+    let group = crate::sys::ProcessTree::new(
         child
             .id()
             .ok_or_else(|| io::Error::other("Process PID unavailable"))?,
@@ -111,14 +111,4 @@ pub(crate) async fn run(
     let _ = child.start_kill();
     let _ = child.wait().await;
     result
-}
-struct Group(u32);
-impl Drop for Group {
-    fn drop(&mut self) {
-        // SAFETY: the child was created in its own process group; negative PID
-        // targets that group, including descendants which kept output pipes open.
-        unsafe {
-            libc::kill(-(self.0 as i32), libc::SIGKILL);
-        }
-    }
 }

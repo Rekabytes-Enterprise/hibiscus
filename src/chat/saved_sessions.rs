@@ -3,7 +3,6 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -86,13 +85,28 @@ struct Stamp {
     changed: (i64, i64),
 }
 impl Stamp {
+    #[cfg(unix)]
     fn of(meta: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
         Self {
             device: meta.dev(),
             inode: meta.ino(),
             size: meta.len(),
             modified: (meta.mtime(), meta.mtime_nsec()),
             changed: (meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+    // shortcut: Windows has no stable file ID in std yet, so a replaced file of
+    // the same size and times reuses the cached title until the next change.
+    #[cfg(windows)]
+    fn of(meta: &fs::Metadata) -> Self {
+        use std::os::windows::fs::MetadataExt;
+        Self {
+            device: 0,
+            inode: 0,
+            size: meta.len(),
+            modified: (meta.last_write_time() as i64, 0),
+            changed: (meta.creation_time() as i64, 0),
         }
     }
 }

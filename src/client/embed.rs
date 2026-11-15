@@ -2,11 +2,11 @@
 //! app). Commands and events are the engine's JSON records; the transport keeps
 //! the TUI's byte/record limits, write deadlines and shutdown behaviour.
 use super::bridge::{spawn_engine, SessionStart, SocketReader};
+use super::socket::Socket;
 use super::transport::{Events, Inbox, Limits, PipeWriter};
 use crate::Result;
 use serde_json::Value;
 use std::io::Write;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread::JoinHandle;
@@ -22,8 +22,8 @@ pub enum Start {
 
 pub struct Engine {
     worker: Option<JoinHandle<()>>,
-    control: UnixStream,
-    input: Option<PipeWriter<UnixStream>>,
+    control: Socket,
+    input: Option<PipeWriter<Socket>>,
     output: Inbox,
     next_id: u64,
     failure: Arc<Mutex<Option<String>>>,

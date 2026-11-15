@@ -1,6 +1,6 @@
 use super::*;
+use crate::sys::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Component;
 
 pub(super) fn directory(path: &Path) -> Result<()> {
@@ -17,7 +17,7 @@ pub(super) fn directory(path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
         Err(error) => return Err(error.into()),
     }
-    fs::File::open(parent)?.sync_all()?;
+    crate::sys::sync_dir(parent)?;
     Ok(())
 }
 pub(super) fn digest(bytes: &[u8]) -> String {
@@ -41,7 +41,7 @@ pub(super) fn read(path: &Path) -> Result<(Image, Vec<u8>)> {
     }
     let file = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(crate::sys::O_NOFOLLOW)
         .open(path)?;
     let mode = file.metadata()?.permissions().mode() & 0o777;
     let mut bytes = Vec::new();
@@ -126,10 +126,13 @@ pub(super) fn atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
             .mode(0o600)
             .open(&temp)?;
         file.write_all(bytes)?;
+        #[cfg(unix)]
         file.set_permissions(fs::Permissions::from_mode(mode))?;
+        #[cfg(windows)]
+        let _ = mode;
         file.sync_all()?;
         fs::rename(&temp, path)?;
-        fs::File::open(parent)?.sync_all()?;
+        crate::sys::sync_dir(parent)?;
         Ok(())
     })();
     if result.is_err() {
@@ -141,7 +144,7 @@ pub(super) fn apply(path: &Path, image: &Image, bytes: &[u8]) -> Result<()> {
     match image {
         Image::Missing => {
             fs::remove_file(path)?;
-            fs::File::open(path.parent().ok_or("Missing parent")?)?.sync_all()?;
+            crate::sys::sync_dir(path.parent().ok_or("Missing parent")?)?;
             Ok(())
         }
         Image::Present { mode, .. } => atomic(path, bytes, *mode),

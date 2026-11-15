@@ -1,12 +1,9 @@
+use crate::sys::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use crate::Result;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fs,
     io::Read,
-    os::unix::{
-        fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
-        io::AsRawFd,
-    },
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -63,7 +60,7 @@ impl Store {
     pub(in crate::engine) fn read_json<T: DeserializeOwned>(&self) -> Result<Option<T>> {
         let file = match fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .custom_flags(crate::sys::O_NOFOLLOW | crate::sys::O_NONBLOCK)
             .open(&self.path)
         {
             Ok(file) => file,
@@ -111,15 +108,13 @@ impl Store {
             .read(true)
             .write(true)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .custom_flags(crate::sys::O_NOFOLLOW | crate::sys::O_NONBLOCK)
             .open(self.path.with_extension("lock"))?;
         if !file.metadata()?.is_file() || file.metadata()?.permissions().mode() & 0o077 != 0 {
             return Err("Credential lock must be a regular private file".into());
         }
         // Advisory locks survive atomic auth-file replacement and cover processes.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
+        file.try_lock().map_err(std::io::Error::from)?;
         Ok(file)
     }
     pub(in crate::engine) async fn lock(&self) -> Result<fs::File> {

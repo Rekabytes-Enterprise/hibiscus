@@ -1,11 +1,6 @@
+use crate::sys::{OpenOptionsExt, PermissionsExt};
 use crate::Result;
-use std::{
-    collections::HashMap,
-    fs,
-    io::Read,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::Path,
-};
+use std::{collections::HashMap, fs, io::Read, path::Path};
 
 const MAX_AUTH_BYTES: usize = 128 * 1024;
 pub(super) fn keys() -> Result<HashMap<String, String>> {
@@ -20,7 +15,7 @@ fn keys_at(path: &Path) -> Result<HashMap<String, String>> {
 fn open_key_file(path: &Path) -> Result<Option<fs::File>> {
     let file = match fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .custom_flags(crate::sys::O_NOFOLLOW | crate::sys::O_NONBLOCK)
         .open(path)
     {
         Ok(file) => file,
@@ -92,5 +87,5 @@ pub(crate) fn save_api_key(provider: &str, key: String) -> Result<()> {
     save(&keys)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

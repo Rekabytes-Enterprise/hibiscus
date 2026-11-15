@@ -11,8 +11,10 @@ fn desktop_copy(text: &str) -> bool {
     }
     #[cfg(target_os = "macos")]
     let candidates: Vec<(&str, &[&str])> = vec![("pbcopy", &[])];
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     let mut candidates: Vec<(&str, &[&str])> = Vec::new();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let candidates: Vec<(&str, &[&str])> = Vec::new();
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {

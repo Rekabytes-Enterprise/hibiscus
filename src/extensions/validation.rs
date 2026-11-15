@@ -8,7 +8,6 @@ use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -101,7 +100,7 @@ fn executable_path(value: &str, directory: &Path) -> Result<PathBuf> {
         .ok_or_else(|| format!("Extension executable is unavailable on PATH: {expanded}").into())
 }
 fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    std::fs::metadata(path).is_ok_and(|m| crate::sys::executable(path, &m))
 }
 pub(super) fn executable(manifest: &manifest::Manifest, directory: &Path) -> Result<()> {
     let directory = directory.canonicalize()?;

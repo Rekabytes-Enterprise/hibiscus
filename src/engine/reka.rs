@@ -187,13 +187,7 @@ async fn revoke(gateway: &str, refresh: &str) -> Result<()> {
 
 /// A name for this device on the website's device list.
 fn device(kind: &str) -> String {
-    let mut buffer = [0u8; 256];
-    let host = if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } == 0 {
-        let end = buffer.iter().position(|b| *b == 0).unwrap_or(buffer.len());
-        String::from_utf8_lossy(&buffer[..end]).into_owned()
-    } else {
-        String::new()
-    };
+    let host = crate::sys::hostname().unwrap_or_default();
     let host: String = host.chars().filter(|c| !c.is_control()).take(60).collect();
     if host.trim().is_empty() {
         format!("Hibiscus {kind}")
