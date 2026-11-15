@@ -157,12 +157,15 @@ describe("tool calls", () => {
     expect(toolView(tool("bash", { command: "npm test\nmore" }, { running: true }), "/w")).toMatchObject({ verb: "Running", target: "npm test", command: true });
     expect(toolView(tool("browser", { args: ["click", "@e3"] }), "/w")).toMatchObject({ verb: "Browsed", target: "click @e3", icon: "globe" });
     expect(relative("/other/x", "/w")).toBe("/other/x");
+    expect(relative("C:\\w\\src\\main.rs", "C:\\w")).toBe("src\\main.rs");
   });
 
   it("shortens session folder paths in commands", () => {
     const ran = (command: string) => toolView(tool("bash", { command }), "/w/app").target;
     expect(ran("rg foo /w/app/src /w/app")).toBe("rg foo src .");
     expect(ran("cd '/w/app' && ls /w/apple")).toBe("cd '.' && ls /w/apple");
+    const win = (command: string) => toolView(tool("bash", { command }), "C:\\w\\app").target;
+    expect(win("dir C:\\w\\app\\src C:\\w\\app")).toBe("dir src .");
   });
 
   it("merges back-to-back goal updates into the latest one", () => {
