@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.3.41] - 2026-11-16
+
+### Added
+
+- Windows desktop: a WSL button beside the browser button in the title bar connects the open folder to a WSL 2 distro (#201, #202). Hibiscus finds installed distros on its own. Once connected, the shell tool and dev servers run inside the distro, and Linux paths map to Windows paths. The choice is saved per folder, and clicking the button again disconnects. With several distros, the button opens a menu with the default one first.
+
+### Changed
+
+- Updated the jsonschema dependency to 0.61.2 (#203).
+
 ## [0.3.40] - 2026-11-16
 
 ### Added
