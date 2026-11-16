@@ -4,7 +4,7 @@
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
+  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -38,6 +38,37 @@
   /** The Settings page to open on. */
   let settingsStart = $state<"account" | "providers">("providers");
   let folder = $state<string | null>(null);
+
+  // WSL 2 on Windows (#201): the distros found at startup, and the distro each
+  // folder is connected to. Connecting is always the user's choice.
+  const WSL = "hibiscus.wsl:";
+  let distros = $state<Distro[]>([]);
+  let wsl = $state<Record<string, string>>(
+    Object.fromEntries(
+      Object.keys(localStorage)
+        .filter((k) => k.startsWith(WSL))
+        .map((k) => [k.slice(WSL.length), localStorage.getItem(k) ?? ""]),
+    ),
+  );
+  const connected = $derived(folder ? wsl[folder] : undefined);
+
+  async function connectWsl(distro: string | null) {
+    if (!folder) return;
+    const f = folder;
+    try {
+      await wslConnect(f, distro);
+    } catch (e) {
+      error = message(e);
+      return;
+    }
+    if (distro) {
+      localStorage.setItem(WSL + f, distro);
+      wsl[f] = distro;
+    } else {
+      localStorage.removeItem(WSL + f);
+      delete wsl[f];
+    }
+  }
   let recent = $state<string[]>(JSON.parse(localStorage.getItem(RECENT) ?? "[]"));
   // Saved sessions per recent folder, for the sidebar.
   let saved = $state<Record<string, SavedSession[]>>({});
@@ -120,6 +151,10 @@
 
   // Like a new chat: start in the last folder, or home the first time.
   onMount(async () => {
+    // Remembered WSL connections apply before any folder opens; detection runs
+    // in the background and only decides whether the button shows.
+    await Promise.all(Object.entries(wsl).map(([f, d]) => wslConnect(f, d).catch(() => {})));
+    void wslDistros().then((d) => (distros = d)).catch(() => {});
     home = await homeDir();
     if (recent[0]) await open(recent[0]);
     if (!folder) await open(home);
@@ -188,7 +223,9 @@
 
   /** Adds a folder to the list without starting a session in it. */
   async function addFolder() {
-    const path = await pickFolder({ directory: true, multiple: false, defaultPath: folder ?? undefined });
+    // While connected to WSL, the picker opens in the distro's home.
+    const start = connected ? await wslHome(connected).catch(() => null) : null;
+    const path = await pickFolder({ directory: true, multiple: false, defaultPath: start ?? folder ?? undefined });
     if (typeof path !== "string") return;
     saveRecent(added(recent, path));
     void loadSessions(path);
@@ -439,6 +476,24 @@
   <main>
     <div class="titlebar" data-tauri-drag-region>
       <span class="grow ellipsis" data-tauri-drag-region>{page === "settings" ? "Settings" : title}</span>
+      {#if page === "chat" && folder && distros.length === 1}
+        <button class="iconbtn" class:on={!!connected} onclick={() => connectWsl(connected ? null : distros[0].name)} title={connected ? `WSL: ${connected}. Click to disconnect` : `Connect to WSL (${distros[0].name})`} aria-label="WSL" aria-pressed={!!connected}><Icon name="terminal" /></button>
+      {:else if page === "chat" && folder && distros.length > 1}
+        <span class="wsl" class:on={!!connected}>
+          <Menu
+            actions
+            label="WSL"
+            title={connected ? `WSL: ${connected}` : "Connect to WSL"}
+            options={[
+              ...distros.map((d) => ({ value: d.name, label: d.name === connected ? `${d.name} (connected)` : d.default ? `${d.name} (default)` : d.name })),
+              ...(connected ? [{ value: "", label: "Disconnect" }] : []),
+            ]}
+            onpick={(d) => connectWsl(d || null)}
+          >
+            {#snippet trigger()}<Icon name="terminal" />{/snippet}
+          </Menu>
+        </span>
+      {/if}
       {#if page === "chat" && folder}
         <button class="iconbtn" class:on={showBrowser} onclick={() => (browserOpen ? closeBrowser() : (browserOpen = true))} title={showBrowser ? "Hide browser" : "Show browser"} aria-label="Browser" aria-pressed={showBrowser}><Icon name="globe" /></button>
       {/if}

@@ -18,6 +18,8 @@ struct Server {
     command: String,
     child: Child,
     tree: crate::sys::ProcessTree,
+    /// Set in a WSL-connected folder; dropping it kills the server inside Linux.
+    wsl: Option<crate::wsl::Run>,
     output: Arc<Mutex<Output>>,
 }
 
@@ -86,7 +88,11 @@ pub fn start(folder: &Path, command: Option<&str>) -> Result<Status> {
         Some(c) if !c.trim().is_empty() => c.trim().to_string(),
         _ => detect(folder).ok_or("No start command found. Pass the command to run.")?,
     };
-    let mut child = crate::sys::shell(&command);
+    let wsl = crate::wsl::distro_for(folder).map(crate::wsl::Run::new);
+    let mut child = match &wsl {
+        Some(run) => run.command(folder, &command)?,
+        None => crate::sys::shell(&command),
+    };
     // Its own group, so stopping it also stops what the shell started.
     crate::sys::own_group(&mut child);
     let mut child = child
@@ -135,6 +141,7 @@ pub fn start(folder: &Path, command: Option<&str>) -> Result<Status> {
                 command,
                 child,
                 tree,
+                wsl,
                 output,
             },
         )
@@ -195,6 +202,8 @@ pub fn stop_all() {
 }
 
 fn end(mut server: Server) {
+    // Inside WSL, stop the Linux side first: wsl.exe exiting can leave it running.
+    drop(server.wsl.take());
     if server.child.try_wait().ok().flatten().is_some() {
         return;
     }

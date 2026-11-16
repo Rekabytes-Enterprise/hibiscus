@@ -14,6 +14,7 @@ mod sys;
 mod tui;
 mod ui;
 mod update;
+mod wsl;
 
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;

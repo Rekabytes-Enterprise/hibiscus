@@ -339,7 +339,7 @@ form p { margin: 0; }
 .body { flex: 1; display: flex; min-height: 0; }
 .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.titlebar .iconbtn.on { color: var(--text); background: var(--hover); }
+.titlebar .iconbtn.on, .titlebar .wsl.on .iconbtn { color: var(--text); background: var(--hover); }
 
 aside.right { width: 300px; flex: none; border-left: 1px solid var(--line); overflow-y: auto; padding: 6px 10px 16px; }
 aside.right section { padding: 8px 0; border-bottom: 1px solid var(--line); }
