@@ -668,7 +668,7 @@ async fn run_turns(
             let (p, m) = snapshot.selected(&config)?;
             let instructions = super::policy::compose(&snapshot.cwd);
             let registry = extensions.snapshot();
-            let mut definitions = tools::definitions();
+            let mut definitions = tools::definitions(Some(&snapshot.cwd));
             definitions.extend(registry.definitions().cloned());
             if p.authentication == config::Authentication::Rooxcode
                 && super::context::pressure(p, m, &snapshot, &instructions, Some(&definitions))?

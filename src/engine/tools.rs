@@ -7,12 +7,18 @@ use std::{
 };
 use tokio::{process::Command, sync::watch};
 
-pub fn definitions() -> Vec<Value> {
+/// The built-in tools. `cwd` is the session folder: when it is connected to
+/// WSL, the bash tool says it runs there.
+pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
+    let shell = match cwd.and_then(crate::wsl::distro_for) {
+        Some(distro) => crate::wsl::description(&distro),
+        None => crate::sys::shell_description().to_owned(),
+    };
     let mut definitions = vec![
         json!({"name":"read","description":"Read a UTF-8 text file. Offset and limit are one-based line bounds. Output is bounded.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
-        json!({"name":"bash","description":crate::sys::shell_description(),"parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
+        json!({"name":"bash","description":shell,"parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
     if agent_browser().is_some() {
@@ -120,6 +126,13 @@ struct Goal {
 fn path(cwd: &Path, path: &str) -> Result<PathBuf> {
     if path.is_empty() {
         return Err("Empty file path".into());
+    }
+    // In a WSL-connected folder the model sees Linux paths, such as
+    // `/home/me/app/main.rs` or `/mnt/c/...`; read them as the Windows path.
+    if cfg!(windows) && path.starts_with('/') {
+        if let Some(distro) = crate::wsl::distro_for(cwd) {
+            return Ok(PathBuf::from(crate::wsl::to_windows(&distro, path)));
+        }
     }
     let p = PathBuf::from(path);
     Ok(if p.is_absolute() { p } else { cwd.join(p) })
@@ -298,15 +311,26 @@ pub async fn execute(
         }
         "bash" => {
             let a: Bash = serde_json::from_value(args.clone())?;
-            let mut cmd = Command::from(crate::sys::shell(&a.command));
-            cmd.current_dir(cwd);
+            // In a WSL-connected folder the command runs in that distro; `wsl`
+            // kills its Linux process group when dropped, after the run.
+            let wsl = crate::wsl::distro_for(cwd).map(crate::wsl::Run::new);
+            let cmd = match &wsl {
+                Some(run) => Command::from(run.command(cwd, &a.command)?),
+                None => {
+                    let mut cmd = Command::from(crate::sys::shell(&a.command));
+                    cmd.current_dir(cwd);
+                    cmd
+                }
+            };
             let output = crate::process::run(
                 cmd,
                 None,
                 Duration::from_secs(a.timeout.unwrap_or(120)),
                 cancel,
             )
-            .await?;
+            .await;
+            drop(wsl);
+            let output = output?;
             let text = format!(
                 "{}{}",
                 String::from_utf8_lossy(&output.stdout),

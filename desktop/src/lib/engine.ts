@@ -132,3 +132,13 @@ export type Changes = { base: string | null; bases: string[]; branch: string | n
 /** `base` is the branch the user picked; `null` lets the app pick the nearest one. */
 export const gitChanges = (folder: string, base: string | null = null) => invoke<Changes | null>("git_changes", { folder, base });
 export const openFile = (folder: string, path: string) => invoke<void>("open_file", { folder, path });
+
+/** A WSL 2 distro found on this computer (#201). */
+export type Distro = { name: string; default: boolean };
+/** WSL 2 distros, the default first; empty outside Windows or without WSL. */
+export const wslDistros = () =>
+  invoke<Distro[]>("wsl_distros").then((d) => [...d].sort((a, b) => Number(b.default) - Number(a.default)));
+/** Runs the folder's shell tool and dev server in `distro`, or back on Windows with null. */
+export const wslConnect = (folder: string, distro: string | null) => invoke<void>("wsl_connect", { folder, distro });
+/** The distro's home folder as a Windows path, for the folder picker. */
+export const wslHome = (distro: string) => invoke<string | null>("wsl_home", { distro });
