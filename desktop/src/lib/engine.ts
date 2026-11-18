@@ -20,6 +20,8 @@ export type ModelInfo = {
   contextWindow: number | null;
   reasoning: boolean;
   images: boolean;
+  /** The reasoning levels this model offers; the first is the default. */
+  thinkingLevels?: string[];
 };
 
 const pending = new Map<string, { resolve: (data: any) => void; reject: (e: Error) => void }>();
@@ -142,3 +144,53 @@ export const wslDistros = () =>
 export const wslConnect = (folder: string, distro: string | null) => invoke<void>("wsl_connect", { folder, distro });
 /** The distro's home folder as a Windows path, for the folder picker. */
 export const wslHome = (distro: string) => invoke<string | null>("wsl_home", { distro });
+
+/** An ElevenLabs model that can do text to speech. */
+export type VoiceModel = { id: string; name: string; description: string; maxText: number | null };
+/** A voice in the user's ElevenLabs library. */
+export type Voice = { id: string; name: string; category: string | null; previewUrl: string | null };
+
+/**
+ * The ElevenLabs connector. "Sign in with ElevenLabs" (OAuth, like Claude's
+ * connector) or a pasted API key; credentials stay in the app's private files.
+ */
+export const elevenlabs = {
+  /** How it is connected: "oauth", "key", or null. */
+  status: () => invoke<"oauth" | "key" | null>("elevenlabs_status"),
+  /** Opens the ElevenLabs sign-in page; returns its link. Watch `onLogin` for the result. */
+  signIn: () => invoke<string>("elevenlabs_sign_in"),
+  paste: (url: string) => invoke<void>("elevenlabs_sign_in_paste", { url }),
+  cancel: () => invoke<void>("elevenlabs_sign_in_cancel"),
+  /** `null` once signed in, else the error. */
+  onLogin: (listener: (error: string | null) => void) => listen<string | null>("elevenlabs-login", (e) => listener(e.payload)),
+  connect: (key: string) => invoke<void>("elevenlabs_connect", { key }),
+  disconnect: () => invoke<void>("elevenlabs_disconnect"),
+  models: () => invoke<VoiceModel[]>("elevenlabs_models"),
+  voices: (search?: string) => invoke<Voice[]>("elevenlabs_voices", { search: search ?? null }),
+  /** MP3 audio as base64. */
+  speak: (text: string, voice: string, model: string) =>
+    invoke<{ mimeType: string; data: string }>("elevenlabs_speak", { text, voice, model }),
+};
+
+/** Saves a canvas reference's bytes where the agent can read them; returns the path. */
+export const saveReference = (name: string, bytes: Uint8Array) =>
+  invoke<string>("canvas_save_reference", bytes, { headers: { "x-name": name.replace(/[^A-Za-z0-9._-]/g, "_") } });
+
+/** A session's saved canvas as JSON, or null. */
+export const canvasLoad = (session: string) => invoke<string | null>("canvas_load", { session });
+/** Saves a session's canvas; an empty string removes it. */
+export const canvasStore = (session: string, board: string) => invoke<void>("canvas_store", { session, board });
+/** A saved reference's bytes, to show it again after a restart. */
+export const readReference = (path: string) => invoke<ArrayBuffer>("canvas_read_reference", { path });
+
+/** The video engine (Node.js, HyperFrames and its Chrome), installed from the canvas. */
+export const videoEngine = {
+  installed: () => invoke<boolean>("video_engine_status"),
+  install: () => invoke<void>("video_engine_install"),
+  onProgress: (listener: (p: { step: string; percent: number | null }) => void) =>
+    listen<{ step: string; percent: number | null }>("video-engine-progress", (e) => listener(e.payload)),
+};
+
+/** A video style: a skill in ~/.hibiscus/skills marked `hibiscus-style: true`. */
+export type Style = { name: string; description: string; path: string };
+export const canvasStyles = () => invoke<Style[]>("canvas_styles");

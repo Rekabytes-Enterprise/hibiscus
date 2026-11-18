@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; frame-src http://localhost:* http://127.0.0.1:*",
       "freezePrototype": true
     },
     "macOSPrivateApi": true
@@ -44,8 +44,8 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "externalBin": ["binaries/agent-browser"],
-    "resources": { "licenses/agent-browser.txt": "licenses/agent-browser.txt" },
+    "externalBin": ["binaries/agent-browser", "binaries/ffmpeg"],
+    "resources": { "licenses/agent-browser.txt": "licenses/agent-browser.txt", "licenses/ffmpeg.txt": "licenses/ffmpeg.txt", "skills/": "skills/" },
     "category": "DeveloperTool",
     "shortDescription": "Hibiscus coding agent",
     "macOS": {

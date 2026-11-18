@@ -2,9 +2,11 @@
 //! It never imports terminal code; the terminal talks to it through `client`.
 pub(crate) mod agent;
 pub(crate) mod auth;
+mod capped;
 pub(crate) mod catalog;
 pub(crate) mod config;
 mod context;
+pub(crate) mod elevenlabs_auth;
 mod event;
 pub(crate) mod logout;
 pub(crate) mod oauth;
@@ -14,6 +16,7 @@ pub(crate) mod privacy;
 mod provider;
 pub(crate) mod reka;
 mod rooxcode;
+mod search;
 pub(crate) mod session;
 mod thinking;
 pub(crate) mod tool_output;

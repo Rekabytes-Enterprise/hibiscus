@@ -75,8 +75,10 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; background:
 :root.mac aside.left { background: transparent; }
 :root.mac .traffic { height: 34px; }
 
-aside.left { width: 260px; flex: none; background: var(--sidebar); border-right: 1px solid var(--line); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; min-height: 0; }
-.traffic { flex: none; }
+aside.left { width: var(--sidebar-width, 260px); flex: none; background: var(--sidebar); border-right: 1px solid var(--line); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; min-height: 0; }
+.resizer { flex: none; width: 7px; margin: 0 -4px 0 -3px; cursor: col-resize; z-index: 2; touch-action: none; }
+.resizer:hover, .resizer:active { background: linear-gradient(to right, transparent 3px, var(--muted) 3px, var(--muted) 4px, transparent 4px); }
+.traffic { flex: none; display: flex; justify-content: flex-end; align-items: center; padding: 0 2px 6px; }
 .nav { border: none; background: none; text-align: left; padding: 0 10px; height: 34px; border-radius: 8px; }
 .nav:hover:not(:disabled), .list button:hover:not(:disabled), .group:hover { background: var(--hover); }
 .groups { overflow-y: auto; flex: 1; margin-top: 18px; }
@@ -165,7 +167,7 @@ aside.left footer .profile { min-width: 0; }
 .settings { flex: 1; display: flex; min-height: 0; }
 .settings nav { width: 200px; flex: none; padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); }
 .settings nav .heading { padding: 14px 10px 4px; }
-.settings .nav.active { background: var(--hover); }
+.settings .nav.active, .left .nav.active { background: var(--hover); }
 /* Like the chat: the scroll area spans the window, the content stays centred. */
 .settings section { flex: 1; min-width: 0; overflow-y: auto; padding: 24px max(24px, (100% - 960px) / 2) 40px; }
 .settings h2 { margin: 0 0 4px; font-size: 18px; }
@@ -223,7 +225,7 @@ aside.left footer .profile { min-width: 0; }
 .provider { display: flex; align-items: center; gap: 10px; }
 .settings-list form { margin-top: 10px; }
 
-@media (max-width: 720px) { aside.left { display: none; } }
+@media (max-width: 720px) { aside.left, .resizer { display: none; } }
 
 .chat { flex: 1; overflow-y: auto; padding: 24px max(24px, (100% - 760px) / 2) 32px; display: flex; flex-direction: column; gap: 18px; }
 .chat .empty { margin: auto; }
@@ -320,7 +322,7 @@ aside.right .bone.line { margin: 14px 6px; }
 
 .actions { display: flex; gap: 8px; align-items: center; }
 
-.backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.35); display: grid; place-items: center; }
+.backdrop { position: fixed; inset: 0; z-index: 50; background: rgb(0 0 0 / 0.35); display: grid; place-items: center; }
 .modal { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 16px; width: min(440px, 92vw); max-height: 86vh; display: flex; flex-direction: column; gap: 10px; }
 .modal.wide { width: min(720px, 94vw); }
 .modal h2 { margin: 0; font-size: 16px; }
@@ -339,6 +341,9 @@ form p { margin: 0; }
 .body { flex: 1; display: flex; min-height: 0; }
 .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.titlebar .toggle { margin: 0 8px 0 -8px; }
+/* With the sidebar hidden, the title bar makes room for the macOS window buttons. */
+:root.mac .titlebar.collapsed { padding-left: 96px; }
 .titlebar .iconbtn.on, .titlebar .wsl.on .iconbtn { color: var(--text); background: var(--hover); }
 
 aside.right { width: 300px; flex: none; border-left: 1px solid var(--line); overflow-y: auto; padding: 6px 10px 16px; }
@@ -462,3 +467,7 @@ table.hunks tr.gap td { padding: 4px 16px; color: var(--muted); background: var(
 .toggle input[type="checkbox"] { width: auto; flex: none; }
 .settings h3 { margin: 28px 0 10px; font-size: 15px; }
 .legal { font-size: 13.5px; line-height: 1.65; margin-top: 12px; }
+
+/* While dragging a sidebar or card edge, nothing gets text-selected. */
+body.resizing, body.resizing *, body.moving, body.moving * { user-select: none; -webkit-user-select: none; }
+body.moving, body.moving * { cursor: grabbing !important; }

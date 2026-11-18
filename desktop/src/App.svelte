@@ -2,9 +2,9 @@
   import { invoke } from "@tauri-apps/api/core";
   import { homeDir } from "@tauri-apps/api/path";
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
+  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -19,6 +19,8 @@
   import Models from "./lib/Models.svelte";
   import NewSession from "./lib/NewSession.svelte";
   import Settings from "./lib/Settings.svelte";
+  import Canvas from "./lib/Canvas.svelte";
+  import { answers, board, busy as cardBusy, restore, serialize, styleOf, fillFrames, openFrames, openPreview, openQuestions, openScript, openStoryboard, outOfSync, removeCard, scriptOf, voiced, type Card, type Reference } from "./lib/board.svelte";
   import SignIn from "./lib/SignIn.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
@@ -36,7 +38,7 @@
   /** The signed-in Reka Bytes account for the sidebar profile, or null. */
   let account = $state<RekaAccount | null>(null);
   /** The Settings page to open on. */
-  let settingsStart = $state<"account" | "providers">("providers");
+  let settingsStart = $state<"account" | "providers" | "connectors">("providers");
   let folder = $state<string | null>(null);
 
   // WSL 2 on Windows (#201): the distros found at startup, and the distro each
@@ -102,7 +104,33 @@
   let extensions = $state<{ name: string; description: string }[]>([]);
   let panelOpen = $state(true);
   let dialog = $state<"models" | null>(null);
-  let page = $state<"chat" | "settings">("chat");
+  let page = $state<"chat" | "settings" | "canvas">("chat");
+  // The left sidebar collapses from the title bar; the choice is remembered.
+  const SIDEBAR = "hibiscus.sidebarClosed";
+  let sidebarOpen = $state(!localStorage.getItem(SIDEBAR));
+  // Dragging the sidebar's edge sets its width, kept between launches.
+  const SIDEBAR_WIDTH = "hibiscus.sidebarWidth";
+  const clampWidth = (w: number) => Math.min(480, Math.max(200, Math.round(w)));
+  let sidebarWidth = $state(clampWidth(Number(localStorage.getItem(SIDEBAR_WIDTH)) || 260));
+  function resizeSidebar(e: PointerEvent) {
+    e.preventDefault();
+    document.body.classList.add("resizing");
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const start = e.clientX - sidebarWidth;
+    const move = (m: PointerEvent) => (sidebarWidth = clampWidth(m.clientX - start));
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", () => {
+      handle.removeEventListener("pointermove", move);
+      document.body.classList.remove("resizing");
+      localStorage.setItem(SIDEBAR_WIDTH, String(sidebarWidth));
+    }, { once: true });
+  }
+  function toggleSidebar() {
+    sidebarOpen = !sidebarOpen;
+    if (sidebarOpen) localStorage.removeItem(SIDEBAR);
+    else localStorage.setItem(SIDEBAR, "1");
+  }
   let error = $state<string | null>(null);
   let opening = $state(false);
   // A session still loading: its row and title change on the click (#171).
@@ -118,6 +146,47 @@
   // The session panel only has something to say once the session has started.
   const active = $derived(page === "chat" && !!folder && (chat.items.length > 0 || chat.running));
   // The browser is there before a session starts too, to open a page by hand.
+  // Each session keeps its own canvas, saved with it. `boardSession` is the session the
+  // cards on screen belong to; a canvas started before the first message joins the
+  // session that message creates.
+  let boardSession: string | null = null;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const json = serialize();
+    const session = boardSession;
+    if (!session) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => void canvasStore(session, json).catch(() => {}), 600);
+  });
+  $effect(() => {
+    const session = sessionFile;
+    untrack(() => void switchBoard(session));
+  });
+  async function switchBoard(session: string | null) {
+    if (session === boardSession) return;
+    if (boardSession) {
+      clearTimeout(saveTimer);
+      await canvasStore(boardSession, serialize()).catch(() => {});
+    }
+    if (!boardSession && session && board.cards.length) {
+      boardSession = session;
+      return;
+    }
+    boardSession = session;
+    restore(session ? await canvasLoad(session).catch(() => null) : null, readReference);
+  }
+
+  /** Video styles from ~/.hibiscus/skills, read when the app starts. */
+  let styles = $state<Style[]>([]);
+  /** The model error from the current canvas run, if its reply failed. */
+  let runError: string | null = null;
+  /** The current canvas run's last tool step, and whether a reply has followed it. */
+  let lastStep: string | undefined;
+  let afterTool: string | undefined;
+  void canvasStyles().then((s) => (styles = s)).catch(() => {});
+
+  // A session started from a canvas card: its title bar links back to the canvas.
+  const fromCanvas = $derived(chat.items.some((i) => i.kind === "user" && i.text.startsWith("[Canvas ")));
   const showBrowser = $derived(page === "chat" && !!folder && browserOpen);
   const title = $derived(
     (folder && saved[folder]?.find((s) => s.path === (pending ?? sessionFile))?.title) || "New session",
@@ -175,6 +244,61 @@
       if (event.type === "message_end" && needsSignIn(event.message?.errorMessage)) showSignIn();
       if (event.type === "agent_start") browserShown = false;
       if (event.type === "tool_execution_start" && event.toolName === "browser") browsing(event.toolCallId, event.args?.args);
+      // The agent's questions open as a card with suggested answers.
+      if (event.type === "tool_execution_start" && event.toolName === "ask_user") {
+        openQuestions(event.args ?? {});
+        page = "canvas";
+      }
+      // The storyboard and the video preview open on the canvas for the user to review.
+      if (event.type === "tool_execution_start" && event.toolName === "storyboard") {
+        openStoryboard(event.args ?? {});
+        page = "canvas";
+      }
+      if (event.type === "tool_execution_start" && event.toolName === "video_preview") {
+        openPreview(event.args ?? {});
+        page = "canvas";
+      }
+      // A video's frames open on the canvas as the agent cuts them, joined to its card.
+      if (event.type === "tool_execution_start" && event.toolName === "analyze_video") {
+        openFrames(event.toolCallId, event.args?.path ?? "video");
+        page = "canvas";
+      }
+      if (event.type === "tool_execution_end" && event.toolName === "analyze_video") fillFrames(event.toolCallId, event.result, !!event.isError);
+      // What the agent is doing for the card it works for, shown live on that card.
+      const working = board.cards.find((c) => c.id === board.active);
+      // A run that ends right after a tool result, with no reply, stopped before finishing.
+      if (event.type === "agent_start") afterTool = undefined;
+      if (event.type === "tool_execution_start") lastStep = activity(event.toolName, event.args);
+      if (event.type === "tool_execution_end") afterTool = lastStep;
+      if (event.type === "message_end" && event.message?.role === "assistant" && !event.message?.errorMessage) afterTool = undefined;
+      if (event.type === "tool_execution_end" && event.toolName === "video_preview" && !event.isError) void checkSync(event.result?.details);
+      if (working) {
+        if (event.type === "agent_start") working.activity = "Thinking";
+        if (event.type === "tool_execution_start") working.activity = activity(event.toolName, event.args);
+        if (event.type === "tool_execution_end") working.activity = "Thinking";
+        if (event.type === "message_update") working.activity = working.activity === "Thinking" || working.activity === "Writing" ? "Writing" : working.activity;
+      }
+      // A failed model reply (a refused request, a budget limit) shows on the card, not just in the chat.
+      if (event.type === "message_end" && event.message?.errorMessage && board.active !== undefined) runError = String(event.message.errorMessage);
+      if (event.type === "agent_settled") {
+        const sent = board.cards.find((c) => c.id === board.active);
+        if (sent) {
+          sent.stopped = runError ? undefined : afterTool;
+          sent.status = runError ? `The model failed: ${runError}` : afterTool ? `Stopped before finishing, after: ${afterTool}.` : "Done. The agent's reply is in the chat.";
+        }
+        runError = null;
+        afterTool = undefined;
+        if (sent) {
+          sent.activity = undefined;
+          sent.started = undefined;
+        }
+        board.active = undefined;
+      }
+      // A video's voiceover script opens on the canvas for the user to review.
+      if (event.type === "tool_execution_start" && event.toolName === "text_to_speech") {
+        openScript(model, event.args ?? {}, { thinking, levels });
+        page = "canvas";
+      }
       // Hibi starting the dev server opens the pane, where its output shows.
       if (event.type === "tool_execution_start" && event.toolName === "dev_server") {
         browserCalls.add(event.toolCallId);
@@ -420,6 +544,287 @@
     }
   }
 
+  /** A short label for a tool call, shown on the card while the agent works. */
+  function activity(tool: string, args: any): string {
+    const file = (p: unknown) => String(p ?? "").split(/[\\/]/).pop();
+    switch (tool) {
+      case "read": return `Reading ${file(args?.path)}`;
+      case "grep": return "Searching the code";
+      case "glob": return "Finding files";
+      case "write": return `Writing ${file(args?.path)}`;
+      case "edit": return `Editing ${file(args?.path)}`;
+      case "bash": return /hyperframes\s+(check|lint)/.test(args?.command ?? "") ? "Checking the video" : /hyperframes\s+(snapshot)/.test(args?.command ?? "") ? "Taking snapshots" : /hyperframes\s+render/.test(args?.command ?? "") ? "Rendering" : /transcribe/.test(args?.command ?? "") ? "Transcribing the voice" : "Running a command";
+      case "storyboard": return "Drawing the storyboard";
+      case "text_to_speech": return "Sending the script";
+      case "analyze_video": return "Analyzing the video";
+      case "video_preview": return "Opening the preview";
+      case "ask_user": return "Asking you a question";
+      default: return `Using ${tool}`;
+    }
+  }
+
+  /** An image reference as message attachment data. */
+  async function attachment(url: string) {
+    const blob = await (await fetch(url)).blob();
+    const data = await new Promise<string>((done) => {
+      const reader = new FileReader();
+      reader.onload = () => done(String(reader.result));
+      reader.readAsDataURL(blob);
+    });
+    return { mimeType: blob.type || "image/png", data: data.slice(data.indexOf(",") + 1) };
+  }
+
+  /**
+   * Sends a canvas card to the agent in the open folder's session: its text, its
+   * references (saved to disk so the agent can open them; images also attached),
+   * and its model and reasoning level, which become the session's.
+   */
+  /** Saves a file held in the window (a blob or data URL) where the agent can read it. */
+  const toDisk = async (name: string, url: string) => saveReference(name, new Uint8Array(await (await fetch(url)).arrayBuffer()));
+
+  async function sendCard(card: Card, prompt?: string, extra: Reference[] = []) {
+    if (!folder) {
+      card.status = "Open a folder first; the agent works in it.";
+      return;
+    }
+    // Locks the card's buttons at once, so a second press can't send it twice.
+    if (cardBusy(card)) return;
+    card.status = "Sending…";
+    board.active = card.parent ?? card.id;
+    const working = board.cards.find((c) => c.id === board.active);
+    if (working) {
+      working.started = Date.now();
+      working.activity = "Starting";
+      working.stopped = undefined;
+    }
+    try {
+      const images: { mimeType: string; data: string }[] = [];
+      const lines: string[] = [];
+      for (const ref of [...card.refs, ...extra]) {
+        if (!ref.path && ref.url && /^(blob|data):/.test(ref.url)) ref.path = await toDisk(ref.name, ref.url);
+        // The card's own images go along as pictures; extra ones, such as frames, by path only.
+        if (!ref.video && ref.url && card.refs.includes(ref)) images.push(await attachment(ref.url));
+        if (ref.path) lines.push(`- ${ref.time ? `frame at ${ref.time}` : ref.video ? "video" : "image"}: ${ref.path}`);
+      }
+      if (card.model && (card.model.provider !== model?.provider || card.model.id !== model?.id)) {
+        await request({ type: "set_model", provider: card.model.provider, modelId: card.model.id });
+      }
+      if (card.thinking && card.thinking !== thinking) await request({ type: "set_thinking_level", level: card.thinking });
+      await refresh();
+      const kind = { video: "Video", image: "Image", speech: "Text to speech", frames: "Frames", storyboard: "Storyboard", preview: "Video preview", question: "Questions" }[card.kind];
+      // The video's style skill is named in every step, so the series stays consistent.
+      const style = styleFor(card);
+      const rule = style
+        ? `\n\nStyle: follow the ${style.name} skill. Read ${style.path} and the references it names before starting. Its workflow, layout, components, motion, captions and sound rules take priority over any generic canvas instruction here. Any script you write for it uses one \`## N. Scene name\` heading per scene and plans a different body from the style's component catalogue for every scene, with lines written to feed that body (steps for a flow, two sides for a comparison, values for meters and charts, labelled as examples when they aren't sourced). The voice is whatever the user made on the script card in this session; never pick or change it.`
+        : "";
+      const text = `[Canvas ${kind} card]\n${(prompt ?? card.text).trim()}${rule}${lines.length ? `\n\nReferences:\n${lines.join("\n")}` : ""}`;
+      // Cards the agent opens next join the video this work is for.
+      board.active = card.parent ?? card.id;
+      await send(text, images, false);
+      card.status = "Sent. The agent is working on it in the chat.";
+    } catch (e) {
+      card.status = message(e);
+      board.active = undefined;
+    }
+  }
+
+  /** The frames the user left on, as style references for this video. */
+  const framesOf = (video: Card) => board.cards.filter((c) => c.parent === video.id && c.kind === "frames").flatMap((c) => c.refs.filter((r) => !r.off));
+  const videoOf = (card: Card) => (card.kind === "video" ? card : board.cards.find((c) => c.id === card.parent));
+
+  /** The style a card follows, if one is picked on it or on its Video card. */
+  const styleFor = (card: Card) => styles.find((s) => s.name === styleOf(card));
+
+  /** Writes the script only, from the video card's request and any frames, then stops. */
+  function writeScript(video: Card, again = false) {
+    const frames = framesOf(video);
+    const styled = styleFor(video)
+      ? " Follow the style's script step: write SCRIPT.md in the project with its scenes, a component per scene (all different) and its fact sheet, and send text_to_speech only the spoken lines, one `## N. Scene name` heading per scene followed by that scene's lines (the headings are not read aloud)."
+      : "";
+    void sendCard(video, `${again ? "Write a new version of the script for this video. It replaces the current one." : "Write the script for this video."}${styled} Send it with text_to_speech and stop for my review; don't make the storyboard yet.\nVideo: ${video.text.trim()}${again && scriptOf(video) ? `\n\nCurrent script:\n${scriptOf(video)!.text.trim()}` : ""}${frames.length ? "\n\nFollow the reference frames." : ""}`, frames);
+  }
+
+  /** Step one of a video: the agent draws one SVG per script line, styled on the frames. */
+  function makeStoryboard(video: Card) {
+    const script = scriptOf(video);
+    const frames = framesOf(video);
+    const styled = styleFor(video)
+      ? "\n\nThis video has a style: make one storyboard beat per scene, not per sentence. Each beat's `line` is the scene's spoken lines, its `component` is the catalogue body planned for that scene (no two scenes share one), and its `svg` is a still of that scene's final frame drawn exactly to the style's layout grid, colours and type (portrait 1080×1920 if the style says so) using that body. Send the beats in batches of up to 4 with `from`."
+      : frames.length
+        ? "\n\nFollow the style of the reference frames."
+        : "";
+    void sendCard(video, `Make the storyboard for this confirmed script, then stop for my review. It replaces any storyboard so far.\nVideo: ${video.text.trim()}\n\nScript:\n${script?.text.trim() ?? "(no script yet)"}${styled}`, frames);
+  }
+
+  /** Confirming the script locks it in and draws (or redraws) its storyboard. */
+  function confirmScript(script: Card) {
+    const video = videoOf(script);
+    script.confirmed = script.text;
+    if (video) makeStoryboard(video);
+  }
+
+  function redoScript(script: Card) {
+    const video = videoOf(script);
+    if (video) writeScript(video, true);
+  }
+
+  function redoBeat(storyboard: Card, i: number) {
+    const beat = storyboard.beats?.[i];
+    if (!beat) return;
+    void sendCard(storyboard, `Redraw only beat ${i + 1} ("${beat.line}"). Call storyboard again with every beat in the same order, keeping the other beats' lines and SVGs exactly as they were.`);
+  }
+
+  /**
+   * A follow-up on a finished video. Visual changes keep the script, voiceover and
+   * timing. A change to the words updates the script and storyboard; once the agent
+   * stops, the canvas makes the new voiceover and rebuilds the video with it.
+   */
+  /**
+   * A follow-up on a finished video:
+   * - "visuals": scenes and motion change; the session's voice is attached and replaces any silent or placeholder track.
+   * - "words": the script and storyboard change; when the agent stops, the canvas re-voices and rebuilds.
+   * - "rebuild": a new storyboard from the confirmed script, then the canvas rebuilds the video with the session's voice.
+   * - "voice": only puts the session's voiceover into a video built without it.
+   */
+  async function followUp(preview: Card, request: string, mode: "visuals" | "words" | "rebuild" | "voice") {
+    const video = videoOf(preview);
+    const storyboard = video && board.cards.find((c) => c.kind === "storyboard" && c.parent === video.id);
+    const ask = request.trim() ? `Follow-up on the finished video: ${request.trim()}\n` : "";
+    const styled = !!(video && styleFor(video));
+    const work = "Work in steps: write or edit the generator a few scenes at a time, rebuilding and checking between steps, so no single reply has to hold the whole film.";
+    if (mode === "words" || mode === "rebuild") {
+      await sendCard(preview, mode === "words"
+        ? `${ask}This changes the words. Send the updated script with text_to_speech${styled ? " (keeping its `## N. Scene name` headings) and update SCRIPT.md" : ""}, then call storyboard with the beats updated to match, keeping unchanged beats' SVGs as they were. Then stop: the app makes the new voiceover and asks you to rebuild the video.`
+        : `${ask}Rebuild this video from the confirmed script. Keep the script exactly as it is. First make a new storyboard${styled ? " with a different body from the style's catalogue for every scene, sent in batches of up to 4 with `from`" : ""}, then stop: the app reuses this session's voiceover and asks you to build the video from the new storyboard.`);
+      // Set only once the agent is working, so the rebuild waits for it to finish.
+      if (storyboard && board.active !== undefined) board.followUp = storyboard.id;
+      return;
+    }
+    const voice = await voiceBlock(scriptOf(video ?? preview));
+    if (!voice) {
+      preview.status = "Make the voiceover on the script card first (Generate). The video only uses the voice made in this session.";
+      return;
+    }
+    const text = mode === "voice"
+      ? `Put this session's voiceover into the video, which was built without it. Replace any silent or placeholder voice tracks, re-time captions and reveals to its transcript, and keep the visuals. ${work}\n\n${voice}`
+      : `${ask}Change the visuals only. Keep the script${styled ? "; scene layouts, components and motion may change within the style's rules" : ""}. ${work}\n\n${voice}\n\nIf the project still has silent or placeholder voice tracks, replace them with the voice above.`;
+    if (video) video.voicedBuild = true;
+    void sendCard(preview, `${text}\n\nUpdate the HyperFrames project, keep the preview running (hyperframes preview --background --no-open) and call video_preview again.`);
+  }
+
+  /** Picks up a run that stopped after a tool result without replying. */
+  function continueRun(card: Card) {
+    void sendCard(card, `Your last run stopped before finishing, right after this step: ${card.stopped}. Check what that step actually did (its output and the files it changed; a step may have failed even if the exit code was 0), fix it if needed, then finish the remaining work.`);
+  }
+
+  /** The length of an audio clip, or undefined if it can't be read. */
+  const audioLength = (src: string) =>
+    new Promise<number | undefined>((done) => {
+      const audio = new Audio();
+      audio.preload = "metadata";
+      audio.onloadedmetadata = () => done(Number.isFinite(audio.duration) ? audio.duration : undefined);
+      audio.onerror = () => done(undefined);
+      audio.src = src;
+    });
+
+  /** Compares the built video, as video_preview measured it, with the session's voiceover and storyboard. */
+  async function checkSync(details: { duration?: number; scenes?: number } | undefined) {
+    const preview = board.cards.find((c) => c.kind === "preview" && c.parent === board.active) ?? [...board.cards].reverse().find((c) => c.kind === "preview");
+    const video = preview && board.cards.find((c) => c.id === preview.parent);
+    if (!preview || !video || !details) return;
+    const speech = voiced(scriptOf(video)) ? scriptOf(video)!.speech! : undefined;
+    const lengths = speech ? await Promise.all(speech.clips?.length ? speech.clips.map((c) => audioLength(c.audio)) : [audioLength(speech.audio!)]) : [];
+    const voice = lengths.every((l) => l !== undefined) ? lengths.reduce<number>((a, l) => a + l!, 0) : undefined;
+    const storyboard = board.cards.find((c) => c.kind === "storyboard" && c.parent === video.id);
+    preview.sync = outOfSync(details, voice || undefined, storyboard?.beats?.length);
+  }
+
+  /** Asks the agent to re-time the video to its voiceover and storyboard. */
+  function fixSync(preview: Card) {
+    void followUp(preview, `The built video doesn't match: ${preview.sync} Re-time every scene to its voice clip (the clip's length plus the style's tail, if it has one), keep one scene per storyboard beat, re-time captions and reveals to the transcript, and check the project's total length after rebuilding.`, "visuals");
+  }
+
+  /**
+   * This session's voiceover as instructions for the agent: per-scene clips, or one
+   * clip to cut at scene boundaries. Null when no voice has been made from the script.
+   */
+  async function voiceBlock(script: Card | undefined): Promise<string | null> {
+    if (!voiced(script)) return null;
+    const clips = script!.speech!.clips ?? [];
+    if (clips.length) {
+      const paths = await Promise.all(clips.map(async (c, i) => `- scene ${i + 1} (${c.scene}): ${await toDisk(`scene-${String(i + 1).padStart(2, "0")}.mp3`, c.audio)}`));
+      return `Voice: one ElevenLabs clip per scene, made in this session with the voice the user picked. Copy them into assets/vo/raw/ in order, then normalise and transcribe each.\n${paths.join("\n")}`;
+    }
+    return `Voice: one ElevenLabs clip for the whole script, made in this session with the voice the user picked: ${await toDisk("voiceover.mp3", script!.speech!.audio!)}\nTranscribe it, cut it into one clip per scene at the scene boundaries (each scene's first and last words), put those in assets/vo/raw/ in order, then normalise them.`;
+  }
+
+  async function skipQuestions(card: Card) {
+    const parent = board.cards.find((c) => c.id === card.parent);
+    await sendCard(card, "Skip these questions: use your best judgement and carry on.");
+    if (card.status?.startsWith("Sent")) {
+      if (parent) parent.status = "Skipped the questions. The agent is carrying on.";
+      removeCard(card);
+    }
+  }
+
+  /** Step two: the confirmed storyboard and the voiceover become a HyperFrames video. */
+  async function confirmStoryboard(card: Card) {
+    const video = board.cards.find((c) => c.id === card.parent);
+    const script = video && scriptOf(video);
+    const style = video && styleFor(video);
+    if (style) return buildStyled(card, style, script);
+    const audio = video && voiced(scriptOf(video)) ? scriptOf(video)!.speech!.audio : undefined;
+    try {
+      const beats = await Promise.all((card.beats ?? []).map(async (b, i) => {
+        const path = await saveReference(`beat-${String(i + 1).padStart(2, "0")}.svg`, new TextEncoder().encode(b.svg));
+        return `${i + 1}. "${b.line}"\n   ${path}`;
+      }));
+      const voice = audio ? await toDisk("voiceover.mp3", audio) : null;
+      if (video) video.voicedBuild = !!voice;
+      const rebuild = board.cards.some((c) => c.kind === "preview" && c.parent === card.parent);
+      void sendCard(card, `I confirmed this storyboard. ${rebuild ? "Rebuild the existing HyperFrames video from it" : "Build the video with HyperFrames"}: animate each beat's elements in as its line is spoken (not a still picture), with transitions between beats, then start the preview with hyperframes preview --background --no-open and show it with video_preview.\n\nBeats:\n${beats.join("\n")}\n\nVoiceover: ${voice ?? "none yet; time each beat to the line read at a natural pace, so it can be re-timed when the voiceover is made"}`);
+    } catch (e) {
+      card.status = message(e);
+    }
+  }
+
+  /**
+   * A styled build follows the style's own workflow from its voice step: the
+   * canvas made one ElevenLabs clip per scene, and the agent normalises,
+   * transcribes and builds them with the style's generator.
+   */
+  async function buildStyled(storyboard: Card, style: Style, script: Card | undefined) {
+    // The episode is never built on silent stand-ins: it needs this session's voice.
+    const voice = await voiceBlock(script).catch(() => null);
+    if (!voice) {
+      storyboard.status = "Make the voiceover on the script card first (Generate), or connect ElevenLabs. The video isn't built without the real voice.";
+      return;
+    }
+    const video = board.cards.find((c) => c.id === storyboard.parent);
+    if (video) video.voicedBuild = true;
+    try {
+      const plan = (storyboard.beats ?? []).map((b, i) => `- scene ${i + 1}: ${b.component ?? "(component not named; pick an unused one from the catalogue)"}`).join("\n");
+      const rebuild = board.cards.some((c) => c.kind === "preview" && c.parent === storyboard.parent);
+      void sendCard(storyboard, `I confirmed the storyboard. ${rebuild ? "Rebuild this episode" : "Build this episode"} with the ${style.name} skill's episode workflow, from its project step to its preview step: use the confirmed scenes and SCRIPT.md, the skill's generator and its bundled example for the markup and motion of each body, word-synced reveals and captions from the transcripts, and its sound mix. Don't use the storyboard SVGs as slides; they only show the intended layout. Work in steps: write the generator a few scenes at a time, rebuilding and checking between steps, so no single reply has to hold the whole film.\n\nBuild each scene with its planned body; every scene uses a different one:\n${plan}\n\n${voice}\n\nThere's no music bed yet: leave music out (no silent file) and say so. Start the preview with hyperframes preview --background --no-open, then show it with video_preview. Don't render until I ask.`);
+    } catch (e) {
+      storyboard.status = message(e);
+    }
+  }
+
+  /** Sends the answers, closes the questions and lets the agent carry on. */
+  async function answer(card: Card) {
+    const parent = board.cards.find((c) => c.id === card.parent);
+    await sendCard(card, `My answers:\n${answers(card)}\n\nCarry on from here.`);
+    if (card.status?.startsWith("Sent")) {
+      if (parent) parent.status = "Answered. The agent is carrying on.";
+      removeCard(card);
+    }
+  }
+
+  function renderVideo(card: Card) {
+    void sendCard(card, "Render the final video now, then call video_preview with its file.");
+  }
+
   async function setThinking(level: string) {
     try {
       await request({ type: "set_thinking_level", level });
@@ -466,7 +871,8 @@
 
 </script>
 
-<div class="layout">
+<div class="layout" style:--sidebar-width="{sidebarWidth}px">
+  {#if sidebarOpen}
   <Sidebar
     {home}
     groups={recent.map((path) => ({ folder: path, sessions: saved[path] ?? [] }))}
@@ -478,15 +884,24 @@
     ondelete={remove}
     onaddfolder={addFolder}
     onremovefolder={removeFolder}
+    oncollapse={toggleSidebar}
+    oncanvas={() => (page = "canvas")}
+    canvas={page === "canvas"}
     onsettings={() => { settingsStart = "providers"; page = "settings"; }}
     onaccount={() => { settingsStart = "account"; page = "settings"; }}
     {account}
     onsignin={showSignIn}
     onsignout={rekaSignOut}
   />
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="resizer" onpointerdown={resizeSidebar} ondblclick={() => { sidebarWidth = 260; localStorage.removeItem(SIDEBAR_WIDTH); }} title="Drag to resize, double-click to reset"></div>
+  {/if}
   <main>
-    <div class="titlebar" data-tauri-drag-region>
-      <span class="grow ellipsis" data-tauri-drag-region>{page === "settings" ? "Settings" : title}</span>
+    <div class="titlebar" class:collapsed={!sidebarOpen} data-tauri-drag-region>
+      {#if !sidebarOpen}
+        <button class="iconbtn toggle" onclick={toggleSidebar} title="Show sidebar" aria-label="Show sidebar"><Icon name="sidebar" /></button>
+      {/if}
+      <span class="grow ellipsis" data-tauri-drag-region>{page === "settings" ? "Settings" : page === "canvas" ? "Canvas" : title}</span>
       {#if page === "chat" && folder && inside}
         <button class="iconbtn on" title={`In WSL: ${inside}`} aria-label="WSL" aria-disabled="true"><Icon name="terminal" /></button>
       {:else if page === "chat" && folder && distros.length === 1}
@@ -507,6 +922,9 @@
           </Menu>
         </span>
       {/if}
+      {#if page === "chat" && fromCanvas}
+        <button class="iconbtn" onclick={() => (page = "canvas")} title="Open this session's canvas" aria-label="Open canvas"><Icon name="layout" /></button>
+      {/if}
       {#if page === "chat" && folder}
         <button class="iconbtn" class:on={showBrowser} onclick={() => (browserOpen ? closeBrowser() : (browserOpen = true))} title={showBrowser ? "Hide browser" : "Show browser"} aria-label="Browser" aria-pressed={showBrowser}><Icon name="globe" /></button>
       {/if}
@@ -520,6 +938,8 @@
     {#key settingsStart}
       <Settings onback={() => (page = "chat")} onsaved={signedIn} onsignin={showSignIn} onsignout={rekaSignOut} {account} onaccount={(a) => (account = a)} start={settingsStart} />
     {/key}
+  {:else if page === "canvas"}
+    <Canvas {model} reasoning={{ thinking, levels }} onsend={(card) => sendCard(card)} canSend={!!folder} onwrite={(card) => writeScript(card)} onredoscript={redoScript} onconfirmscript={confirmScript} onredostoryboard={(card) => { const v = videoOf(card); if (v) makeStoryboard(v); }} onredobeat={redoBeat} onconfirm={confirmStoryboard} onrender={renderVideo} onfollowup={followUp} oncontinue={continueRun} onfixsync={fixSync} {styles} onanswer={answer} onskip={skipQuestions} onstop={() => post({ type: "abort" }).catch(() => {})} onopenvideo={(path) => folder && openFile(folder, path).catch((e) => notice(message(e)))} onconnect={() => { settingsStart = "connectors"; page = "settings"; }} />
   {:else}
     <div class="center">
     {#if error}<div class="banner error">{error}</div>{/if}
