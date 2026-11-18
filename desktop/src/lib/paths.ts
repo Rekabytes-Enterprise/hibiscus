@@ -12,3 +12,7 @@ export function where(path: string, home: string): string {
   const root = home.replace(/[\\/]$/, "");
   return root && (parent === root || parent.startsWith(root + sep)) ? "~" + parent.slice(root.length) : parent;
 }
+
+/** The WSL distro a folder lives in: `\\wsl.localhost\Ubuntu\home\me` is in "Ubuntu" (#206). */
+export const wslDistro = (path: string) =>
+  /^\\\\(?:\?\\UNC\\)?(?:wsl\.localhost|wsl\$)\\([^\\]+)/i.exec(path.replace(/\//g, "\\"))?.[1];

@@ -15,7 +15,7 @@
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import { added, opened, removed } from "./lib/folders";
-  import { name } from "./lib/paths";
+  import { name, wslDistro } from "./lib/paths";
   import Models from "./lib/Models.svelte";
   import NewSession from "./lib/NewSession.svelte";
   import Settings from "./lib/Settings.svelte";
@@ -52,7 +52,11 @@
         .map((k) => [k.slice(WSL.length), localStorage.getItem(k) ?? ""]),
     ),
   );
-  const connected = $derived(folder ? wsl[folder] : undefined);
+  // A folder inside a distro always runs there (#206).
+  const inside = $derived(folder ? wslDistro(folder) : undefined);
+  const connected = $derived(folder ? (inside ?? wsl[folder]) : undefined);
+  // The last WSL choice, so pickers start in the distro with no folder open.
+  const LAST_WSL = "hibiscus.wslLast";
 
   async function connectWsl(distro: string | null) {
     if (!folder) return;
@@ -63,6 +67,8 @@
       error = message(e);
       return;
     }
+    if (distro) localStorage.setItem(LAST_WSL, distro);
+    else localStorage.removeItem(LAST_WSL);
     if (distro) {
       localStorage.setItem(WSL + f, distro);
       wsl[f] = distro;
@@ -345,11 +351,16 @@
     localStorage.setItem(RECENT, JSON.stringify(recent));
   }
 
+  /** While connected to WSL, pickers open in the distro's home (#206). */
+  async function pickStart() {
+    const distro = connected ?? (folder ? null : localStorage.getItem(LAST_WSL));
+    const start = distro ? await wslHome(distro).catch(() => null) : null;
+    return start ?? folder ?? undefined;
+  }
+
   /** Adds a folder to the list without starting a session in it. */
   async function addFolder() {
-    // While connected to WSL, the picker opens in the distro's home.
-    const start = connected ? await wslHome(connected).catch(() => null) : null;
-    const path = await pickFolder({ directory: true, multiple: false, defaultPath: start ?? folder ?? undefined });
+    const path = await pickFolder({ directory: true, multiple: false, defaultPath: await pickStart() });
     if (typeof path !== "string") return;
     saveRecent(added(recent, path));
     void loadSessions(path);
@@ -498,7 +509,7 @@
 
   /** Asks for a folder and starts a new session there. */
   async function choose() {
-    const path = await pickFolder({ directory: true, multiple: false, defaultPath: folder ?? undefined });
+    const path = await pickFolder({ directory: true, multiple: false, defaultPath: await pickStart() });
     if (typeof path === "string") await open(path);
   }
 
@@ -891,7 +902,9 @@
         <button class="iconbtn toggle" onclick={toggleSidebar} title="Show sidebar" aria-label="Show sidebar"><Icon name="sidebar" /></button>
       {/if}
       <span class="grow ellipsis" data-tauri-drag-region>{page === "settings" ? "Settings" : page === "canvas" ? "Canvas" : title}</span>
-      {#if page === "chat" && folder && distros.length === 1}
+      {#if page === "chat" && folder && inside}
+        <button class="iconbtn on" title={`In WSL: ${inside}`} aria-label="WSL" aria-disabled="true"><Icon name="terminal" /></button>
+      {:else if page === "chat" && folder && distros.length === 1}
         <button class="iconbtn" class:on={!!connected} onclick={() => connectWsl(connected ? null : distros[0].name)} title={connected ? `WSL: ${connected}. Click to disconnect` : `Connect to WSL (${distros[0].name})`} aria-label="WSL" aria-pressed={!!connected}><Icon name="terminal" /></button>
       {:else if page === "chat" && folder && distros.length > 1}
         <span class="wsl" class:on={!!connected}>
