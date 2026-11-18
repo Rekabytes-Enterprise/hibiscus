@@ -1,6 +1,7 @@
 //! Model provider requests: build the body (wire), send it (http), decode the
 //! event stream (sse, stream), and continue chat-completions replies cut at the
 //! output limit.
+mod history;
 mod http;
 mod sse;
 mod stream;

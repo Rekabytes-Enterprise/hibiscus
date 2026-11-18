@@ -121,8 +121,12 @@ pub fn connect(folder: &Path, distro: Option<String>) {
     }
 }
 
-/// The distro `path` runs in: that of the closest connected folder holding it.
+/// The distro `path` runs in: the one it lives in (`\\wsl.localhost\Ubuntu\...`,
+/// #206), else that of the closest connected folder holding it.
 pub(crate) fn distro_for(path: &Path) -> Option<String> {
+    if let Some((Some(distro), _)) = path.to_str().and_then(to_linux) {
+        return Some(distro);
+    }
     CONNECTED
         .lock()
         .unwrap()
@@ -441,6 +445,19 @@ mod tests {
         assert_eq!(distro_for(Path::new("/wsl-test/other")), None);
         connect(root, None);
         assert_eq!(distro_for(root), None);
+    }
+
+    #[test]
+    fn folders_inside_a_distro_run_there_without_connecting() {
+        assert_eq!(
+            distro_for(Path::new(r"\\wsl.localhost\Debian\home\me\app")),
+            Some("Debian".into())
+        );
+        assert_eq!(
+            distro_for(Path::new(r"\\wsl$\Ubuntu\srv")),
+            Some("Ubuntu".into())
+        );
+        assert_eq!(distro_for(Path::new(r"C:\Users\me")), None);
     }
 
     #[test]

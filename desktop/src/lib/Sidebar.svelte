@@ -15,6 +15,9 @@
     onrename,
     ondelete,
     onaddfolder,
+    oncanvas,
+    oncollapse,
+    canvas,
     onremovefolder,
     onsettings,
     onaccount,
@@ -32,6 +35,11 @@
     onrename: (folder: string, session: string, name: string) => void;
     ondelete: (folder: string, session: string) => void;
     onaddfolder: () => void;
+    /** Opens the canvas page, which `canvas` marks as showing. */
+    oncanvas: () => void;
+    /** Hides the sidebar; the title bar brings it back. */
+    oncollapse: () => void;
+    canvas: boolean;
     /** Takes the folder out of the list; nothing on disk changes. */
     onremovefolder: (folder: string) => void;
     onsettings: () => void;
@@ -79,9 +87,12 @@
 <svelte:window onpointerdown={outside} onkeydown={(e) => { if (profileOpen && e.key === "Escape") profileOpen = false; }} />
 
 <aside class="left">
-  <div class="traffic" data-tauri-drag-region></div>
+  <div class="traffic" data-tauri-drag-region>
+    <button class="iconbtn" onclick={oncollapse} title="Hide sidebar" aria-label="Hide sidebar"><Icon name="sidebar" /></button>
+  </div>
   <button class="nav strong" onclick={onnew} disabled={busy}><Icon name="plus" /> New session</button>
   <button class="nav" onclick={onaddfolder}><Icon name="folder-plus" /> Add folder…</button>
+  <button class="nav" class:active={canvas} onclick={oncanvas} aria-pressed={canvas}><Icon name="layout" /> Canvas</button>
   <div class="groups">
     {#each groups as g (g.folder)}
       <div class="grouphead">

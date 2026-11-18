@@ -6,6 +6,7 @@ mod cli;
 mod client;
 pub mod desktop;
 mod devserver;
+mod elevenlabs;
 mod engine;
 mod extensions;
 mod paths;
@@ -14,6 +15,8 @@ mod sys;
 mod tui;
 mod ui;
 mod update;
+mod video;
+mod video_engine;
 mod wsl;
 
 #[cfg(feature = "fuzzing")]

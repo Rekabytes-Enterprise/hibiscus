@@ -87,5 +87,31 @@ pub(crate) fn save_api_key(provider: &str, key: String) -> Result<()> {
     save(&keys)
 }
 
+/// Keys for connectors such as ElevenLabs, kept apart from the model providers
+/// in `connectors.json` with the same private-file rules as `auth.json`.
+pub(crate) fn connector_key(name: &str) -> Result<Option<String>> {
+    Ok(keys_at(&crate::paths::home()?.join("connectors.json"))?.remove(name))
+}
+
+/// Stores a connector's key, or removes it with `None`.
+pub(crate) fn save_connector_key(name: &str, key: Option<String>) -> Result<()> {
+    let path = crate::paths::home()?.join("connectors.json");
+    let mut keys = keys_at(&path)?;
+    match key {
+        Some(key) => {
+            if key.trim().is_empty() || key.len() > 8192 || key.chars().any(char::is_control) {
+                return Err("API key must be nonempty and contain no control characters".into());
+            }
+            keys.insert(name.into(), key.trim().to_owned());
+        }
+        None => {
+            if keys.remove(name).is_none() {
+                return Ok(());
+            }
+        }
+    }
+    save_at(&path, &keys)
+}
+
 #[cfg(all(test, unix))]
 mod tests;

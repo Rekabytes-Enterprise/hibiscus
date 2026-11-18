@@ -4,6 +4,25 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-18
+
+### Added
+
+- Canvas in Hibiscus Desktop (#208). A Canvas button in the sidebar opens a dot-grid page where **New +** adds Video, Image and Text to speech cards with references, a model and reasoning level per card, and drag and resize. Each session keeps its own canvas.
+- Video from a script on the canvas (#208): the agent writes the script, ElevenLabs reads it, the storyboard shows one picture per scene, and HyperFrames builds the video into a preview inside the card. A finished video takes follow-ups: Visuals only, Change the words, Rebuild, or Add the voiceover. **Download engine** installs Node.js and HyperFrames once (about 250 MB); ffmpeg ships with the app.
+- Sign in with ElevenLabs (#208), or paste an API key, from Settings → Connectors.
+- Video styles as skills (#208). The app ships the `tech-explainer-short` style, and a personal skill in `~/.hibiscus/skills` with `hibiscus-style: true` becomes a style too.
+- `grep` and `glob` tools (#208) search file contents and names, skipping ignored, hidden and binary files, so the agent reads less.
+- The preview card warns when a video's length or scene count doesn't match its voiceover or storyboard, with a **Fix the timing** button. A run that stops without a reply offers **Continue** (#208).
+
+### Changed
+
+- Fewer tokens per request (#208). Claude requests use prompt caching; older tool output goes to the model as a short note once the session has moved on; command output over 30,000 characters keeps its start and end, with the full text saved to `~/.hibiscus/tool-output/` for 7 days. On the 12 largest saved sessions, requests carry 60% less text.
+- `read` numbers its lines, returns at most 2,000 lines or 50 KB, cuts very long lines, and can read from the end of a file (#208).
+- The bash tool warns when a script exits 0 even though its output shows a crash (#208).
+- Windows desktop: a folder inside WSL runs in its distro, and folder pickers start there (#207).
+- Clearer canvas prompts, messages and docs (#209).
+
 ## [0.3.41] - 2026-11-16
 
 ### Added

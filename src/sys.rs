@@ -98,6 +98,13 @@ pub(crate) fn hostname() -> Option<String> {
 /// Windows, Git Bash when it is installed, so POSIX commands keep working,
 /// else PowerShell. System32's `bash.exe` is the WSL launcher and is skipped.
 pub(crate) fn shell(script: &str) -> std::process::Command {
+    let mut command = base_shell(script);
+    // Once the video engine is installed, Node.js, hyperframes and ffmpeg are on PATH.
+    crate::video_engine::prepare(&mut command);
+    command
+}
+
+fn base_shell(script: &str) -> std::process::Command {
     #[cfg(unix)]
     {
         let mut command = std::process::Command::new("/bin/sh");
