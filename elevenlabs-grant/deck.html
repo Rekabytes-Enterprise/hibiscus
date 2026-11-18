@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hibiscus · ElevenLabs Grants application</title>
+<style>
+  @page { size: 13.333in 7.5in; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1b2130; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .slide { width: 13.333in; height: 7.5in; padding: 0.7in 0.85in; position: relative; overflow: hidden; page-break-after: always; break-after: page;
+    background: radial-gradient(circle at 88% 8%, rgba(214,51,108,0.10), transparent 42%), radial-gradient(circle at 8% 96%, rgba(80,120,230,0.08), transparent 45%), #fbfaf8; }
+  .slide:last-child { page-break-after: auto; break-after: auto; }
+  .kicker { font-size: 13pt; letter-spacing: 0.14em; text-transform: uppercase; color: #c2185b; font-weight: 600; margin: 0 0 14pt; }
+  h1 { font-size: 46pt; line-height: 1.05; margin: 0 0 16pt; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 34pt; line-height: 1.1; margin: 0 0 22pt; font-weight: 700; letter-spacing: -0.01em; }
+  p, li { font-size: 17pt; line-height: 1.45; color: #3d4556; }
+  .lead { font-size: 21pt; color: #2a3140; max-width: 9.6in; }
+  .accent { color: #c2185b; }
+  ul { margin: 0; padding-left: 1.1em; }
+  li { margin: 0 0 8pt; }
+  .grid { display: grid; gap: 18pt; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: 1fr 1fr 1fr; }
+  .card { background: #fff; border: 1px solid #e6e3df; box-shadow: 0 2pt 8pt rgba(20,24,40,0.05); border-radius: 14pt; padding: 18pt 20pt; }
+  .card h3 { margin: 0 0 8pt; font-size: 17pt; color: #141a28; }
+  .card p { margin: 0; font-size: 14.5pt; line-height: 1.45; }
+  .num { font-size: 44pt; font-weight: 700; color: #141a28; line-height: 1; margin-bottom: 8pt; }
+  .num small { font-size: 18pt; color: #c2185b; font-weight: 600; }
+  .flow { display: flex; align-items: stretch; gap: 10pt; margin-top: 8pt; }
+  .step { flex: 1; background: #fff; border: 1px solid #e6e3df; border-radius: 12pt; padding: 14pt 14pt 16pt; }
+  .step.el { border-color: #d6336c; background: #fdeef3; }
+  .step b { display: block; font-size: 15pt; color: #141a28; margin-bottom: 6pt; }
+  .step span { font-size: 12.5pt; color: #4a5263; line-height: 1.4; display: block; }
+  .arrow { align-self: center; color: #c2185b; font-size: 20pt; }
+  .foot { position: absolute; left: 0.85in; right: 0.85in; bottom: 0.45in; display: flex; justify-content: space-between; font-size: 11pt; color: #8a8f9c; }
+  .tag { display: inline-block; font-size: 11pt; padding: 3pt 9pt; border-radius: 999px; border: 1px solid #e7a3bb; color: #b0124f; background: #fff; margin-right: 6pt; }
+  .muted { color: #6b7282; }
+  .logo { font-size: 20pt; font-weight: 700; color: #141a28; }
+  .logo span { color: #c2185b; }
+  .title { display: flex; flex-direction: column; justify-content: center; height: 100%; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5pt; }
+  td { padding: 9pt 10pt; border-bottom: 1px solid #e6e3df; color: #3d4556; vertical-align: top; }
+  td:first-child { color: #141a28; font-weight: 600; width: 32%; }
+  .shot { border-radius: 10pt; border: 1px solid #e2ded8; box-shadow: 0 6pt 22pt rgba(20,24,40,0.12); display: block; width: 100%; }
+  .cap { font-size: 12.5pt; color: #6b7282; margin: 8pt 0 0; line-height: 1.4; }
+</style>
+</head>
+<body>
+
+<section class="slide">
+  <div class="title">
+    <div class="logo">Hibiscus <span>·</span> by Rekabytes</div>
+    <p class="kicker" style="margin-top:28pt">ElevenLabs Grants application</p>
+    <h1>An open-source AI coding agent<br />that now makes <span class="accent">explainer videos</span>.</h1>
+    <p class="lead">Desktop app for macOS, Windows and Linux, plus a terminal app. Its new canvas turns a reference video and a topic into a narrated, animated short, with the voice from ElevenLabs.</p>
+    <p style="margin-top:22pt"><span class="tag">Open source (MIT)</span><span class="tag">55 releases since Sep 2026</span><span class="tag">Sign in with ElevenLabs</span></p>
+  </div>
+  <div class="foot"><span>github.com/Rekabytes-Enterprise/hibiscus</span><span>November 2026</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">The problem</p>
+  <h2>Technical explainer videos take<br />five tools and a week.</h2>
+  <div class="grid g3">
+    <div class="card"><h3>Research and script</h3><p>Someone studies a reference, picks one idea per scene and writes a script that fits the time.</p></div>
+    <div class="card"><h3>Voice and timing</h3><p>The voiceover is recorded or generated, then every scene is timed to it by hand.</p></div>
+    <div class="card"><h3>Visuals and edit</h3><p>Diagrams, captions and motion are built in a separate editor, then exported and checked.</p></div>
+  </div>
+  <p style="margin-top:24pt" class="lead">Developer tools, open-source projects and small teams need these videos most and have the least time to make them.</p>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>2</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Hibiscus today</p>
+  <h2>A coding agent people already run.</h2>
+  <div class="grid g2">
+    <div class="card"><h3>Desktop and terminal</h3><p>Native app for macOS, Windows and Linux with auto-updates, and a terminal app for macOS and Linux. Built in Rust with Tauri.</p></div>
+    <div class="card"><h3>Any model</h3><p>Bring your own provider (OpenRouter, OpenAI Codex sign-in, API keys) or use our Rooxcode gateway.</p></div>
+    <div class="card"><h3>Works on real projects</h3><p>Edits files with checkpoints and undo, runs commands, drives a live browser, starts dev servers, and connects to WSL 2 on Windows.</p></div>
+    <div class="card"><h3>Open and shipping</h3><p>MIT licensed and public on GitHub. 55 releases in under two months, each with checksums and signed build provenance.</p></div>
+  </div>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>3</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">New: the canvas</p>
+  <h2>From a reference video to a finished short.</h2>
+  <div class="flow">
+    <div class="step"><b>Analyze</b><span>The agent cuts frames from a reference video and studies its layout, colours and pacing.</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Script</b><span>Writes the narration. The user reviews, edits or redoes it, then confirms.</span></div>
+    <div class="arrow">→</div>
+    <div class="step el"><b>Voiceover</b><span>ElevenLabs reads the confirmed script. The audio sets each scene's timing.</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Storyboard</b><span>One visual per line, in the reference's style, for the user to approve.</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>Video</b><span>Built and previewed with HyperFrames inside the canvas, then rendered to MP4.</span></div>
+  </div>
+  <div class="grid g2" style="margin-top:22pt">
+    <div class="card"><h3>Follow-ups without starting over</h3><p>"Visuals only" changes scenes and keeps the voiceover. "Change the words" makes a new script and voiceover, then rebuilds.</p></div>
+    <div class="card"><h3>House styles</h3><p>A style skill fixes layout, motion, captions and voice, so every episode of a series looks and sounds the same.</p></div>
+  </div>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>4</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Live product testing</p>
+  <h2 style="margin-bottom:14pt">The canvas, building a GitHub Education short.</h2>
+  <img class="shot" src="shots/canvas-hyperframes.png" alt="Hibiscus canvas with the video card, analyzed frames, the script, the storyboard and the HyperFrames preview" style="height:4.15in; width:auto; max-width:100%; margin:0 auto;" />
+  <p class="cap">From a real test run: the reference video's frames, the confirmed script with its ElevenLabs voiceover, a 10-beat storyboard, and the HyperFrames studio running inside the preview card (1:17, timed to the voiceover).</p>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>5</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Live product testing</p>
+  <h2 style="margin-bottom:14pt">Script confirmed, ElevenLabs voiceover ready.</h2>
+  <img class="shot" src="shots/canvas-voiceover.png" alt="Canvas with the confirmed script, its ElevenLabs voiceover ready to play, and the storyboard" style="height:4.15in; width:auto; max-width:100%; margin:0 auto;" />
+  <p class="cap">The same run one step earlier: the script card after Confirm shows "Voiceover ready" (Eleven v4, Liam voice, 1:17), and the storyboard draws one visual per line in the reference video's style.</p>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>6</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">How we use ElevenLabs</p>
+  <h2>ElevenLabs is the voice of every video.</h2>
+  <table>
+    <tr><td>Sign in with ElevenLabs</td><td>Users connect through your hosted MCP server with OAuth and PKCE, as Claude does. No API keys to copy. Hibiscus publishes its own client ID metadata document.</td></tr>
+    <tr><td>Text to speech</td><td>Every confirmed script becomes a voiceover. Eleven v4 or Multilingual v2, with the user's own voice library to choose from.</td></tr>
+    <tr><td>Timing</td><td>The voiceover sets how long each scene stays on screen. Reveals are planned to start on the spoken word.</td></tr>
+    <tr><td>Next</td><td>One clip per scene for word-synced animation, ElevenLabs music for background tracks, and image and video generation through the same sign-in.</td></tr>
+  </table>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>7</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Traction</p>
+  <h2>Early, public and moving fast.</h2>
+  <div class="grid g3">
+    <div class="card"><div class="num">55</div><p>releases since the first public build on 24 September 2026</p></div>
+    <div class="card"><div class="num">660</div><p>release downloads from GitHub, across macOS, Windows, Linux and the terminal app</p></div>
+    <div class="card"><div class="num">3<small> platforms</small></div><p>macOS, Windows and Linux desktop builds from every release, with signed update files</p></div>
+  </div>
+  <p style="margin-top:24pt" class="lead">The video canvas is in internal testing with our team now. The ElevenLabs sign-in, voiceover, storyboard and HyperFrames preview already work end to end.</p>
+  <div class="foot"><span>Figures from the public GitHub repository, November 2026</span><span>8</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Roadmap</p>
+  <h2>What the next three months bring.</h2>
+  <div class="grid g3">
+    <div class="card"><h3>Now</h3><p>Internal testing of the canvas: script, ElevenLabs voiceover, storyboard, HyperFrames preview and render, and follow-ups.</p></div>
+    <div class="card"><h3>Next</h3><p>Public beta of the canvas in the desktop app. Per-scene voice clips, word-synced reveals, ElevenLabs music beds, sound effects.</p></div>
+    <div class="card"><h3>Then</h3><p>Shared house styles for teams, image and video cards, and series tools for publishing one episode a week.</p></div>
+  </div>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>9</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Team</p>
+  <h2>Rekabytes, a team of three in Kuala Lumpur.</h2>
+  <div class="grid g3">
+    <div class="card"><h3>Khairul Anuar Aliasak</h3><p>Founder. Builds Hibiscus: the Rust engine, the desktop app for macOS, Windows and Linux, and the Rooxcode model gateway.</p></div>
+    <div class="card"><h3>Muhammad Izzudin</h3><p>Co-founder and Operations Manager. Runs operations, partnerships and the business side of Rekabytes.</p></div>
+    <div class="card"><h3>Muhammad Iqmal Zahid</h3><p>Builds and tests Hibiscus with Khairul.</p></div>
+  </div>
+  <p style="margin-top:22pt" class="lead">Based in Kuala Lumpur, Malaysia. We ship in public: 55 releases since September 2026, all open source on GitHub.</p>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>10</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">The ask</p>
+  <h2>ElevenLabs credits to take the canvas<br />from internal testing to public beta.</h2>
+  <ul>
+    <li><b>Build and test</b> the voiceover pipeline: per-scene clips, re-voicing after edits, music beds.</li>
+    <li><b>Free voiceovers for beta testers</b>, so new users can make their first video before connecting a paid plan.</li>
+    <li><b>Show ElevenLabs inside a developer tool</b>, with "Sign in with ElevenLabs" as the default way to make audio.</li>
+  </ul>
+  <p style="margin-top:26pt" class="muted">Contact: Khairul Anuar Aliasak · hello@rekabytes.com · github.com/Rekabytes-Enterprise/hibiscus</p>
+  <div class="foot"><span>Hibiscus · ElevenLabs Grants</span><span>11</span></div>
+</section>
+
+<script>
+  // Opening deck.html#4 shows only slide 4, for checking one slide at a time.
+  const n = Number(location.hash.slice(1));
+  if (n) document.querySelectorAll(".slide").forEach((el, i) => { if (i !== n - 1) el.remove(); });
+</script>
+</body>
+</html>
