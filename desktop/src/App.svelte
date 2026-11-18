@@ -585,7 +585,7 @@
 
   async function sendCard(card: Card, prompt?: string, extra: Reference[] = []) {
     if (!folder) {
-      card.status = "Open a folder first; the agent works in it.";
+      card.status = "Open a folder first. The agent works in it.";
       return;
     }
     // Locks the card's buttons at once, so a second press can't send it twice.

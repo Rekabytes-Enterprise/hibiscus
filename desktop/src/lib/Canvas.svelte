@@ -159,7 +159,7 @@
     if (tts.connected && script && !voiced(script)) {
       await (styled ? speakScenes(script) : speak(script));
       if (!voiced(script)) {
-        storyboard.status = "The voiceover could not be made; see the script card.";
+        storyboard.status = "Couldn't make the voiceover. See the script card.";
         return;
       }
     }
@@ -170,8 +170,8 @@
   type FollowMode = "visuals" | "words" | "rebuild";
   let followMode = $state<Record<number, FollowMode>>({});
   const FOLLOW: { mode: FollowMode; label: string; title: string; placeholder: string; note: string }[] = [
-    { mode: "visuals", label: "Visuals only", title: "Changes scenes and visuals; the script stays and this session's voiceover is used", placeholder: "Such as: make the scene 4 chart bigger", note: "Keeps the script and uses this session's voiceover." },
-    { mode: "words", label: "Change the words", title: "Changes the script; the voiceover is made again and the video rebuilt", placeholder: "Such as: make scene 3 shorter and mention Copilot", note: "Makes a new script and voiceover, then rebuilds the video." },
+    { mode: "visuals", label: "Visuals only", title: "Changes scenes and visuals. The script and this session's voiceover stay.", placeholder: "Such as: make the scene 4 chart bigger", note: "Keeps the script and uses this session's voiceover." },
+    { mode: "words", label: "Change the words", title: "Changes the script, then makes the voiceover again and rebuilds the video", placeholder: "Such as: make scene 3 shorter and mention Copilot", note: "Makes a new script and voiceover, then rebuilds the video." },
     { mode: "rebuild", label: "Rebuild", title: "A new storyboard and a new video from the confirmed script, with this session's voiceover", placeholder: "Optional: what to do differently this time", note: "Redoes the storyboard and the video. Keeps the script and this session's voiceover." },
   ];
   const parentOf = (card: Card) => board.cards.find((c) => c.id === card.parent);
@@ -329,7 +329,7 @@
   <button class="primary newcard" onclick={() => addCard(model, {}, reasoning)} title="New card">New <Icon name="plus" size={14} /></button>
 {:else if engine.installed === false}
   <div class="newcard engine">
-    <button class="primary" onclick={installEngine} disabled={!!engine.step} title="Downloads Node.js, HyperFrames and the Chrome it renders with, once (about 250 MB)">
+    <button class="primary" onclick={installEngine} disabled={!!engine.step} title="One download of about 250 MB: Node.js, HyperFrames and the Chrome it renders with">
       {#if engine.step}<span class="spinner small-spin" aria-hidden="true"></span> {engine.step}{engine.percent != null ? ` ${engine.percent}%` : "…"}{:else}<Icon name="download" size={14} /> Download engine{/if}
     </button>
     {#if engine.error}<p class="error small">{engine.error}</p>{:else if !engine.step}<p class="small muted">Needed once for video. About 250 MB.</p>{/if}
