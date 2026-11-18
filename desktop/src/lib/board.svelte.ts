@@ -302,7 +302,7 @@ export function outOfSync(video: { duration?: number; scenes?: number }, voice?:
   if (video.duration !== undefined && voice && (video.duration < voice - 0.5 || video.duration > voice + 3)) {
     problems.push(`The video is ${video.duration.toFixed(1)} s; the voiceover is ${voice.toFixed(1)} s`);
   }
-  if (video.scenes && beats && video.scenes !== beats) problems.push(`it has ${video.scenes} scenes for ${beats} storyboard beats`);
+  if (video.scenes && beats && video.scenes !== beats) problems.push(`it has ${video.scenes} scenes and the storyboard has ${beats}`);
   if (!problems.length) return undefined;
   const text = problems.join(", and ");
   return text[0].toUpperCase() + text.slice(1) + ".";

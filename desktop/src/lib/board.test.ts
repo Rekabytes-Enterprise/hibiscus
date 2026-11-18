@@ -113,7 +113,7 @@ it("flags a video whose length or scenes don't match its voiceover and storyboar
   expect(outOfSync({ duration: 118, scenes: 12 }, 96.24, 12)).toBe("The video is 118.0 s; the voiceover is 96.2 s.");
   // The style's 0.6 s tail on the last scene is fine.
   expect(outOfSync({ duration: 96.84, scenes: 12 }, 96.24, 12)).toBeUndefined();
-  expect(outOfSync({ duration: 90, scenes: 11 }, 96.24, 12)).toBe("The video is 90.0 s; the voiceover is 96.2 s, and it has 11 scenes for 12 storyboard beats.");
+  expect(outOfSync({ duration: 90, scenes: 11 }, 96.24, 12)).toBe("The video is 90.0 s; the voiceover is 96.2 s, and it has 11 scenes and the storyboard has 12.");
   // Nothing to compare: no voice, no storyboard, or a project without sub-compositions.
   expect(outOfSync({ duration: 118, scenes: 0 }, undefined, 12)).toBeUndefined();
   expect(outOfSync({}, 96, 12)).toBeUndefined();

@@ -170,9 +170,9 @@
   type FollowMode = "visuals" | "words" | "rebuild";
   let followMode = $state<Record<number, FollowMode>>({});
   const FOLLOW: { mode: FollowMode; label: string; title: string; placeholder: string; note: string }[] = [
-    { mode: "visuals", label: "Visuals only", title: "Changes scenes and visuals; the script stays and this session's voice is used", placeholder: "Such as: make the scene 4 chart bigger", note: "Keeps the script and uses this session's voiceover." },
+    { mode: "visuals", label: "Visuals only", title: "Changes scenes and visuals; the script stays and this session's voiceover is used", placeholder: "Such as: make the scene 4 chart bigger", note: "Keeps the script and uses this session's voiceover." },
     { mode: "words", label: "Change the words", title: "Changes the script; the voiceover is made again and the video rebuilt", placeholder: "Such as: make scene 3 shorter and mention Copilot", note: "Makes a new script and voiceover, then rebuilds the video." },
-    { mode: "rebuild", label: "Rebuild", title: "A new storyboard and a new video from the confirmed script, with this session's voice", placeholder: "Optional: what to do differently this time", note: "Redoes the storyboard and the video. Keeps the script and this session's voiceover." },
+    { mode: "rebuild", label: "Rebuild", title: "A new storyboard and a new video from the confirmed script, with this session's voiceover", placeholder: "Optional: what to do differently this time", note: "Redoes the storyboard and the video. Keeps the script and this session's voiceover." },
   ];
   const parentOf = (card: Card) => board.cards.find((c) => c.id === card.parent);
   /** The card the agent is working for; its live activity shows on every card that belongs to it. */
@@ -388,24 +388,24 @@
         </div>
       {:else if card.kind === "storyboard"}
         <header class="frameshead"><Icon name="layout" size={14} /> <span class="ellipsis grow">{card.text}</span>
-          <button class="iconbtn" onclick={() => onredostoryboard(card)} disabled={!canSend || busy(card)} title="Redraw every beat from the confirmed script" aria-label="Redo storyboard"><Icon name="rotate-cw" size={13} /></button>
+          <button class="iconbtn" onclick={() => onredostoryboard(card)} disabled={!canSend || busy(card)} title="Redraw every scene from the confirmed script" aria-label="Redo storyboard"><Icon name="rotate-cw" size={13} /></button>
         </header>
         {#if stale(card)}<p class="small note">The script changed since this was drawn. Confirm the script to redraw it.</p>{/if}
-        {#if repeated(card).length}<p class="small note">More than one scene uses {repeated(card).join(", ")}. Redo those beats so each scene has its own layout.</p>{/if}
+        {#if repeated(card).length}<p class="small note">More than one scene uses {repeated(card).join(", ")}. Redo those scenes so each one has its own layout.</p>{/if}
         <ol class="beats">
           {#each card.beats ?? [] as beat, i (i)}
             <li>
-              <img src={svgUrl(beat.svg)} alt={`Beat ${i + 1}`} />
+              <img src={svgUrl(beat.svg)} alt={`Scene ${i + 1}`} />
               <p><span class="muted small">{i + 1}</span> {#if beat.component}<span class="comp" class:dup={repeated(card).includes(beat.component.trim().toLowerCase())}>{beat.component}</span> {/if}{beat.line}</p>
               <span class="beatacts">
-                <button class="iconbtn" onclick={() => onredobeat(card, i)} disabled={!canSend || busy(card)} title="Redraw only this beat" aria-label={`Redo beat ${i + 1}`}><Icon name="rotate-cw" size={12} /></button>
-                <button class="iconbtn" onclick={() => (card.beats = card.beats!.filter((b) => b !== beat))} title="Remove this beat" aria-label={`Remove beat ${i + 1}`}><Icon name="x" size={12} /></button>
+                <button class="iconbtn" onclick={() => onredobeat(card, i)} disabled={!canSend || busy(card)} title="Redraw only this scene" aria-label={`Redo scene ${i + 1}`}><Icon name="rotate-cw" size={12} /></button>
+                <button class="iconbtn" onclick={() => (card.beats = card.beats!.filter((b) => b !== beat))} title="Remove this scene" aria-label={`Remove scene ${i + 1}`}><Icon name="x" size={12} /></button>
               </span>
             </li>
           {/each}
         </ol>
         <div class="foot">
-          <span class="small muted">{card.beats?.length ?? 0} beats</span>
+          <span class="small muted">{card.beats?.length ?? 0} scenes</span>
           <span class="grow"></span>
           <button class="primary action" onclick={() => makeVideo(card)} disabled={!canSend || !card.beats?.length || busy(card) || voicing(card)} title={videoHint(card)}><Icon name="check" size={12} /> {videoLabel(card)}</button>
         </div>
