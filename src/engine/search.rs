@@ -47,7 +47,13 @@ fn shown(root: &Path, cwd: &Path, path: &Path) -> String {
         .strip_prefix(cwd)
         .or_else(|_| path.strip_prefix(root))
         .unwrap_or(path);
-    rel.display().to_string()
+    let text = rel.display().to_string();
+    // One path style for the model; Windows accepts forward slashes too.
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
 }
 
 fn more(what: &str) -> String {
