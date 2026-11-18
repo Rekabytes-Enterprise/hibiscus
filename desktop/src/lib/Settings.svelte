@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Connectors from "./Connectors.svelte";
   import About from "./About.svelte";
   import Account from "./Account.svelte";
   import type { RekaAccount } from "./engine";
@@ -8,7 +9,7 @@
   import Privacy from "./Privacy.svelte";
   import Providers from "./Providers.svelte";
 
-  type Page = "account" | "providers" | "privacy" | "terms" | "about";
+  type Page = "account" | "providers" | "connectors" | "privacy" | "terms" | "about";
   let {
     onback,
     onsaved,
@@ -38,6 +39,7 @@
     <div class="heading muted small">Settings</div>
     <button class="nav" class:active={page === "account"} onclick={() => (page = "account")}><Icon name="user" /> Account</button>
     <button class="nav" class:active={page === "providers"} onclick={() => (page = "providers")}><Icon name="key" /> Providers</button>
+    <button class="nav" class:active={page === "connectors"} onclick={() => (page = "connectors")}><Icon name="link" /> Connectors</button>
     <button class="nav" class:active={page === "privacy"} onclick={() => (page = "privacy")}><Icon name="shield" /> Privacy</button>
     <button class="nav" class:active={page === "terms"} onclick={() => (page = "terms")}><Icon name="file-text" /> Terms of Use</button>
     <button class="nav" class:active={page === "about"} onclick={() => (page = "about")}><Icon name="info" /> About</button>
@@ -47,6 +49,8 @@
       <Account {account} {onsignin} {onsignout} onloaded={onaccount} />
     {:else if page === "providers"}
       <Providers {onsaved} {onsignin} />
+    {:else if page === "connectors"}
+      <Connectors />
     {:else if page === "privacy"}
       <Privacy />
     {:else if page === "about"}

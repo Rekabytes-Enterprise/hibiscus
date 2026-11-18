@@ -11,7 +11,10 @@ pub(super) const ID: &str = "rooxcode";
 pub(super) const URL: &str = "https://api-rooxcode.reka-bytes.my/v1";
 // v0.1.9 permits up to 300s queued, then a 120s generation deadline.
 // Keep a bounded 600s total, including the wait; keepalives never extend it.
-const CHAT_TIMEOUT_SECONDS: u64 = 600;
+/// A reply may stream for up to an hour, but fails once nothing arrives for two
+/// minutes. The gateway sends a keep-alive every 15 seconds while it waits.
+const CHAT_TIMEOUT_SECONDS: u64 = 3600;
+const CHAT_IDLE_SECONDS: u64 = 120;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(try_from = "String")]
@@ -103,7 +106,13 @@ pub(super) fn chat_request(
     token: Option<&str>,
 ) -> Result<reqwest::RequestBuilder> {
     validate_provider(provider)?;
-    let request = client(CHAT_TIMEOUT_SECONDS)?
+    let request = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(Duration::from_secs(3))
+        .read_timeout(Duration::from_secs(CHAT_IDLE_SECONDS))
+        .timeout(Duration::from_secs(CHAT_TIMEOUT_SECONDS))
+        .build()?
         .post(format!(
             "{}/chat/completions",
             provider.base_url.trim_end_matches('/')

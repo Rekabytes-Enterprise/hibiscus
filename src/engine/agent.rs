@@ -490,7 +490,7 @@ async fn serve_async(
                     .cloned()
                     .reduce(|a, b| format!("{a}\n{b}"));
                 // Only providers the user can use; /login lists the rest.
-                let models = config.providers.iter().filter(|p| config::access(p).is_ok()).flat_map(|p| p.models.iter().map(move |m| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window,"reasoning":m.reasoning,"images":m.images}))).collect::<Vec<_>>();
+                let models = config.providers.iter().filter(|p| config::access(p).is_ok()).flat_map(|p| p.models.iter().map(move |m| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window,"reasoning":m.reasoning,"images":m.images,"thinkingLevels":super::thinking::Policy::for_model(p, m).levels()}))).collect::<Vec<_>>();
                 emit(
                     &out,
                     response(&id, json!({"models":models,"catalogError":catalog_error})),
@@ -764,7 +764,7 @@ async fn run_turns(
                     .await
                 };
                 let elapsed = started.elapsed();
-                let (is_error, result) = match result {
+                let (is_error, mut result) = match result {
                     Ok(v) => (v["isError"] == true, v),
                     Err(e) => {
                         let details = match e.downcast_ref::<tools::ShellExit>() {
@@ -780,6 +780,11 @@ async fn run_turns(
                         )
                     }
                 };
+                if !super::capped::exempt(&name) {
+                    if let Some(text) = result["content"][0]["text"].as_str() {
+                        result["content"][0]["text"] = json!(super::capped::cap(text));
+                    }
+                }
                 let message = Message::ToolResult {
                     tool_call_id: id.clone(),
                     tool_name: name.clone(),

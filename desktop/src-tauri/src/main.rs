@@ -244,6 +244,10 @@ async fn codex_cancel(codex: State<'_, Codex>) -> Result<(), String> {
 #[derive(Default)]
 struct Reka(Codex);
 
+/// The pending "Sign in with ElevenLabs", held like the Codex one.
+#[derive(Default)]
+struct ElevenLabsLogin(Codex);
+
 #[derive(Serialize)]
 struct RekaAccount {
     name: Option<String>,
@@ -334,7 +338,13 @@ async fn reka_start(app: AppHandle, reka: State<'_, Reka>) -> Result<String, Str
 
 #[tauri::command]
 async fn reka_paste(reka: State<'_, Reka>, url: String) -> Result<(), String> {
-    let paste = reka.0 .0.lock().unwrap().as_ref().map(|(paste, _)| paste.clone());
+    let paste = reka
+        .0
+         .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(paste, _)| paste.clone());
     paste
         .ok_or("No Reka Bytes sign-in is waiting.")?
         .try_send(url)
@@ -556,14 +566,17 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
 }
 
 fn agent_browser() -> Option<PathBuf> {
-    let path = std::env::current_exe()
-        .ok()?
-        .parent()?
-        .join(if cfg!(windows) {
-            "agent-browser.exe"
-        } else {
-            "agent-browser"
-        });
+    bundled("agent-browser")
+}
+
+/// A program Tauri's externalBin placed next to the app.
+fn bundled(name: &str) -> Option<PathBuf> {
+    let file = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
+    let path = std::env::current_exe().ok()?.parent()?.join(file);
     path.is_file().then_some(path)
 }
 
@@ -623,6 +636,158 @@ async fn wsl_distros() -> Vec<desktop::wsl::Distro> {
 #[tauri::command]
 fn wsl_connect(folder: PathBuf, distro: Option<String>) {
     desktop::wsl::connect(&folder, distro);
+}
+
+/// The video styles in ~/.hibiscus/skills.
+#[tauri::command]
+fn canvas_styles() -> Vec<desktop::Style> {
+    desktop::styles()
+}
+
+/// Whether the video engine is installed.
+#[tauri::command]
+fn video_engine_status() -> bool {
+    desktop::video_engine::installed()
+}
+
+/// Installs the video engine, sending `video-engine-progress` events as it goes.
+#[tauri::command]
+async fn video_engine_install(app: AppHandle) -> Result<(), String> {
+    let report = move |p: desktop::video_engine::Progress| {
+        let _ = app.emit("video-engine-progress", p);
+    };
+    desktop::video_engine::install(&report)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The canvas saved with a session, as JSON, or `null`.
+#[tauri::command]
+fn canvas_load(session: PathBuf) -> Result<Option<String>, String> {
+    desktop::load_canvas(&session).map_err(|e| e.to_string())
+}
+
+/// Saves a session's canvas; an empty string removes it.
+#[tauri::command]
+fn canvas_store(session: PathBuf, board: String) -> Result<(), String> {
+    desktop::save_canvas(&session, &board).map_err(|e| e.to_string())
+}
+
+/// A saved reference's bytes, to show it again after a restart.
+#[tauri::command]
+fn canvas_read_reference(path: PathBuf) -> Result<tauri::ipc::Response, String> {
+    desktop::read_canvas_reference(&path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves a canvas reference sent as raw bytes, named by the `x-name` header,
+/// and returns the path the agent can read it from.
+#[tauri::command]
+fn canvas_save_reference(request: tauri::ipc::Request<'_>) -> Result<PathBuf, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected the file's bytes".into());
+    };
+    let name = request
+        .headers()
+        .get("x-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("reference");
+    desktop::save_canvas_reference(name, bytes).map_err(|e| e.to_string())
+}
+
+/// How ElevenLabs is connected: "oauth", "key" or `null`.
+#[tauri::command]
+fn elevenlabs_status() -> Option<&'static str> {
+    desktop::elevenlabs::method()
+}
+
+/// Opens "Sign in with ElevenLabs" in the browser and returns its link. The
+/// result arrives as an `elevenlabs-login` event: `null` once signed in, else the error.
+#[tauri::command]
+async fn elevenlabs_sign_in(
+    app: AppHandle,
+    sign_in: State<'_, ElevenLabsLogin>,
+) -> Result<String, String> {
+    sign_in.0.cancel();
+    let pending = desktop::elevenlabs::ElevenLabsSignIn::start().map_err(|e| e.to_string())?;
+    let url = pending.url().to_owned();
+    let paste = pending.paste();
+    let done = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        let error = pending.finish().await.err().map(|e| e.to_string());
+        let _ = done.emit("elevenlabs-login", error);
+    });
+    *sign_in.0 .0.lock().unwrap() = Some((paste, task));
+    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| e.to_string())?;
+    Ok(url)
+}
+
+#[tauri::command]
+async fn elevenlabs_sign_in_paste(
+    sign_in: State<'_, ElevenLabsLogin>,
+    url: String,
+) -> Result<(), String> {
+    let paste = sign_in
+        .0
+         .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(paste, _)| paste.clone());
+    paste
+        .ok_or("No ElevenLabs sign-in is waiting.")?
+        .try_send(url)
+        .map_err(|_| "ElevenLabs sign-in is no longer waiting for a link.".into())
+}
+
+#[tauri::command]
+async fn elevenlabs_sign_in_cancel(sign_in: State<'_, ElevenLabsLogin>) -> Result<(), String> {
+    sign_in.0.cancel();
+    Ok(())
+}
+
+/// Checks the key with ElevenLabs, then stores it.
+#[tauri::command]
+async fn elevenlabs_connect(key: String) -> Result<(), String> {
+    desktop::elevenlabs::connect(&key)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn elevenlabs_disconnect() -> Result<(), String> {
+    desktop::elevenlabs::disconnect()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn elevenlabs_models() -> Result<Vec<desktop::elevenlabs::Model>, String> {
+    desktop::elevenlabs::models()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn elevenlabs_voices(
+    search: Option<String>,
+) -> Result<Vec<desktop::elevenlabs::Voice>, String> {
+    desktop::elevenlabs::voices(search.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Reads a canvas card's text aloud; the audio comes back as base64 MP3.
+#[tauri::command]
+async fn elevenlabs_speak(
+    text: String,
+    voice: String,
+    model: String,
+) -> Result<desktop::elevenlabs::Speech, String> {
+    desktop::elevenlabs::speak(&text, &voice, &model)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The distro's home folder as a Windows path, for the folder picker.
@@ -823,6 +988,12 @@ fn main() {
     if cfg!(unix) && std::env::var_os("HIBISCUS_DESKTOP_KEEP_ENV").is_none() {
         import_login_environment();
     }
+    // Gives the engine its text_to_speech tool, which opens cards on the canvas.
+    std::env::set_var("HIBISCUS_CANVAS", "1");
+    // Gives the engine its analyze_video tool with the bundled ffmpeg.
+    if let Some(path) = bundled("ffmpeg") {
+        std::env::set_var("HIBISCUS_FFMPEG", path);
+    }
     // Gives the engine its browser tool.
     if let Some(path) = agent_browser() {
         std::env::set_var("HIBISCUS_AGENT_BROWSER", path);
@@ -836,6 +1007,14 @@ fn main() {
         .manage(App::default())
         .manage(Codex::default())
         .manage(Reka::default())
+        .manage(ElevenLabsLogin::default())
+        .setup(|app| {
+            // Skills shipped with the app, such as the tech-explainer-short video style.
+            if let Ok(dir) = app.path().resource_dir() {
+                desktop::set_bundled_skills(dir.join("skills"));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             open_project,
             send,
@@ -843,6 +1022,22 @@ fn main() {
             wsl_distros,
             wsl_connect,
             wsl_home,
+            canvas_save_reference,
+            canvas_load,
+            video_engine_status,
+            canvas_styles,
+            video_engine_install,
+            canvas_store,
+            canvas_read_reference,
+            elevenlabs_status,
+            elevenlabs_sign_in,
+            elevenlabs_sign_in_paste,
+            elevenlabs_sign_in_cancel,
+            elevenlabs_connect,
+            elevenlabs_disconnect,
+            elevenlabs_models,
+            elevenlabs_voices,
+            elevenlabs_speak,
             dev_server_start,
             dev_server_status,
             dev_server_output,

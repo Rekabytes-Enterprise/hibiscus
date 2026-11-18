@@ -178,7 +178,11 @@ pub(in crate::engine) fn request_body(
 ) -> (&'static str, Value) {
     let anonymous = provider.authentication == crate::engine::config::Authentication::Rooxcode;
     let definitions = tools.unwrap_or_default();
-    let mut wire = wire_messages(&conversation.messages, provider, model);
+    let mut wire = wire_messages(
+        &super::history::lean(&conversation.messages),
+        provider,
+        model,
+    );
     let (route, mut body) = match provider.api {
         Api::Responses => (
             "responses",
@@ -196,6 +200,9 @@ pub(in crate::engine) fn request_body(
             )
         }
     };
+    if provider.api == Api::Anthropic {
+        cache_points(&mut body);
+    }
     if thinking != "off" && model.reasoning && provider.api == Api::Responses {
         body["reasoning"] = json!({"effort":thinking});
     }
@@ -219,6 +226,28 @@ pub(in crate::engine) fn request_body(
         body.as_object_mut().unwrap().remove("tools");
     }
     (route, body)
+}
+
+/// Anthropic caches only what a request marks: the system prompt, the tools,
+/// and the conversation up to its latest message, so the next turn reads them
+/// from the cache at a tenth of the input price. Three of the four allowed marks.
+fn cache_points(body: &mut Value) {
+    let mark = json!({"type":"ephemeral"});
+    if let Some(system) = body["system"].as_str().filter(|s| !s.is_empty()) {
+        body["system"] = json!([{"type":"text","text":system,"cache_control":mark}]);
+    }
+    if let Some(tool) = body["tools"].as_array_mut().and_then(|t| t.last_mut()) {
+        tool["cache_control"] = mark.clone();
+    }
+    if let Some(block) = body["messages"]
+        .as_array_mut()
+        .and_then(|m| m.last_mut())
+        .filter(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_array_mut())
+        .and_then(|c| c.last_mut())
+    {
+        block["cache_control"] = mark;
+    }
 }
 
 #[cfg(test)]
@@ -259,6 +288,23 @@ mod tests {
             },
         ];
         wire_messages(&messages, &provider, &model)
+    }
+
+    #[test]
+    fn anthropic_requests_mark_cache_points() {
+        let mut body = json!({"system":"rules","tools":[{"name":"a"},{"name":"b"}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"},{"type":"tool_result","tool_use_id":"c"}]}]});
+        cache_points(&mut body);
+        assert_eq!(body["system"][0]["text"], "rules");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert!(body["tools"][0].get("cache_control").is_none());
+        assert_eq!(body["tools"][1]["cache_control"]["type"], "ephemeral");
+        assert!(body["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none());
+        assert_eq!(
+            body["messages"][0]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
     }
 
     #[test]

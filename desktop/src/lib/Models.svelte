@@ -6,10 +6,13 @@
     current,
     onclose,
     onchosen,
+    onpick,
   }: {
     current: { provider: string; id: string } | null;
     onclose: () => void;
-    onchosen: () => void;
+    onchosen?: () => void;
+    /** Picks a model for the caller without changing the chat's model. */
+    onpick?: (m: ModelInfo) => void;
   } = $props();
 
   let models = $state<ModelInfo[]>([]);
@@ -45,9 +48,10 @@
   });
 
   async function choose(m: ModelInfo) {
+    if (onpick) return onpick(m);
     try {
       await request({ type: "set_model", provider: m.provider, modelId: m.id });
-      onchosen();
+      onchosen?.();
     } catch (e) {
       error = String(e instanceof Error ? e.message : e);
     }

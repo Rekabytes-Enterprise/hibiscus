@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8" /><title>Hibiscus preview</title></head>
+<body><div id="app"></div>
+<script type="module">
+  // Temporary preview harness: mocked Tauri IPC, not committed.
+  import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+  mockWindows("main");
+  const me = { name: "Khairul Anuar", email: "k@example.com", avatar: "frog" };
+  const sessions = [
+    { path: "/s/1.jsonl", title: "Sidebar profile button", modified: Date.now() - 6e4 },
+    { path: "/s/2.jsonl", title: "Fix the diff base", modified: Date.now() - 36e5 },
+  ];
+  const { emit } = await import("@tauri-apps/api/event");
+  const model = { provider: "rooxcode", id: "claude-sonnet-5-5" };
+  const models = [model, { provider: "rooxcode", id: "gpt-5.5" }, { provider: "openrouter", id: "google/gemini-3-pro" }]
+    .map((m) => ({ ...m, contextWindow: 200000, reasoning: true, images: true, thinkingLevels: ["default", "low", "medium", "high", "xhigh"] }));
+  window.__emit = emit;
+  let n = 0;
+  mockIPC((cmd, args) => {
+    if (cmd === "send") {
+      const id = "desktop-" + ++n, type = args.command.type;
+      const data = type === "get_state" ? { model, sessionFile: null, thinkingLevel: "medium" } : type === "get_available_thinking_levels" ? { levels: ["default", "low", "medium", "high"] } : type === "get_available_models" ? { models } : {};
+      setTimeout(() => emit("engine", { type: "response", id, success: true, data }), 20);
+      return id;
+    }
+    if (cmd.startsWith("elevenlabs_")) {
+      if (cmd === "elevenlabs_status") return true;
+      if (cmd === "elevenlabs_models") return [
+        { id: "eleven_multilingual_v2", name: "Multilingual v2", description: "Most lifelike, 29 languages", maxText: 10000 },
+        { id: "eleven_flash_v2_5", name: "Flash v2.5", description: "Fastest, lowest cost", maxText: 40000 },
+      ];
+      if (cmd === "elevenlabs_voices") return [
+        { id: "v1", name: "Rachel", category: "premade", previewUrl: null },
+        { id: "v2", name: "Adam", category: "premade", previewUrl: null },
+      ];
+      if (cmd === "elevenlabs_speak") {
+        // One second of silent 8 kHz WAV.
+        const n = 8000, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+        [..."RIFF"].forEach((c, i) => (b[i] = c.charCodeAt(0))); v.setUint32(4, 36 + n, true);
+        [..."WAVEfmt "].forEach((c, i) => (b[8 + i] = c.charCodeAt(0))); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+        v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+        [..."data"].forEach((c, i) => (b[36 + i] = c.charCodeAt(0))); v.setUint32(40, n, true); b.fill(128, 44);
+        return new Promise((r) => setTimeout(() => r({ mimeType: "audio/wav", data: btoa(String.fromCharCode(...b)) }), 600));
+      }
+      return null;
+    }
+    switch (cmd) {
+      case "reka_sign_in_error": return "";
+      case "reka_account": case "reka_profile": return me;
+      case "sessions": return sessions;
+      case "wsl_distros": return [];
+      case "plugin:path|resolve_directory": return "/Users/khairul";
+      default: return null;
+    }
+  }, { shouldMockEvents: true });
+  localStorage.setItem("hibiscus.recentFolders", JSON.stringify(["/Users/khairul/Desktop/Github/hibiscus"]));
+  await import("/src/main.ts");
+</script></body></html>
