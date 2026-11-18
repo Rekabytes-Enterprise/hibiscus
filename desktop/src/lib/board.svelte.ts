@@ -53,7 +53,7 @@ export type Card = {
   status?: string;
   /** The last step of a run that ended without a final reply, so it can be continued. */
   stopped?: string;
-  /** A preview card's mismatch with its voiceover or storyboard, such as "The video is 118.0 s; the voiceover is 96.2 s". */
+  /** A preview card's mismatch with its voiceover or storyboard, such as "The video is 118.0 s but the voiceover is 96.2 s.". */
   sync?: string;
   /** The analyze_video call that fills a Frames card. */
   call?: string;
@@ -300,10 +300,8 @@ export function removeCard(card: Card) {
 export function outOfSync(video: { duration?: number; scenes?: number }, voice?: number, beats?: number): string | undefined {
   const problems: string[] = [];
   if (video.duration !== undefined && voice && (video.duration < voice - 0.5 || video.duration > voice + 3)) {
-    problems.push(`The video is ${video.duration.toFixed(1)} s; the voiceover is ${voice.toFixed(1)} s`);
+    problems.push(`The video is ${video.duration.toFixed(1)} s but the voiceover is ${voice.toFixed(1)} s.`);
   }
-  if (video.scenes && beats && video.scenes !== beats) problems.push(`it has ${video.scenes} scenes for ${beats} storyboard beats`);
-  if (!problems.length) return undefined;
-  const text = problems.join(", and ");
-  return text[0].toUpperCase() + text.slice(1) + ".";
+  if (video.scenes && beats && video.scenes !== beats) problems.push(`The video has ${video.scenes} scenes but the storyboard has ${beats}.`);
+  return problems.length ? problems.join(" ") : undefined;
 }

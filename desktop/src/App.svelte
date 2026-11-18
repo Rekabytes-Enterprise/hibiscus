@@ -20,6 +20,7 @@
   import NewSession from "./lib/NewSession.svelte";
   import Settings from "./lib/Settings.svelte";
   import Canvas from "./lib/Canvas.svelte";
+  import * as prompts from "./lib/prompts";
   import { answers, board, busy as cardBusy, restore, serialize, styleOf, fillFrames, openFrames, openPreview, openQuestions, openScript, openStoryboard, outOfSync, removeCard, scriptOf, voiced, type Card, type Reference } from "./lib/board.svelte";
   import SignIn from "./lib/SignIn.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -584,7 +585,7 @@
 
   async function sendCard(card: Card, prompt?: string, extra: Reference[] = []) {
     if (!folder) {
-      card.status = "Open a folder first; the agent works in it.";
+      card.status = "Open a folder first. The agent works in it.";
       return;
     }
     // Locks the card's buttons at once, so a second press can't send it twice.
@@ -614,9 +615,7 @@
       const kind = { video: "Video", image: "Image", speech: "Text to speech", frames: "Frames", storyboard: "Storyboard", preview: "Video preview", question: "Questions" }[card.kind];
       // The video's style skill is named in every step, so the series stays consistent.
       const style = styleFor(card);
-      const rule = style
-        ? `\n\nStyle: follow the ${style.name} skill. Read ${style.path} and the references it names before starting. Its workflow, layout, components, motion, captions and sound rules take priority over any generic canvas instruction here. Any script you write for it uses one \`## N. Scene name\` heading per scene and plans a different body from the style's component catalogue for every scene, with lines written to feed that body (steps for a flow, two sides for a comparison, values for meters and charts, labelled as examples when they aren't sourced). The voice is whatever the user made on the script card in this session; never pick or change it.`
-        : "";
+      const rule = style ? `\n\n${prompts.styleRule(style.name, style.path)}` : "";
       const text = `[Canvas ${kind} card]\n${(prompt ?? card.text).trim()}${rule}${lines.length ? `\n\nReferences:\n${lines.join("\n")}` : ""}`;
       // Cards the agent opens next join the video this work is for.
       board.active = card.parent ?? card.id;
@@ -638,22 +637,14 @@
   /** Writes the script only, from the video card's request and any frames, then stops. */
   function writeScript(video: Card, again = false) {
     const frames = framesOf(video);
-    const styled = styleFor(video)
-      ? " Follow the style's script step: write SCRIPT.md in the project with its scenes, a component per scene (all different) and its fact sheet, and send text_to_speech only the spoken lines, one `## N. Scene name` heading per scene followed by that scene's lines (the headings are not read aloud)."
-      : "";
-    void sendCard(video, `${again ? "Write a new version of the script for this video. It replaces the current one." : "Write the script for this video."}${styled} Send it with text_to_speech and stop for my review; don't make the storyboard yet.\nVideo: ${video.text.trim()}${again && scriptOf(video) ? `\n\nCurrent script:\n${scriptOf(video)!.text.trim()}` : ""}${frames.length ? "\n\nFollow the reference frames." : ""}`, frames);
+    void sendCard(video, prompts.writeScript(video.text.trim(), { again, styled: !!styleFor(video), current: again ? scriptOf(video)?.text.trim() : undefined, frames: frames.length > 0 }), frames);
   }
 
   /** Step one of a video: the agent draws one SVG per script line, styled on the frames. */
   function makeStoryboard(video: Card) {
     const script = scriptOf(video);
     const frames = framesOf(video);
-    const styled = styleFor(video)
-      ? "\n\nThis video has a style: make one storyboard beat per scene, not per sentence. Each beat's `line` is the scene's spoken lines, its `component` is the catalogue body planned for that scene (no two scenes share one), and its `svg` is a still of that scene's final frame drawn exactly to the style's layout grid, colours and type (portrait 1080×1920 if the style says so) using that body. Send the beats in batches of up to 4 with `from`."
-      : frames.length
-        ? "\n\nFollow the style of the reference frames."
-        : "";
-    void sendCard(video, `Make the storyboard for this confirmed script, then stop for my review. It replaces any storyboard so far.\nVideo: ${video.text.trim()}\n\nScript:\n${script?.text.trim() ?? "(no script yet)"}${styled}`, frames);
+    void sendCard(video, prompts.makeStoryboard(video.text.trim(), script?.text.trim(), { styled: !!styleFor(video), frames: frames.length > 0 }), frames);
   }
 
   /** Confirming the script locks it in and draws (or redraws) its storyboard. */
@@ -671,14 +662,9 @@
   function redoBeat(storyboard: Card, i: number) {
     const beat = storyboard.beats?.[i];
     if (!beat) return;
-    void sendCard(storyboard, `Redraw only beat ${i + 1} ("${beat.line}"). Call storyboard again with every beat in the same order, keeping the other beats' lines and SVGs exactly as they were.`);
+    void sendCard(storyboard, prompts.redoBeat(i + 1, beat.line));
   }
 
-  /**
-   * A follow-up on a finished video. Visual changes keep the script, voiceover and
-   * timing. A change to the words updates the script and storyboard; once the agent
-   * stops, the canvas makes the new voiceover and rebuilds the video with it.
-   */
   /**
    * A follow-up on a finished video:
    * - "visuals": scenes and motion change; the session's voice is attached and replaces any silent or placeholder track.
@@ -686,35 +672,28 @@
    * - "rebuild": a new storyboard from the confirmed script, then the canvas rebuilds the video with the session's voice.
    * - "voice": only puts the session's voiceover into a video built without it.
    */
-  async function followUp(preview: Card, request: string, mode: "visuals" | "words" | "rebuild" | "voice") {
+  async function followUp(preview: Card, request: string, mode: prompts.Mode) {
     const video = videoOf(preview);
     const storyboard = video && board.cards.find((c) => c.kind === "storyboard" && c.parent === video.id);
-    const ask = request.trim() ? `Follow-up on the finished video: ${request.trim()}\n` : "";
     const styled = !!(video && styleFor(video));
-    const work = "Work in steps: write or edit the generator a few scenes at a time, rebuilding and checking between steps, so no single reply has to hold the whole film.";
     if (mode === "words" || mode === "rebuild") {
-      await sendCard(preview, mode === "words"
-        ? `${ask}This changes the words. Send the updated script with text_to_speech${styled ? " (keeping its `## N. Scene name` headings) and update SCRIPT.md" : ""}, then call storyboard with the beats updated to match, keeping unchanged beats' SVGs as they were. Then stop: the app makes the new voiceover and asks you to rebuild the video.`
-        : `${ask}Rebuild this video from the confirmed script. Keep the script exactly as it is. First make a new storyboard${styled ? " with a different body from the style's catalogue for every scene, sent in batches of up to 4 with `from`" : ""}, then stop: the app reuses this session's voiceover and asks you to build the video from the new storyboard.`);
+      await sendCard(preview, prompts.followUp(mode, request, { styled }));
       // Set only once the agent is working, so the rebuild waits for it to finish.
       if (storyboard && board.active !== undefined) board.followUp = storyboard.id;
       return;
     }
     const voice = await voiceBlock(scriptOf(video ?? preview));
     if (!voice) {
-      preview.status = "Make the voiceover on the script card first (Generate). The video only uses the voice made in this session.";
+      preview.status = "Make the voiceover on the script card first with Generate. The video only uses the voiceover made in this session.";
       return;
     }
-    const text = mode === "voice"
-      ? `Put this session's voiceover into the video, which was built without it. Replace any silent or placeholder voice tracks, re-time captions and reveals to its transcript, and keep the visuals. ${work}\n\n${voice}`
-      : `${ask}Change the visuals only. Keep the script${styled ? "; scene layouts, components and motion may change within the style's rules" : ""}. ${work}\n\n${voice}\n\nIf the project still has silent or placeholder voice tracks, replace them with the voice above.`;
     if (video) video.voicedBuild = true;
-    void sendCard(preview, `${text}\n\nUpdate the HyperFrames project, keep the preview running (hyperframes preview --background --no-open) and call video_preview again.`);
+    void sendCard(preview, prompts.followUp(mode, request, { styled, voice }));
   }
 
   /** Picks up a run that stopped after a tool result without replying. */
   function continueRun(card: Card) {
-    void sendCard(card, `Your last run stopped before finishing, right after this step: ${card.stopped}. Check what that step actually did (its output and the files it changed; a step may have failed even if the exit code was 0), fix it if needed, then finish the remaining work.`);
+    void sendCard(card, prompts.continueRun(card.stopped ?? "an unknown step"));
   }
 
   /** The length of an audio clip, or undefined if it can't be read. */
@@ -741,7 +720,7 @@
 
   /** Asks the agent to re-time the video to its voiceover and storyboard. */
   function fixSync(preview: Card) {
-    void followUp(preview, `The built video doesn't match: ${preview.sync} Re-time every scene to its voice clip (the clip's length plus the style's tail, if it has one), keep one scene per storyboard beat, re-time captions and reveals to the transcript, and check the project's total length after rebuilding.`, "visuals");
+    void followUp(preview, prompts.fixSync(preview.sync ?? ""), "visuals");
   }
 
   /**
@@ -751,16 +730,13 @@
   async function voiceBlock(script: Card | undefined): Promise<string | null> {
     if (!voiced(script)) return null;
     const clips = script!.speech!.clips ?? [];
-    if (clips.length) {
-      const paths = await Promise.all(clips.map(async (c, i) => `- scene ${i + 1} (${c.scene}): ${await toDisk(`scene-${String(i + 1).padStart(2, "0")}.mp3`, c.audio)}`));
-      return `Voice: one ElevenLabs clip per scene, made in this session with the voice the user picked. Copy them into assets/vo/raw/ in order, then normalise and transcribe each.\n${paths.join("\n")}`;
-    }
-    return `Voice: one ElevenLabs clip for the whole script, made in this session with the voice the user picked: ${await toDisk("voiceover.mp3", script!.speech!.audio!)}\nTranscribe it, cut it into one clip per scene at the scene boundaries (each scene's first and last words), put those in assets/vo/raw/ in order, then normalise them.`;
+    const paths = await Promise.all(clips.map(async (c, i) => ({ scene: c.scene, path: await toDisk(`scene-${String(i + 1).padStart(2, "0")}.mp3`, c.audio) })));
+    return prompts.voiceover(paths, clips.length ? undefined : await toDisk("voiceover.mp3", script!.speech!.audio!));
   }
 
   async function skipQuestions(card: Card) {
     const parent = board.cards.find((c) => c.id === card.parent);
-    await sendCard(card, "Skip these questions: use your best judgement and carry on.");
+    await sendCard(card, prompts.SKIP);
     if (card.status?.startsWith("Sent")) {
       if (parent) parent.status = "Skipped the questions. The agent is carrying on.";
       removeCard(card);
@@ -782,7 +758,7 @@
       const voice = audio ? await toDisk("voiceover.mp3", audio) : null;
       if (video) video.voicedBuild = !!voice;
       const rebuild = board.cards.some((c) => c.kind === "preview" && c.parent === card.parent);
-      void sendCard(card, `I confirmed this storyboard. ${rebuild ? "Rebuild the existing HyperFrames video from it" : "Build the video with HyperFrames"}: animate each beat's elements in as its line is spoken (not a still picture), with transitions between beats, then start the preview with hyperframes preview --background --no-open and show it with video_preview.\n\nBeats:\n${beats.join("\n")}\n\nVoiceover: ${voice ?? "none yet; time each beat to the line read at a natural pace, so it can be re-timed when the voiceover is made"}`);
+      void sendCard(card, prompts.build(beats, { rebuild, voice: voice ?? undefined }));
     } catch (e) {
       card.status = message(e);
     }
@@ -797,15 +773,15 @@
     // The episode is never built on silent stand-ins: it needs this session's voice.
     const voice = await voiceBlock(script).catch(() => null);
     if (!voice) {
-      storyboard.status = "Make the voiceover on the script card first (Generate), or connect ElevenLabs. The video isn't built without the real voice.";
+      storyboard.status = "Make the voiceover on the script card first with Generate, or connect ElevenLabs. The video isn't built without it.";
       return;
     }
     const video = board.cards.find((c) => c.id === storyboard.parent);
     if (video) video.voicedBuild = true;
     try {
-      const plan = (storyboard.beats ?? []).map((b, i) => `- scene ${i + 1}: ${b.component ?? "(component not named; pick an unused one from the catalogue)"}`).join("\n");
+      const plan = (storyboard.beats ?? []).map((b, i) => `- scene ${i + 1}: ${b.component ?? "no component named yet; pick an unused one from the catalogue"}`);
       const rebuild = board.cards.some((c) => c.kind === "preview" && c.parent === storyboard.parent);
-      void sendCard(storyboard, `I confirmed the storyboard. ${rebuild ? "Rebuild this episode" : "Build this episode"} with the ${style.name} skill's episode workflow, from its project step to its preview step: use the confirmed scenes and SCRIPT.md, the skill's generator and its bundled example for the markup and motion of each body, word-synced reveals and captions from the transcripts, and its sound mix. Don't use the storyboard SVGs as slides; they only show the intended layout. Work in steps: write the generator a few scenes at a time, rebuilding and checking between steps, so no single reply has to hold the whole film.\n\nBuild each scene with its planned body; every scene uses a different one:\n${plan}\n\n${voice}\n\nThere's no music bed yet: leave music out (no silent file) and say so. Start the preview with hyperframes preview --background --no-open, then show it with video_preview. Don't render until I ask.`);
+      void sendCard(storyboard, prompts.buildStyled(style.name, plan, { rebuild, voice }));
     } catch (e) {
       storyboard.status = message(e);
     }
@@ -814,7 +790,7 @@
   /** Sends the answers, closes the questions and lets the agent carry on. */
   async function answer(card: Card) {
     const parent = board.cards.find((c) => c.id === card.parent);
-    await sendCard(card, `My answers:\n${answers(card)}\n\nCarry on from here.`);
+    await sendCard(card, prompts.answers(answers(card)));
     if (card.status?.startsWith("Sent")) {
       if (parent) parent.status = "Answered. The agent is carrying on.";
       removeCard(card);
@@ -822,7 +798,7 @@
   }
 
   function renderVideo(card: Card) {
-    void sendCard(card, "Render the final video now, then call video_preview with its file.");
+    void sendCard(card, prompts.RENDER);
   }
 
   async function setThinking(level: string) {

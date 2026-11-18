@@ -85,17 +85,81 @@ Error texts are already redacted by the engine (`error::safe_message`) and can b
 
 ## Canvas
 
-- The desktop app sets `HIBISCUS_CANVAS`, which gives the engine a `text_to_speech` tool and a short video section in its instructions: check references, write the voiceover script, call the tool, then build with HyperFrames when available. The tool runs nothing; the app opens a Video card and a joined Text to speech card from the tool call event.
-- "Sign in with ElevenLabs" works like Claude Code's ElevenLabs connector: OAuth 2.1 with PKCE (S256) against ElevenLabs' hosted MCP server (`resource=https://api.elevenlabs.io/v1/mcp`), as a public client with no secret. Hibiscus's client ID is the address of its Client ID Metadata Document, `https://rekabytes-enterprise.github.io/hibiscus/oauth/elevenlabs.json`, served by GitHub Pages from the repo's `gh-pages` branch; it allows `http://127.0.0.1/callback` on any port. `desktop::elevenlabs::ElevenLabsSignIn` listens on a free loopback port, waits up to ten minutes for the browser or a pasted redirect URL, and stores the token, refreshed before it expires, in `connectors.json`. Signed in, voices come from the `creative_list_voices` tool and speech from `creative_generate_speech`, polled with `creative_get_flow_run_status` and downloaded from `creative_get_generations`. A pasted API key, when there is one, takes precedence and uses the REST API below.
-- `desktop::elevenlabs` is the ElevenLabs connector. `connect(key)` checks the key against `GET /v2/voices` before storing it in `connectors.json` (private, mode 0600, apart from the model providers' `auth.json`). `models()` lists `GET /v1/models` entries that can do text to speech, `voices(search)` lists up to 100 voices from `GET /v2/voices`, and `speak(text, voice, model)` calls `POST /v1/text-to-speech/{voice}` with `output_format=mp3_44100_128` and returns the MP3 as base64. Every request sends the key in `xi-api-key`.
-- `analyze_video` cuts evenly spaced stills from a video with ffmpeg (default 12, at most 24, scaled to 640 px wide) and returns them as JPEG images with their timestamps; `details.frames` lists the moments in seconds. The app bundles ffmpeg 6.1.1 from ffmpeg-static (GPL-3.0, shipped as a separate program with its license in `licenses/ffmpeg.txt`) and sets `HIBISCUS_FFMPEG`; the terminal app offers the tool when `ffmpeg` is on PATH. The app opens a Frames card when the call starts and fills it from the result.
-- A canvas card's Send runs the agent in the open folder's session. References the user added are saved with `desktop::save_canvas_reference` under `~/.hibiscus/canvas/references` and listed by path in the message; images are also attached. The card's model and reasoning level become the session's. Cards the agent's tools open while it works join to the card that was sent.
-- Each session keeps its own canvas. `desktop::save_canvas(session, json)` writes it atomically to `~/.hibiscus/canvas/boards/<hash of the session path>.json` (at most 64 MiB; an empty canvas removes the file) and `desktop::load_canvas(session)` reads it back when the session opens. Reference files are saved to `~/.hibiscus/canvas/references` as soon as they are added, and `desktop::read_canvas_reference` reads only from that folder, so previews return after a restart.
-- The video engine is installed from the canvas (Download engine, which replaces New until it is done) into `~/.hibiscus/runtime`: Node.js 22.23.5 checked against nodejs.org's SHA-256, `hyperframes@0.9.59` (Apache-2.0, CLI and skills) installed with that Node's npm, and HyperFrames' pinned Chrome from `hyperframes browser ensure`. Once installed, the agent's shell has Node.js, `hyperframes` and the bundled ffmpeg first on `PATH` with `HYPERFRAMES_NO_TELEMETRY=1`, and HyperFrames' skills load alongside the project's.
-- Skills bundled with the app live in `desktop/src-tauri/skills/` and ship as a Tauri resource; the app passes their folder to the engine at startup (`desktop::set_bundled_skills`). The first is the `tech-explainer-short` video style. Personal skills in `~/.hibiscus/skills` load too, and one with the same name replaces the bundled skill. With a style picked, every canvas step follows the style's own workflow: the script uses `## N. Scene name` headings, the storyboard has one beat per scene drawn to the style's layout, the canvas makes one ElevenLabs clip per scene, and the agent builds with the style's generator.
-- Personal skills live in `~/.hibiscus/skills` and load in every project. A skill whose frontmatter has `hibiscus-style: true` is a video style (`desktop::styles()`): the canvas lists it on Video cards, names it with the path to its SKILL.md in every step's request, and uses its optional `hibiscus-voice` and `hibiscus-voice-model` as the script card's defaults.
-- A finished video's preview card has a Follow up box (hidden while the agent works). "Visuals only" asks the agent to change scenes while keeping the script, voiceover and timing. "Change the words" asks for an updated script and storyboard; when the agent stops, the canvas confirms the new script, makes its voiceover and rebuilds the video.
-- Video steps on the canvas: a card locks the moment it is sent, so it can't be sent twice, and a failed model reply shows on the card ("The model failed: …"). Rooxcode replies may stream for up to an hour but fail after two minutes with nothing arriving. Storyboards can arrive in batches (`from`), and each beat can name its `component`; the storyboard flags components used by more than one scene. Scripts split into scenes by `## N. Scene name` headings or, without them, by blank lines. The voice is always the one made on the script card in the session: an existing voiceover is reused, and a styled build won't start without one. The agent never makes silent or placeholder audio.
-- Follow-ups on a finished video come in three modes: "Visuals only" (the script stays; this session's voiceover is attached and replaces any silent or placeholder track), "Change the words" (new script and storyboard, then the canvas re-voices and rebuilds) and "Rebuild" (a new storyboard from the confirmed script, then the canvas rebuilds with the session's voice). Every request that builds or changes a video attaches the voice made on the script card; there is no default voice. A Video card remembers whether its last build had that voice (`voicedBuild`); the preview card offers "Add the voiceover" when it didn't. While the agent works, the cards of that video show what it's doing and for how long. Build requests ask the agent to write generators a few scenes at a time.
-- Saving tokens, for every session: Anthropic requests mark cache points on the system prompt, the tools and the latest message. Tool results past the latest 10, and anything before the latest canvas prompt, go to the model as their first 400 characters and a note once they pass 2 KB, as do long strings in older tool-call arguments; the cut moves in steps of 10 results so provider caches keep hitting, and the saved session keeps everything. Every tool's output except read, grep and glob drops colour codes and redrawn progress lines, and past 30,000 characters keeps its first 2 KB and last 8 KB, with the full output saved to `~/.hibiscus/tool-output/` for 7 days. `read` numbers its lines, returns at most 2,000 lines or 50 KB, cuts lines over 2,000 characters, reads from the end with a negative offset and says which lines it returned. `grep` and `glob` search contents and paths with ripgrep's walker, skipping ignored, hidden and binary files, and return at most 200 results.
-- Checks on a video run: the bash tool appends a warning when a script exits 0 but its output shows a Python or Node.js crash, because the exit code is only the last command's. `video_preview` takes the HyperFrames `project` folder and returns its timeline length and scene count (sub-compositions other than captions) in `details`; the preview card compares them with this session's voiceover and the storyboard's beats and, when they differ, shows the mismatch with a "Fix the timing" button. A run that ends right after a tool result, with no reply from the model, marks its card "Stopped before finishing" with the last step and a Continue button.
+### Engine tools
+
+The desktop app sets `HIBISCUS_CANVAS`. With it, the engine adds canvas instructions to its system prompt and offers these tools. None of them runs anything except `analyze_video`; the app opens cards from the tool call events.
+
+- `text_to_speech` opens a Video card and a joined Text to speech card holding the script.
+- `storyboard` opens the storyboard. Beats can arrive in batches (`from`), and each beat can name its style `component`. The card flags a component used by more than one scene.
+- `ask_user` opens a Questions card with suggested answers. The answers come back as the user's next message.
+- `video_preview` opens or updates the preview card. With the HyperFrames `project` folder, it returns the timeline's length and scene count in `details`. Caption tracks don't count as scenes.
+- `analyze_video` cuts evenly spaced stills from a video with ffmpeg: 12 by default, at most 24, 640 px wide. It returns them as JPEG images, and `details.frames` lists their times in seconds. The app opens a Frames card when the call starts and fills it from the result. The terminal app offers this tool when `ffmpeg` is on PATH.
+
+The app bundles ffmpeg 6.1.1 from ffmpeg-static as a separate program, with its GPL-3.0 licence in `licenses/ffmpeg.txt`, and points the engine at it with `HIBISCUS_FFMPEG`.
+
+### ElevenLabs
+
+"Sign in with ElevenLabs" uses OAuth 2.1 with PKCE (S256) against ElevenLabs' hosted MCP server, `resource=https://api.elevenlabs.io/v1/mcp`, as a public client with no secret.
+
+- Hibiscus's client ID is the address of its Client ID Metadata Document, `https://rekabytes-enterprise.github.io/hibiscus/oauth/elevenlabs.json`. GitHub Pages serves it from the `gh-pages` branch. It allows `http://127.0.0.1/callback` on any port.
+- `desktop::elevenlabs::ElevenLabsSignIn` listens on a free loopback port and waits up to ten minutes for the browser or a pasted redirect URL. It stores the token in `connectors.json` and refreshes it before it expires.
+- Signed in, the canvas lists voices with the `creative_list_voices` tool and makes speech with `creative_generate_speech`. It polls `creative_get_flow_run_status` and downloads the result from `creative_get_generations`.
+
+A pasted API key, when there is one, comes first and uses the REST API:
+
+- `connect(key)` checks the key against `GET /v2/voices`, then stores it in `connectors.json`. That file is private (mode 0600) and separate from the model providers' `auth.json`.
+- `models()` lists the `GET /v1/models` entries that can do text to speech. `voices(search)` lists up to 100 voices from `GET /v2/voices`.
+- `speak(text, voice, model)` calls `POST /v1/text-to-speech/{voice}` with `output_format=mp3_44100_128` and returns the MP3 as base64.
+- Every request sends the key in `xi-api-key`.
+
+### Cards and sessions
+
+- A card's Send runs the agent in the open folder's session. The card's model and reasoning level become the session's. Cards the agent's tools open while it works join the card that was sent.
+- A card locks the moment it's sent, so it can't be sent twice. A failed model reply shows on the card as "The model failed: …".
+- `desktop::save_canvas_reference` saves each reference when the user adds it, under `~/.hibiscus/canvas/references`. The message lists references by path, and attaches images too. `desktop::read_canvas_reference` reads only from that folder, so previews come back after a restart.
+- Each session keeps its own canvas. `desktop::save_canvas(session, json)` writes it atomically to `~/.hibiscus/canvas/boards/<hash of the session path>.json`, at most 64 MiB, and removes the file when the canvas is empty. `desktop::load_canvas(session)` reads it back when the session opens.
+- While the agent works, that video's cards show what it's doing and for how long.
+
+### Video engine
+
+Download engine, shown in place of New until it's done, installs the video engine into `~/.hibiscus/runtime`:
+
+- Node.js 22.23.5, checked against nodejs.org's SHA-256.
+- `hyperframes@0.9.59` (Apache-2.0, the CLI and its skills), installed with that Node's npm.
+- HyperFrames' pinned Chrome, from `hyperframes browser ensure`.
+
+Once it's installed, the agent's shell finds Node.js, `hyperframes` and the bundled ffmpeg first on `PATH`, with `HYPERFRAMES_NO_TELEMETRY=1`. HyperFrames' skills load alongside the project's.
+
+### Styles
+
+- The app ships its skills in `desktop/src-tauri/skills/` as a Tauri resource and passes their folder to the engine at startup (`desktop::set_bundled_skills`). The first is the `tech-explainer-short` video style.
+- Personal skills in `~/.hibiscus/skills` load in every project. One with the same name replaces the bundled skill.
+- A skill whose frontmatter has `hibiscus-style: true` is a video style (`desktop::styles()`). The canvas lists it on Video cards and names it, with the path to its SKILL.md, in every step's request.
+- With a style picked, the script uses `## N. Scene name` headings, the storyboard has one scene per heading drawn to the style's layout, the canvas makes one ElevenLabs clip per scene, and the agent builds with the style's generator. Without headings, blank lines split the script into scenes.
+
+### Voiceover and follow-ups
+
+- Every build uses the voiceover made on the script card in this session. There's no default voice. An existing voiceover is reused, and a styled build won't start without one. The agent never makes silent or placeholder audio.
+- A Video card remembers whether its last build had the voiceover (`voicedBuild`). When it didn't, the preview card offers Add the voiceover.
+- A finished video's preview card has a Follow up box, hidden while the agent works, with three modes:
+  - Visuals only keeps the script and attaches this session's voiceover, which replaces any silent or placeholder track.
+  - Change the words asks for a new script and storyboard. When the agent stops, the canvas makes the new voiceover and rebuilds.
+  - Rebuild makes a new storyboard from the confirmed script, then rebuilds with this session's voiceover.
+- Build requests ask the agent to write the generator a few scenes at a time. `desktop/src/lib/prompts.ts` holds every prompt the canvas sends.
+- Rooxcode replies may stream for up to an hour, but fail after two minutes with nothing arriving.
+
+### Run checks
+
+- The bash tool adds a warning when a script exits 0 but its output shows a Python or Node.js crash, because the exit code is only the last command's.
+- The preview card compares `video_preview`'s length and scene count with this session's voiceover and the storyboard. When they differ, it shows the mismatch and a Fix the timing button.
+- A run that ends right after a tool result, with no reply from the model, marks its card "Stopped before finishing" with the last step and a Continue button.
+
+## Request size
+
+These apply to every session, not only the canvas.
+
+- Anthropic requests mark cache points on the system prompt, the tools and the latest message.
+- Tool results older than the latest 10, and everything before the latest canvas prompt, go to the model as their first 400 characters and a note once they pass 2 KB. Long strings in older tool-call arguments get the same treatment. The cut moves in steps of 10 results, so provider caches keep hitting. The saved session keeps everything.
+- Every tool's output except `read`, `grep` and `glob` drops colour codes and redrawn progress lines. Past 30,000 characters it keeps the first 2 KB and the last 8 KB, and the full output goes to `~/.hibiscus/tool-output/` for 7 days.
+- `read` numbers its lines and returns at most 2,000 lines or 50 KB. It cuts lines over 2,000 characters, reads from the end with a negative offset, and says which lines it returned.
+- `grep` and `glob` search contents and paths with ripgrep's walker. They skip ignored, hidden and binary files and return at most 200 results.
