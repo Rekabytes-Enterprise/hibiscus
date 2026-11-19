@@ -159,6 +159,27 @@ fn wsl_wrapper(exe: &Path, script: Option<&Path>) -> Option<String> {
     ))
 }
 
+/// Serves a HyperFrames project's preview, attached so the app owns the process.
+pub(crate) const PREVIEW: &str = "hyperframes preview --foreground --no-open";
+
+/// Starts the preview server for `project`, or reuses the one already running,
+/// and returns its local address. The app's dev server manager runs it, so it
+/// outlives the agent's command (in WSL too, where a background process dies
+/// with the command) and stops when the app quits.
+pub async fn preview(project: &Path) -> Result<String> {
+    crate::devserver::start(project, Some(PREVIEW))?;
+    let status = crate::devserver::ready(project, Duration::from_secs(90))
+        .await
+        .ok_or("The preview server is gone.")?;
+    status.url.ok_or_else(|| {
+        format!(
+            "The preview server didn't print its address. Last output:\n{}",
+            crate::devserver::output(project, 20).join("\n")
+        )
+        .into()
+    })
+}
+
 /// HyperFrames' own skills, shipped inside its npm package.
 pub(crate) fn skills_dir() -> Option<PathBuf> {
     installed()

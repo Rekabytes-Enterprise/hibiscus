@@ -182,6 +182,8 @@ export const canvasLoad = (session: string) => invoke<string | null>("canvas_loa
 export const canvasStore = (session: string, board: string) => invoke<void>("canvas_store", { session, board });
 /** A saved reference's bytes, to show it again after a restart. */
 export const readReference = (path: string) => invoke<ArrayBuffer>("canvas_read_reference", { path });
+/** Starts a video project's preview server, or reuses the running one, and returns its address. */
+export const canvasPreview = (project: string) => invoke<string>("canvas_preview", { project });
 
 /** The video engine (Node.js, HyperFrames and its Chrome), installed from the canvas. */
 export const videoEngine = {

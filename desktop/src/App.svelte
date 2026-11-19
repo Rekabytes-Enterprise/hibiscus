@@ -272,7 +272,12 @@
       if (event.type === "tool_execution_start") lastStep = activity(event.toolName, event.args);
       if (event.type === "tool_execution_end") afterTool = lastStep;
       if (event.type === "message_end" && event.message?.role === "assistant" && !event.message?.errorMessage) afterTool = undefined;
-      if (event.type === "tool_execution_end" && event.toolName === "video_preview" && !event.isError) void checkSync(event.result?.details);
+      // The app starts the preview server during the call, so its address arrives with the result.
+      if (event.type === "tool_execution_end" && event.toolName === "video_preview" && !event.isError) {
+        const details = event.result?.details;
+        if (details?.url) openPreview({ url: details.url, project: details.project });
+        void checkSync(details);
+      }
       if (working) {
         if (event.type === "agent_start") working.activity = "Thinking";
         if (event.type === "tool_execution_start") working.activity = activity(event.toolName, event.args);

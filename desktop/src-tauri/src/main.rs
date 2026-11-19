@@ -650,6 +650,16 @@ fn video_engine_status() -> bool {
     desktop::video_engine::installed()
 }
 
+/// Starts a video project's preview server, or reuses the running one, and
+/// returns its address: the preview card's reload button restarts a preview
+/// that has stopped.
+#[tauri::command]
+async fn canvas_preview(project: PathBuf) -> Result<String, String> {
+    desktop::video_engine::preview(&project)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Installs the video engine, sending `video-engine-progress` events as it goes.
 #[tauri::command]
 async fn video_engine_install(app: AppHandle) -> Result<(), String> {
@@ -1027,6 +1037,7 @@ fn main() {
             video_engine_status,
             canvas_styles,
             video_engine_install,
+            canvas_preview,
             canvas_store,
             canvas_read_reference,
             elevenlabs_status,

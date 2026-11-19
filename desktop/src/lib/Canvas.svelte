@@ -3,7 +3,7 @@
   import Menu from "./Menu.svelte";
   import Models from "./Models.svelte";
   import { onMount } from "svelte";
-  import { elevenlabs, saveReference, videoEngine, type Style, type Voice, type VoiceModel } from "./engine";
+  import { canvasPreview, elevenlabs, saveReference, videoEngine, type Style, type Voice, type VoiceModel } from "./engine";
 
   import { addCard, busy, repeated, scenes, scriptOf, stale, styleOf, voiced, widthOf, board, removeCard, type Card, type Kind, type Model, type Reference } from "./board.svelte";
 
@@ -201,6 +201,20 @@
     script.confirmed = script.text;
     void makeVideo(storyboard);
   });
+
+  /** Reloads a preview card, first restarting its preview server if it has stopped. */
+  async function reloadPreview(card: Card) {
+    if (card.project) {
+      card.status = "Starting the preview…";
+      try {
+        card.url = await canvasPreview(card.project);
+        card.status = undefined;
+      } catch (e) {
+        card.status = String(e instanceof Error ? e.message : e);
+      }
+    }
+    card.reload = (card.reload ?? 0) + 1;
+  }
 
   /** A script the agent wrote for a card: it stays Text to speech and takes no references. */
   const script = (card: Card) => card.kind === "speech" && card.parent !== undefined;
@@ -411,7 +425,7 @@
         </div>
       {:else if card.kind === "preview"}
         <header class="frameshead"><Icon name="play" size={14} /> <span class="grow">Video preview</span>
-          <button class="iconbtn" onclick={() => (card.reload = (card.reload ?? 0) + 1)} disabled={!card.url} title="Reload the preview" aria-label="Reload preview"><Icon name="rotate-cw" size={13} /></button>
+          <button class="iconbtn" onclick={() => reloadPreview(card)} disabled={!card.url || card.status === "Starting the preview…"} title="Reload the preview" aria-label="Reload preview"><Icon name="rotate-cw" size={13} /></button>
         </header>
         {#if stale(card)}<p class="small note">The script changed since this video was built. Confirm the script and storyboard to rebuild it.</p>{/if}
         {#if card.url}

@@ -10,7 +10,7 @@ it("puts one rule on each line and attaches the real voiceover to every build", 
   for (const mode of ["visuals", "voice"] as const) {
     const text = prompts.followUp(mode, "", { styled: true, voice });
     expect(text).toContain(voice);
-    expect(text).toContain("the preview URL and the project folder");
+    expect(text).toContain("Call video_preview with the project folder. The app starts the preview server");
     expect(text).not.toMatch(/^Follow-up/);
   }
   expect(prompts.buildStyled("tech", ["- scene 1: Step flow"], { rebuild: false, voice })).toContain("Build each scene with its planned body. Every scene uses a different one:\n- scene 1: Step flow");

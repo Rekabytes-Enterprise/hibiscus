@@ -28,7 +28,7 @@ Load `/hyperframes` before building. This skill only adds the house style on top
 5. **Music:** ElevenLabs music (`eleven_music_v2_5`), an instrumental 2-3s longer than the film, saved to `assets/music/bed.mp3`.
 6. **Build:** fill in `KICKER`, `SCENES`, `BODY` and `JS` in `tools/build.py`, taking the times from the transcripts. Pick scene bodies from `references/components.md` and copy their markup and JS from `examples/vercel-vs-vps.py`. Then run `python3 -I tools/build.py`.
 7. **Check:** run `npx hyperframes check`, then `npx hyperframes snapshot --at ...` at the end of each scene and wherever you changed something. The accepted warnings are listed in `references/style.md`.
-8. **Preview:** `npx hyperframes preview --background`. Stop there and wait for the person to approve.
+8. **Preview:** in Hibiscus, call `video_preview` with the project folder; the app runs the preview server. Elsewhere, `npx hyperframes preview --background`. Stop there and wait for the person to approve.
 9. **Render** after they approve: `npx hyperframes render -o renders/<slug>.mp4`. Expect about -14 LUFS integrated with peaks around -1 dBFS. Grab a few frames with ffmpeg to check them.
 
 ## Scene length
