@@ -1,7 +1,6 @@
 //! Private plain-text memory layout, legacy import and native-write backups.
 use crate::sys::{DirBuilderExt, OpenOptionsExt};
 use crate::Result;
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{Read, Write},
@@ -21,7 +20,7 @@ pub(crate) struct Layout {
 
 impl Layout {
     pub fn new(home: &Path, cwd: &Path) -> Self {
-        let hash = format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes()));
+        let hash = crate::sha256_hex(cwd.as_os_str().as_encoded_bytes());
         let root = home.join("memory");
         Self {
             global: root.join("global/MEMORY.md"),
