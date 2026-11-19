@@ -6,36 +6,121 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 fn manager_conflicts_delete_and_restore_preserve_versions() {
     let f = Fixture::new();
     let manager = Manager::open(&f.0, &f.0.join("workspace")).unwrap();
-    assert!(manager.save(Scope::Global, None, "first").unwrap());
-    assert!(!manager.save(Scope::Global, Some("first"), "first").unwrap());
-    assert!(manager.save(Scope::Global, None, "stale missing").is_err());
+    let global = manager.index(Scope::Global).to_path_buf();
+    assert!(manager.save(&global, None, "first").unwrap());
+    assert!(!manager.save(&global, Some("first"), "first").unwrap());
+    assert!(manager.save(&global, None, "stale missing").is_err());
+    assert!(manager.save(&global, Some("first"), "second").unwrap());
+    assert!(manager.save(&global, Some("first"), "stale edit").is_err());
+    assert!(manager.delete(&global, Some("first")).is_err());
+    assert_eq!(manager.load(&global).unwrap().as_deref(), Some("second"));
     assert!(manager
-        .save(Scope::Global, Some("first"), "second")
-        .unwrap());
-    assert!(manager
-        .save(Scope::Global, Some("first"), "stale edit")
-        .is_err());
-    assert!(manager.delete(Scope::Global, Some("first")).is_err());
-    assert_eq!(
-        manager.load(Scope::Global).unwrap().as_deref(),
-        Some("second")
-    );
-    assert!(manager.load(Scope::Project).unwrap().is_none());
-    assert!(manager.delete(Scope::Global, Some("second")).unwrap());
-    assert!(manager.load(Scope::Global).unwrap().is_none());
-    let revisions = manager.revisions(Scope::Global).unwrap();
+        .load(manager.index(Scope::Project))
+        .unwrap()
+        .is_none());
+    assert!(manager.delete(&global, Some("second")).unwrap());
+    assert!(manager.load(&global).unwrap().is_none());
+    let revisions = manager.revisions(&global).unwrap();
     assert_eq!(revisions.len(), 2);
-    let restored = manager.revision(Scope::Global, &revisions[1].id).unwrap();
+    let restored = manager.revision(&global, &revisions[1].id).unwrap();
     assert_eq!(restored, "first");
-    manager.save(Scope::Global, None, &restored).unwrap();
-    assert_eq!(manager.load(Scope::Global).unwrap().unwrap(), "first");
+    manager.save(&global, None, &restored).unwrap();
+    assert_eq!(manager.load(&global).unwrap().unwrap(), "first");
+    assert!(manager.revision(&global, "../../config.json").is_err());
     assert!(manager
-        .revision(Scope::Global, "../../config.json")
+        .save(&global, Some("first"), &"x".repeat(65537))
         .is_err());
-    assert!(manager
-        .save(Scope::Global, Some("first"), &"x".repeat(65537))
-        .is_err());
-    assert_eq!(manager.load(Scope::Global).unwrap().unwrap(), "first");
+    assert_eq!(manager.load(&global).unwrap().unwrap(), "first");
+    assert!(manager.load(&f.0.join("config.json")).is_err());
+}
+
+#[test]
+fn topic_files_are_memory_with_their_own_revisions() {
+    let f = Fixture::new();
+    let manager = Manager::open(&f.0, &f.0.join("workspace")).unwrap();
+    let release = manager.topic(Scope::Project, "release").unwrap();
+    assert_eq!(
+        release,
+        manager.topic(Scope::Project, "release.md").unwrap()
+    );
+    for bad in ["", "Release", "-x", "a/b", "../x", "MEMORY"] {
+        assert!(manager.topic(Scope::Project, bad).is_err(), "{bad}");
+    }
+    assert!(scope(&f.0, &release).is_some());
+    assert!(scope(&f.0, &release.with_file_name("Notes.md")).is_none());
+    assert!(scope(&f.0, &release.with_file_name("release.txt")).is_none());
+    manager.save(&release, None, "one").unwrap();
+    manager.save(&release, Some("one"), "two").unwrap();
+    let index = manager.index(Scope::Project).to_path_buf();
+    manager
+        .save(&index, None, "- Release → release.md")
+        .unwrap();
+    assert_eq!(manager.topics(Scope::Project).unwrap(), ["release.md"]);
+    assert_eq!(manager.revisions(&release).unwrap().len(), 1);
+    assert_eq!(
+        manager
+            .revision(&release, &manager.revisions(&release).unwrap()[0].id)
+            .unwrap(),
+        "one"
+    );
+    assert!(manager.revisions(&index).unwrap().is_empty());
+}
+
+#[test]
+fn dates_round_trip_and_stale_facts_are_counted() {
+    for (days, text) in [
+        (0, "1970-01-01"),
+        (11_016, "2000-02-29"),
+        (20_776, "2026-11-19"),
+    ] {
+        assert_eq!(date(days), text);
+        let (y, m, d) = (&text[..4], &text[5..7], &text[8..]);
+        assert_eq!(
+            days_from_civil(y.parse().unwrap(), m.parse().unwrap(), d.parse().unwrap()),
+            days
+        );
+    }
+    assert_eq!(confirmed("- Uses Feather icons [2026-11-19]"), Some(20_776));
+    assert_eq!(confirmed("- see [docs] then [2026-13-01]"), None);
+    assert_eq!(confirmed("- no date"), None);
+    let f = Fixture::new();
+    let layout = f.layout("w");
+    layout.prepare(&f.0.join("w")).unwrap();
+    let dir = layout.project.parent().unwrap();
+    fs::write(&layout.project, "- Release → release.md [2026-11-19]\n").unwrap();
+    fs::write(
+        dir.join("release.md"),
+        "- 16 files [2026-11-19]\n- old [2026-01-02]\n- older [2025-06-01]\n",
+    )
+    .unwrap();
+    let (text, topics, stale) = scan(&layout.project, 20_776);
+    assert!(text.unwrap().contains("release.md"));
+    assert_eq!(topics, ["release.md"]);
+    assert_eq!(stale, ["release.md: 2"]);
+}
+
+#[test]
+fn context_loads_indexes_cuts_big_ones_and_asks_for_a_tidy() {
+    let f = Fixture::new();
+    let layout = f.layout("w");
+    layout.prepare(&f.0.join("w")).unwrap();
+    fs::write(&layout.global, "- Feather icons, no emoji [2099-01-01]\n").unwrap();
+    let small = context(&f.0, &f.0.join("w"));
+    assert!(small.contains("today is "));
+    assert!(small.contains("- Feather icons, no emoji"));
+    assert!(small.contains("Project memory index"));
+    assert!(!small.contains("Memory needs tidying"));
+    let big: String = (0..400)
+        .map(|i| format!("- fact {i:04} [2099-01-01]\n"))
+        .collect();
+    fs::write(&layout.project, &big).unwrap();
+    fs::write(layout.project.with_file_name("ui-style.md"), "- x\n").unwrap();
+    let cut = context(&f.0, &f.0.join("w"));
+    assert!(cut.contains("- fact 0000"));
+    assert!(!cut.contains("- fact 0399"));
+    assert!(cut.contains("[Index cut at 7 KiB of 9 KiB"), "{cut}");
+    assert!(cut.contains("Topic files: ui-style.md"));
+    assert!(cut.contains("Memory needs tidying: the Project index is over 4 KiB"));
 }
 
 struct Fixture(PathBuf);

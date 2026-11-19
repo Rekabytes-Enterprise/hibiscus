@@ -34,39 +34,69 @@ impl Manager {
             layout,
         })
     }
-    pub fn path(&self, scope: Scope) -> &Path {
+    /// The scope's index, `MEMORY.md`.
+    pub fn index(&self, scope: Scope) -> &Path {
         match scope {
             Scope::Global => &self.layout.global,
             Scope::Project => &self.layout.project,
         }
     }
-    pub fn load(&self, scope: Scope) -> Result<Option<String>> {
-        read(self.path(scope))?
+    /// The scope's topic file names, such as `release.md`, sorted.
+    pub fn topics(&self, scope: Scope) -> Result<Vec<String>> {
+        let mut names = vec![];
+        for entry in fs::read_dir(self.index(scope).parent().ok_or("No memory folder")?)? {
+            let entry = entry?;
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            if name.strip_suffix(".md").is_some_and(topic_name)
+                && fs::symlink_metadata(entry.path())?.is_file()
+            {
+                names.push(name);
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+    /// A topic file in the scope, by its name with or without `.md`.
+    pub fn topic(&self, scope: Scope, name: &str) -> Result<PathBuf> {
+        let name = name.strip_suffix(".md").unwrap_or(name);
+        if !topic_name(name) {
+            return Err("Topic names use lowercase letters, digits and dashes.".into());
+        }
+        Ok(self.index(scope).with_file_name(format!("{name}.md")))
+    }
+    fn check(&self, file: &Path) -> Result<()> {
+        scope(&self.home, file)
+            .map(drop)
+            .ok_or_else(|| "Not a memory file.".into())
+    }
+    pub fn load(&self, file: &Path) -> Result<Option<String>> {
+        self.check(file)?;
+        read(file)?
             .map(String::from_utf8)
             .transpose()
             .map_err(Into::into)
     }
-    pub fn save(&self, scope: Scope, expected: Option<&str>, text: &str) -> Result<bool> {
+    pub fn save(&self, file: &Path, expected: Option<&str>, text: &str) -> Result<bool> {
+        self.check(file)?;
         if text.len() > 65536 {
             return Err("Memory exceeds 64 KiB; shorten it before saving.".into());
         }
         change(
             &self.home,
-            self.path(scope),
+            file,
             expected.map(str::as_bytes),
             Some(text.as_bytes()),
         )
     }
-    pub fn delete(&self, scope: Scope, expected: Option<&str>) -> Result<bool> {
-        change(
-            &self.home,
-            self.path(scope),
-            expected.map(str::as_bytes),
-            None,
-        )
+    pub fn delete(&self, file: &Path, expected: Option<&str>) -> Result<bool> {
+        self.check(file)?;
+        change(&self.home, file, expected.map(str::as_bytes), None)
     }
-    pub fn revisions(&self, scope: Scope) -> Result<Vec<Revision>> {
-        let dir = self.path(scope).with_file_name("revisions");
+    pub fn revisions(&self, file: &Path) -> Result<Vec<Revision>> {
+        self.check(file)?;
+        let dir = revisions_dir(file);
         directory(&dir)?;
         let mut result = vec![];
         for entry in fs::read_dir(dir)? {
@@ -86,12 +116,13 @@ impl Manager {
         result.sort_by(|a, b| b.id.cmp(&a.id));
         Ok(result)
     }
-    pub fn revision(&self, scope: Scope, id: &str) -> Result<String> {
+    pub fn revision(&self, file: &Path, id: &str) -> Result<String> {
+        self.check(file)?;
         if !revision_id(id) {
             return Err("Invalid memory revision.".into());
         }
-        let bytes = read(&self.path(scope).with_file_name("revisions").join(id))?
-            .ok_or("Memory revision no longer exists.")?;
+        let bytes =
+            read(&revisions_dir(file).join(id))?.ok_or("Memory revision no longer exists.")?;
         Ok(String::from_utf8(bytes)?)
     }
 }

@@ -13,12 +13,12 @@ fn cli_memory_manager_edits_deletes_and_restores_without_model_calls() {
     let mut tty = Pty::spawn(&mut command);
     tty.wait_text("/tui");
     tty.send(b"/memory global\r");
-    tty.wait_text("5. Back");
+    tty.wait_text("6. Back");
     tty.send(b"2\r");
     tty.wait_text("Enter save");
     tty.send("\x1b[200~second\n世界\x1b[201~\r".as_bytes());
     tty.wait_text("Memory saved · Global");
-    tty.wait_text("5. Back");
+    tty.wait_text("6. Back");
     assert_eq!(
         fs::read_to_string(memory_file(&f)).unwrap(),
         "first\nsecond\n世界"
@@ -27,7 +27,7 @@ fn cli_memory_manager_edits_deletes_and_restores_without_model_calls() {
     tty.send(b"2\r");
     tty.wait_text("Enter save");
     tty.send(b"discard\x1b");
-    tty.wait_text("5. Back");
+    tty.wait_text("6. Back");
     assert!(!fs::read_to_string(memory_file(&f))
         .unwrap()
         .contains("discard"));
@@ -35,7 +35,7 @@ fn cli_memory_manager_edits_deletes_and_restores_without_model_calls() {
     tty.wait_text("2. Confirm");
     tty.send(b"2\r");
     tty.wait_text("Memory deleted · Global");
-    tty.wait_text("5. Back");
+    tty.wait_text("6. Back");
     assert!(!memory_file(&f).exists());
     tty.send(b"4\r");
     tty.wait_text("newest first");
@@ -47,12 +47,12 @@ fn cli_memory_manager_edits_deletes_and_restores_without_model_calls() {
     tty.wait_text("2. Confirm");
     tty.send(b"2\r");
     tty.wait_text("Memory restored · Global");
-    tty.wait_text("5. Back");
-    tty.send(b"5\r");
+    tty.wait_text("6. Back");
+    tty.send(b"6\r");
     tty.wait_text("❯");
     tty.send(b"/memory project\r");
     tty.wait_text("0 bytes");
-    tty.wait_text("5. Back");
+    tty.wait_text("6. Back");
     tty.send(b"\x1b");
     tty.wait_text("❯");
     tty.send(b"/quit\r");

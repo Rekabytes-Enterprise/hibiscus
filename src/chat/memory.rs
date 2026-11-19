@@ -23,7 +23,11 @@ pub(super) fn open(
         [] => None,
         ["global"] => Some(Scope::Global),
         ["project"] => Some(Scope::Project),
-        _ => return Err(local("Use /memory, /memory global, or /memory project.").into()),
+        _ => {
+            return Err(
+                local("Use /memory, /memory global, /memory project, or /memory tidy.").into(),
+            )
+        }
     };
     let home = crate::paths::home()?;
     let cwd = std::env::current_dir()?.canonicalize()?;
@@ -31,14 +35,18 @@ pub(super) fn open(
     let (Some(events), Some(raw)) = (events, raw.as_mut()) else {
         // Piped input is read-only and never consumes later prompts as answers.
         for scope in scope.map_or(vec![Scope::Global, Scope::Project], |s| vec![s]) {
-            let text = manager.load(scope)?;
+            let text = manager.load(manager.index(scope))?;
+            let topics = manager.topics(scope)?;
             writeln!(
                 output,
                 "\nMemory · {}\n{}\n{}",
                 scope.label(),
-                size(text.as_deref()),
+                size(text.as_deref(), true),
                 clean(text.as_deref().unwrap_or("No saved memory."))
             )?;
+            if !topics.is_empty() {
+                writeln!(output, "Topic files: {}", clean(&topics.join(", ")))?;
+            }
         }
         return Ok(());
     };
@@ -58,31 +66,48 @@ pub(super) fn open(
                 _ => return Ok(()),
             }
         };
-        manage(&manager, selected, output, events, raw)?;
+        let index = manager.index(selected).to_path_buf();
+        manage(&manager, selected, &index, None, output, events, raw)?;
         if scope.is_some() {
             return Ok(());
         }
     }
 }
 
+/// Manages one memory file: the scope's index (`topic` is `None`), which also
+/// opens its topic files, or one topic file.
 fn manage(
     manager: &Manager,
     scope: Scope,
+    file: &std::path::Path,
+    topic: Option<&str>,
     output: &mut Frontend,
     events: &Receiver<u8>,
     raw: &mut RawMode,
 ) -> Result<()> {
+    let name = match topic {
+        Some(topic) => format!("{} · {topic}", scope.label()),
+        None => scope.label().to_owned(),
+    };
     loop {
-        let current = manager.load(scope)?;
-        let title = format!("Memory · {}\n{}", scope.label(), size(current.as_deref()));
-        let options = ["View", "Edit", "Delete", "Revisions", "Back"].map(str::to_owned);
+        let current = manager.load(file)?;
+        let title = format!(
+            "Memory · {name}\n{}",
+            size(current.as_deref(), topic.is_none())
+        );
+        let mut options = vec!["View", "Edit", "Delete", "Revisions"];
+        if topic.is_none() {
+            options.push("Topic files");
+        }
+        options.push("Back");
+        let options: Vec<String> = options.into_iter().map(str::to_owned).collect();
         match select(output, events, raw, &title, &options)? {
             Some(0) => {
                 view(
                     output,
                     events,
                     raw,
-                    &format!("Memory · {}", scope.label()),
+                    &format!("Memory · {name}"),
                     current.as_deref().unwrap_or("No saved memory."),
                     "Back",
                 )?;
@@ -95,14 +120,11 @@ fn manage(
                 {
                     return Err(local("Memory contains control characters; use a text editor to clean it before editing here.").into());
                 }
-                if let Some(next) = output.memory_editor(
-                    &format!("Edit memory · {}", scope.label()),
-                    text,
-                    events,
-                    raw,
-                )? {
-                    if manager.save(scope, current.as_deref(), &next)? {
-                        output.memory_notice(&format!("Memory saved · {}", scope.label()))?;
+                if let Some(next) =
+                    output.memory_editor(&format!("Edit memory · {name}"), text, events, raw)?
+                {
+                    if manager.save(file, current.as_deref(), &next)? {
+                        output.memory_notice(&format!("Memory saved · {name}"))?;
                     }
                 }
             }
@@ -110,12 +132,12 @@ fn manage(
                 if current.is_none() {
                     continue;
                 }
-                if confirm(output, events, raw, &format!("Delete {} memory?\nThe active file will be removed. Revisions and legacy copies remain; this is not permanent erasure.", scope.label()))? && manager.delete(scope, current.as_deref())? {
-                    output.memory_notice(&format!("Memory deleted · {}", scope.label()))?;
+                if confirm(output, events, raw, &format!("Delete {name} memory?\nThe active file will be removed. Revisions and legacy copies remain; this is not permanent erasure."))? && manager.delete(file, current.as_deref())? {
+                    output.memory_notice(&format!("Memory deleted · {name}"))?;
                 }
             }
             Some(3) => {
-                let revisions = manager.revisions(scope)?;
+                let revisions = manager.revisions(file)?;
                 if revisions.is_empty() {
                     view(
                         output,
@@ -153,7 +175,7 @@ fn manage(
                 let Some(revision) = revisions.get(index) else {
                     continue;
                 };
-                let text = manager.revision(scope, &revision.id)?;
+                let text = manager.revision(file, &revision.id)?;
                 // Keep the current snapshot from before preview so a concurrent
                 // change cannot be silently replaced after confirmation.
                 if !view(
@@ -166,23 +188,57 @@ fn manage(
                 )? {
                     continue;
                 }
-                if confirm(output, events, raw, &format!("Restore {} memory?\nReplace active memory with the previewed revision. The current version will be backed up.", scope.label()))? && manager.save(scope, current.as_deref(), &text)? {
-                    output.memory_notice(&format!("Memory restored · {}", scope.label()))?;
+                if confirm(output, events, raw, &format!("Restore {name} memory?\nReplace active memory with the previewed revision. The current version will be backed up."))? && manager.save(file, current.as_deref(), &text)? {
+                    output.memory_notice(&format!("Memory restored · {name}"))?;
                 }
+            }
+            Some(4) if topic.is_none() => {
+                let topics = manager.topics(scope)?;
+                if topics.is_empty() {
+                    view(
+                        output,
+                        events,
+                        raw,
+                        "Topic files",
+                        "No topic files yet. Hibi creates them when the index needs details.",
+                        "Back",
+                    )?;
+                    continue;
+                }
+                let mut labels = topics.clone();
+                labels.push("Back".into());
+                let Some(chosen) = select(
+                    output,
+                    events,
+                    raw,
+                    &format!("Topic files · {}", scope.label()),
+                    &labels,
+                )?
+                .and_then(|i| topics.get(i)) else {
+                    continue;
+                };
+                let path = manager.topic(scope, chosen)?;
+                manage(manager, scope, &path, Some(chosen), output, events, raw)?;
             }
             _ => return Ok(()),
         }
     }
 }
 
-fn size(text: Option<&str>) -> String {
+/// A file's size and how it compares with its budget: 4 KiB for an index,
+/// which Hibi loads up to 8 KiB of, and 8 KiB for a topic file.
+fn size(text: Option<&str>, index: bool) -> String {
     let bytes = text.map_or(0, str::len);
-    let status = if bytes > 65536 {
-        "Not loaded by Hibi: exceeds 64 KiB. Shorten this file."
-    } else if bytes > 8192 {
-        "Above recommended 8 KiB; consider shortening."
-    } else if text.is_none() {
+    let status = if text.is_none() {
         "No saved memory."
+    } else if index && bytes > 8192 {
+        "Hibi loads only the first 8 KiB. Run /memory tidy."
+    } else if index && bytes > 4096 {
+        "Above recommended 4 KiB; run /memory tidy."
+    } else if index {
+        "Recommended maximum: 4 KiB."
+    } else if bytes > crate::memory::TOPIC_BUDGET {
+        "Above recommended 8 KiB; run /memory tidy."
     } else {
         "Recommended maximum: 8 KiB."
     };

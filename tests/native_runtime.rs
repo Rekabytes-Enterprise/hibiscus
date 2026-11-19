@@ -804,17 +804,23 @@ fn global_and_project_memory_enter_every_native_prompt() {
     fs::write(f.root.join("app/MEMORY.md"), "- GLOBAL_FACT_FOR_TEST\n").unwrap();
     good(&f.run("", &["hello"]));
     let system = f.captured()[0]["instructions"].as_str().unwrap().to_owned();
-    assert!(system.contains("Memory from"));
+    assert!(system.contains("Global memory index ("));
     assert!(system.contains("GLOBAL_FACT_FOR_TEST"));
     let project = system
-        .split("for every project; ")
+        .split("Project memory index (")
         .nth(1)
-        .and_then(|rest| rest.split(" holds decisions").next())
+        .and_then(|rest| rest.split("):\n").next())
         .unwrap();
     assert!(project.starts_with(f.root.join("app/memory/projects/").to_str().unwrap()));
-    // A later request sees memory written since the previous one.
+    // A later request sees memory written since the previous one. Topic files
+    // are listed by name but their text loads only when the agent reads them.
     fs::create_dir_all(std::path::Path::new(project).parent().unwrap()).unwrap();
     fs::write(project, "- PROJECT_FACT_FOR_TEST\n").unwrap();
+    fs::write(
+        std::path::Path::new(project).with_file_name("release.md"),
+        "- TOPIC_DETAIL_FOR_TEST\n",
+    )
+    .unwrap();
     fs::write(
         f.root.join("app/memory/global/MEMORY.md"),
         "x".repeat(65537),
@@ -823,7 +829,11 @@ fn global_and_project_memory_enter_every_native_prompt() {
     good(&f.run("", &["hello"]));
     let system = f.captured()[1]["instructions"].as_str().unwrap().to_owned();
     assert!(system.contains("PROJECT_FACT_FOR_TEST"));
-    assert!(system.contains("exceeds 64 KiB and was not loaded"));
+    assert!(system.contains("Topic files: release.md"));
+    assert!(!system.contains("TOPIC_DETAIL_FOR_TEST"));
+    // An oversized index still loads its start, and the agent is asked to tidy.
+    assert!(system.contains("[Index cut at 8 KiB of 64 KiB"));
+    assert!(system.contains("Memory needs tidying: the Global index is over 4 KiB"));
 }
 #[test]
 fn native_memory_writes_keep_revisions_and_reload_only_active_facts() {

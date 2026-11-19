@@ -115,7 +115,7 @@ impl Ui {
         writeln!(out, "\n  Chat        /new  /continue  /sessions  /quit")?;
         writeln!(
             out,
-            "  Memory      /memory [global|project]  (local view, edit, delete, restore)"
+            "  Memory      /memory [global|project|tidy]  (view, edit, restore; tidy asks Hibi)"
         )?;
         writeln!(out, "  CLI input   Enter send · Alt+Enter / Ctrl+J newline · arrows edit · paste keeps lines")?;
         writeln!(

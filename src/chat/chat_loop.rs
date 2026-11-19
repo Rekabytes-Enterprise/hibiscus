@@ -67,6 +67,20 @@ pub(super) fn chat<R: BufRead>(
         let result: Result<()> = (|| {
             match message {
                 "/help" => ui.help(output)?,
+                // The one /memory action that needs the model: it sends the tidy request.
+                "/memory tidy" => {
+                    submitted = true;
+                    rpc.command(
+                        json!({"type":"prompt", "message":crate::memory::TIDY}),
+                        &images,
+                        output,
+                        input,
+                        dialogs,
+                        events.as_ref().map(|e| &e.receiver),
+                        raw,
+                        interactive,
+                    )?;
+                }
                 _ if message == "/memory" || message.starts_with("/memory ") => {
                     super::memory::open(
                         message,
