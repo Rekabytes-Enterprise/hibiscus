@@ -19,6 +19,7 @@ pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
         json!({"name":"read","description":"Read a UTF-8 text file, up to 2000 lines or 50 KB. Each line starts with its number and a tab, which is not part of the file. A negative offset reads from the end.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}}),
         json!({"name":"grep","description":"Regex search of file contents, skipping ignored, hidden and binary files. Returns up to 200 path:line: text matches. Use it before reading whole files.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"ignore_case":{"type":"boolean"},"files_only":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}}),
         json!({"name":"glob","description":"List up to 200 files matching a glob such as src/**/*.ts.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"],"additionalProperties":false}}),
+        json!({"name":"session_search","description":"Search earlier sessions in this workspace for what the user and you said, such as a past decision, a fix or a request. Returns up to 20 matching messages, newest session first, with the session's title and age. Use it when the user refers to earlier work that memory doesn't cover.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Words that must all appear in the message, in any case."}},"required":["query"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
         json!({"name":"bash","description":shell,"parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
@@ -63,6 +64,11 @@ struct GrepArgs {
     glob: Option<String>,
     ignore_case: Option<bool>,
     files_only: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionSearch {
+    query: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -329,6 +335,12 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
                 return Err("glob takes a pattern of 1 to 500 characters".into());
             }
         }
+        "session_search" => {
+            let a: SessionSearch = serde_json::from_value(args.clone())?;
+            if a.query.trim().is_empty() || a.query.len() > 500 {
+                return Err("session_search takes a query of 1 to 500 characters".into());
+            }
+        }
         "write" => {
             let a: Write = serde_json::from_value(args.clone())?;
             if a.path.is_empty() || a.content.len() > 16 * 1024 * 1024 {
@@ -528,6 +540,15 @@ pub async fn execute(
                 None => cwd.to_path_buf(),
             };
             let text = search::glob(a.pattern, root, cwd.to_path_buf(), cancel.clone()).await?;
+            Ok(result(text, json!({})))
+        }
+        "session_search" => {
+            let a: SessionSearch = serde_json::from_value(args.clone())?;
+            let (cwd, current) = (cwd.to_path_buf(), context.request.session_id().to_owned());
+            let text = tokio::task::spawn_blocking(move || {
+                super::session_search::search(&cwd, &current, &a.query)
+            })
+            .await??;
             Ok(result(text, json!({})))
         }
         "write" => {

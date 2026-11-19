@@ -17,6 +17,7 @@ mod provider;
 pub(crate) mod reka;
 mod rooxcode;
 mod search;
+mod session_search;
 pub(crate) mod session;
 mod thinking;
 pub(crate) mod tool_output;
