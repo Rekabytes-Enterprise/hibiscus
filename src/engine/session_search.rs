@@ -21,7 +21,7 @@ pub(super) fn search(cwd: &Path, current: &str, query: &str) -> Result<String> {
         return Err("session_search needs words to look for".into());
     }
     let mut sessions = crate::chat::saved_sessions::list(cwd)?;
-    sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
     let mut out = String::new();
     let mut found = 0;
     for session in sessions {
