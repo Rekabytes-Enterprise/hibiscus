@@ -28,14 +28,16 @@ Tauri commands, each a few lines over `hibiscus::desktop`:
 
 | Command | Calls |
 |---|---|
-| `open_project(folder, latest, session)` | `Engine::start(start, folder)`; one engine for the window (more windows in Phase 2) |
+| `open_project(folder, latest, session)` | `Engine::start(start, folder)`; one engine shown in the window; a `session` still running in the background comes back instead (returns true) |
+| `park_project(session)` | Keeps the shown engine running while its turn finishes, so another session can open; up to 3 at once. Its events arrive as `engine-background` with the returned id, and it stops once the turn settles |
+| `quit()` | Exits after the window confirmed `confirm-quit`, sent when closing would stop running turns |
 | `send(command)` | `Engine::send`; returns the request id |
 | `save_api_key(provider, key)` | `desktop::save_api_key` |
 | `sessions(folder)` | `desktop::sessions` |
 | `close_project()` | `Engine::shutdown` |
 | `providers()` | `desktop::providers` (includes signed-out providers) |
 
-A reader thread per engine calls `next_event` and forwards each event to its window with `window.emit("engine", event)`. Closing the window shuts the engine down and waits for its tools to stop, the same as quitting the TUI.
+A reader thread per engine calls `next_event` and forwards each event to its window with `window.emit("engine", event)`. Closing the window shuts every engine down, background ones too, and waits for their tools to stop, the same as quitting the TUI. While a turn runs, the window asks first.
 
 ## Frontend screens
 

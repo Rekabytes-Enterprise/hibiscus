@@ -4,7 +4,7 @@
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick, untrack } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
+  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, onBackground, onConfirmQuit, parkProject, quit, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -25,6 +25,7 @@
   import SignIn from "./lib/SignIn.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import UpdateBanner from "./lib/UpdateBanner.svelte";
+  import { Background, type Run } from "./lib/background.svelte";
 
   const RECENT = "hibiscus.recentFolders";
   // Set by "Continue with my own provider": no sign-in screen at launch (#185).
@@ -141,7 +142,12 @@
   // Conversations opened this run, so going back to one shows it at once.
   const chats = new ChatCache();
 
-  const busy = $derived(chat.running || opening);
+  // Sessions whose turn keeps running in the background after the window left them.
+  const bg = new Background();
+  /** Sessions with a turn running, shown or not, for the sidebar's spinners. */
+  const working = $derived([...bg.working, ...(chat.running && sessionFile ? [sessionFile] : [])]);
+  // An update restarts the app, which would stop background turns too.
+  const busy = $derived(chat.running || opening || bg.working.length > 0);
   const diff = $derived(changes ? parseDiff(changes.diff) : []);
   const context = $derived(stats?.contextUsage?.percent ?? null);
   // The session panel only has something to say once the session has started.
@@ -163,18 +169,40 @@
     const session = sessionFile;
     untrack(() => void switchBoard(session));
   });
+  // While the board changes sessions, the shown engine's canvas events wait in `queued`.
+  let switching = false;
+  let queued: any[] = [];
+  /** What a session back from the background did on its canvas meanwhile. */
+  let replaying: { session: string; events: any[]; run: Run } | undefined;
+
   async function switchBoard(session: string | null) {
     if (session === boardSession) return;
-    if (boardSession) {
-      clearTimeout(saveTimer);
-      await canvasStore(boardSession, serialize()).catch(() => {});
+    switching = true;
+    try {
+      if (boardSession) {
+        clearTimeout(saveTimer);
+        await canvasStore(boardSession, serialize()).catch(() => {});
+      }
+      if (!boardSession && session && board.cards.length) {
+        boardSession = session;
+      } else {
+        boardSession = session;
+        restore(session ? await canvasLoad(session).catch(() => null) : null, readReference);
+      }
+      const back = replaying?.session === session ? replaying : undefined;
+      if (back) {
+        replaying = undefined;
+        ({ runError, lastStep, afterTool } = back.run);
+        board.active = back.run.active;
+        board.followUp = back.run.followUp;
+        for (const event of back.events) canvasEvent(event, false);
+      }
+    } finally {
+      switching = false;
+      const events = queued;
+      queued = [];
+      for (const event of events) canvasEvent(event, true);
     }
-    if (!boardSession && session && board.cards.length) {
-      boardSession = session;
-      return;
-    }
-    boardSession = session;
-    restore(session ? await canvasLoad(session).catch(() => null) : null, readReference);
   }
 
   /** Video styles from ~/.hibiscus/skills, read when the app starts. */
@@ -237,82 +265,121 @@
     for (const path of recent) if (!saved[path]) void loadSessions(path);
   });
 
-  onMount(() =>
-    onEvent((event) => {
-      chat = apply(chat, event);
-      if (event.type === "agent_settled") void refresh();
-      // A session revoked or expired on the gateway mid-run.
-      if (event.type === "message_end" && needsSignIn(event.message?.errorMessage)) showSignIn();
-      if (event.type === "agent_start") browserShown = false;
-      if (event.type === "tool_execution_start" && event.toolName === "browser") browsing(event.toolCallId, event.args?.args);
-      // The agent's questions open as a card with suggested answers.
-      if (event.type === "tool_execution_start" && event.toolName === "ask_user") {
-        openQuestions(event.args ?? {});
-        page = "canvas";
+  onMount(() => onEvent(shown));
+
+  /** An event from the engine the window shows. */
+  function shown(event: any) {
+    chat = apply(chat, event);
+    if (event.type === "agent_settled") void refresh();
+    // A session revoked or expired on the gateway mid-run.
+    if (event.type === "message_end" && needsSignIn(event.message?.errorMessage)) showSignIn();
+    if (event.type === "agent_start") browserShown = false;
+    if (event.type === "tool_execution_start" && event.toolName === "browser") browsing(event.toolCallId, event.args?.args);
+    // Hibi starting the dev server opens the pane, where its output shows.
+    if (event.type === "tool_execution_start" && event.toolName === "dev_server") {
+      browserCalls.add(event.toolCallId);
+      if (event.args?.action === "start") browserOpen = true;
+    }
+    if (event.type === "tool_execution_end" && browserCalls.delete(event.toolCallId)) poke++;
+    if (switching) queued.push(event);
+    else canvasEvent(event, true);
+  }
+
+  // Background engines: events land with their session until it shows again.
+  onMount(() => {
+    const stop = onBackground((id, event) => {
+      const session = bg.sessionOf(id);
+      if (!session) return;
+      const p = bg.parked[session];
+      if (p) {
+        bg.receive(session, event);
+        if (event.type === "agent_settled") void loadSessions(p.folder);
+      } else if (session === sessionFile) {
+        // Shown again while its engine was still handing over.
+        shown(event);
       }
-      // The storyboard and the video preview open on the canvas for the user to review.
-      if (event.type === "tool_execution_start" && event.toolName === "storyboard") {
-        openStoryboard(event.args ?? {});
-        page = "canvas";
+    });
+    return () => void stop.then((f) => f());
+  });
+
+  // Quitting stops running turns, so the app asks first.
+  onMount(() => {
+    const stop = onConfirmQuit(async (count) => {
+      const text = count === 1 ? "A session is still working. Quitting stops it." : `${count} sessions are still working. Quitting stops them.`;
+      if (await ask(text, { title: "Quit Hibiscus?", kind: "warning", okLabel: "Quit" })) await quit();
+    });
+    return () => void stop.then((f) => f());
+  });
+
+  /**
+   * Updates the canvas for an engine event. `live` is false while a session back
+   * from the background replays what its run did, which doesn't switch pages.
+   */
+  function canvasEvent(event: any, live: boolean) {
+    const show = () => {
+      if (live) page = "canvas";
+    };
+    // The agent's questions open as a card with suggested answers.
+    if (event.type === "tool_execution_start" && event.toolName === "ask_user") {
+      openQuestions(event.args ?? {});
+      show();
+    }
+    // The storyboard and the video preview open on the canvas for the user to review.
+    if (event.type === "tool_execution_start" && event.toolName === "storyboard") {
+      openStoryboard(event.args ?? {});
+      show();
+    }
+    if (event.type === "tool_execution_start" && event.toolName === "video_preview") {
+      openPreview(event.args ?? {});
+      show();
+    }
+    // A video's frames open on the canvas as the agent cuts them, joined to its card.
+    if (event.type === "tool_execution_start" && event.toolName === "analyze_video") {
+      openFrames(event.toolCallId, event.args?.path ?? "video");
+      show();
+    }
+    if (event.type === "tool_execution_end" && event.toolName === "analyze_video") fillFrames(event.toolCallId, event.result, !!event.isError);
+    // What the agent is doing for the card it works for, shown live on that card.
+    const working = board.cards.find((c) => c.id === board.active);
+    // A run that ends right after a tool result, with no reply, stopped before finishing.
+    if (event.type === "agent_start") afterTool = undefined;
+    if (event.type === "tool_execution_start") lastStep = activity(event.toolName, event.args);
+    if (event.type === "tool_execution_end") afterTool = lastStep;
+    if (event.type === "message_end" && event.message?.role === "assistant" && !event.message?.errorMessage) afterTool = undefined;
+    // The app starts the preview server during the call, so its address arrives with the result.
+    if (event.type === "tool_execution_end" && event.toolName === "video_preview" && !event.isError) {
+      const details = event.result?.details;
+      if (details?.url) openPreview({ url: details.url, project: details.project });
+      void checkSync(details);
+    }
+    if (working) {
+      if (event.type === "agent_start") working.activity = "Thinking";
+      if (event.type === "tool_execution_start") working.activity = activity(event.toolName, event.args);
+      if (event.type === "tool_execution_end") working.activity = "Thinking";
+      if (event.type === "message_update") working.activity = working.activity === "Thinking" || working.activity === "Writing" ? "Writing" : working.activity;
+    }
+    // A failed model reply (a refused request, a budget limit) shows on the card, not just in the chat.
+    if (event.type === "message_end" && event.message?.errorMessage && board.active !== undefined) runError = String(event.message.errorMessage);
+    if (event.type === "agent_settled") {
+      const sent = board.cards.find((c) => c.id === board.active);
+      if (sent) {
+        sent.stopped = runError ? undefined : afterTool;
+        sent.status = runError ? `The model failed: ${runError}` : afterTool ? `Stopped before finishing, after: ${afterTool}.` : "Done. The agent's reply is in the chat.";
       }
-      if (event.type === "tool_execution_start" && event.toolName === "video_preview") {
-        openPreview(event.args ?? {});
-        page = "canvas";
+      runError = null;
+      afterTool = undefined;
+      if (sent) {
+        sent.activity = undefined;
+        sent.started = undefined;
       }
-      // A video's frames open on the canvas as the agent cuts them, joined to its card.
-      if (event.type === "tool_execution_start" && event.toolName === "analyze_video") {
-        openFrames(event.toolCallId, event.args?.path ?? "video");
-        page = "canvas";
-      }
-      if (event.type === "tool_execution_end" && event.toolName === "analyze_video") fillFrames(event.toolCallId, event.result, !!event.isError);
-      // What the agent is doing for the card it works for, shown live on that card.
-      const working = board.cards.find((c) => c.id === board.active);
-      // A run that ends right after a tool result, with no reply, stopped before finishing.
-      if (event.type === "agent_start") afterTool = undefined;
-      if (event.type === "tool_execution_start") lastStep = activity(event.toolName, event.args);
-      if (event.type === "tool_execution_end") afterTool = lastStep;
-      if (event.type === "message_end" && event.message?.role === "assistant" && !event.message?.errorMessage) afterTool = undefined;
-      // The app starts the preview server during the call, so its address arrives with the result.
-      if (event.type === "tool_execution_end" && event.toolName === "video_preview" && !event.isError) {
-        const details = event.result?.details;
-        if (details?.url) openPreview({ url: details.url, project: details.project });
-        void checkSync(details);
-      }
-      if (working) {
-        if (event.type === "agent_start") working.activity = "Thinking";
-        if (event.type === "tool_execution_start") working.activity = activity(event.toolName, event.args);
-        if (event.type === "tool_execution_end") working.activity = "Thinking";
-        if (event.type === "message_update") working.activity = working.activity === "Thinking" || working.activity === "Writing" ? "Writing" : working.activity;
-      }
-      // A failed model reply (a refused request, a budget limit) shows on the card, not just in the chat.
-      if (event.type === "message_end" && event.message?.errorMessage && board.active !== undefined) runError = String(event.message.errorMessage);
-      if (event.type === "agent_settled") {
-        const sent = board.cards.find((c) => c.id === board.active);
-        if (sent) {
-          sent.stopped = runError ? undefined : afterTool;
-          sent.status = runError ? `The model failed: ${runError}` : afterTool ? `Stopped before finishing, after: ${afterTool}.` : "Done. The agent's reply is in the chat.";
-        }
-        runError = null;
-        afterTool = undefined;
-        if (sent) {
-          sent.activity = undefined;
-          sent.started = undefined;
-        }
-        board.active = undefined;
-      }
-      // A video's voiceover script opens on the canvas for the user to review.
-      if (event.type === "tool_execution_start" && event.toolName === "text_to_speech") {
-        openScript(model, event.args ?? {}, { thinking, levels });
-        page = "canvas";
-      }
-      // Hibi starting the dev server opens the pane, where its output shows.
-      if (event.type === "tool_execution_start" && event.toolName === "dev_server") {
-        browserCalls.add(event.toolCallId);
-        if (event.args?.action === "start") browserOpen = true;
-      }
-      if (event.type === "tool_execution_end" && browserCalls.delete(event.toolCallId)) poke++;
-    }),
-  );
+      board.active = undefined;
+    }
+    // A video's voiceover script opens on the canvas for the user to review.
+    if (event.type === "tool_execution_start" && event.toolName === "text_to_speech") {
+      openScript(model, event.args ?? {}, { thinking, levels });
+      show();
+    }
+  }
 
   /** Closing the pane closes the browser too, so it opens blank next time. */
   function closeBrowser() {
@@ -438,12 +505,35 @@
     wide = false;
     error = null;
     const t = timer(`open ${session ? "session" : "folder"}`);
-    const inPlace = path === folder && !!session && !restart;
-    if (folder && path !== folder) stopServer(folder);
+    const from = folder;
+    // A running turn keeps going in the background while another session opens.
+    let parked: string | null = null;
+    if (chat.running && sessionFile && from && session !== sessionFile) {
+      try {
+        const id = await parkProject(sessionFile);
+        if (id != null) {
+          parked = sessionFile;
+          bg.park(parked, id, from, chat, { active: board.active, followUp: board.followUp, runError, lastStep, afterTool });
+          // The run's follow-up waits with it, so it can't fire on the next session's canvas.
+          board.followUp = undefined;
+          runError = null;
+          lastStep = afterTool = undefined;
+        }
+      } catch (e) {
+        error = message(e);
+        opening = false;
+        return;
+      }
+    }
+    // A session still running in the background comes back with its live conversation.
+    const back = session ? bg.take(session) : undefined;
+    if (back) replaying = { session: session!, events: back.events, run: back.run };
+    const inPlace = path === folder && !!session && !restart && !parked && !back;
+    if (from && path !== from && !bg.runningIn(from)) stopServer(from);
     const before = { chat, sessionFile };
     remember();
     // A session opened before shows at once; the engine's copy replaces it below if the file changed.
-    const cached = session ? chats.get(session) : undefined;
+    const cached = back?.chat ?? (session ? chats.get(session) : undefined);
     let slow: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
       clearTimeout(slow);
@@ -460,20 +550,26 @@
       slow = setTimeout(() => (loading = true), 150);
     }
     try {
+      let resumed = false;
       if (inPlace) {
         // No restart, so no model-list downloads either.
         await request({ type: "switch_session", sessionPath: session });
         t("switch_session");
       } else {
-        await openProject(path, false, session);
+        resumed = await openProject(path, false, session);
         t("engine start");
       }
       folder = path;
       saveRecent(opened(recent, path));
-      const fresh = session ? await latest() : empty();
-      // Set together, so the chat view is rebuilt once, with the new conversation.
-      if (session) sessionFile = session;
-      chat = cached ? newer(cached, fresh) : fresh;
+      if (resumed) {
+        // Still running: the window's copy has the streamed reply the file doesn't have yet.
+        sessionFile = session!;
+      } else {
+        const fresh = session ? await latest() : empty();
+        // Set together, so the chat view is rebuilt once, with the new conversation.
+        if (session) sessionFile = session;
+        chat = cached ? newer(cached, fresh) : fresh;
+      }
       settle();
       t("conversation loaded");
       painted(t, "conversation painted");
@@ -485,6 +581,13 @@
     } catch (e) {
       error = message(e);
       ({ chat, sessionFile } = before);
+      // The turn sent to the background comes back to the window.
+      if (parked && from) {
+        const p = bg.take(parked);
+        if (p) chat = p.chat;
+        folder = from;
+        await openProject(from, false, parked).catch(() => {});
+      }
     } finally {
       settle();
       opening = false;
@@ -524,6 +627,8 @@
     side = "details";
     wide = false;
     if (!folder) return open(home);
+    // A running turn goes to the background, so the new session needs its own engine.
+    if (chat.running) return open(folder);
     // A folder removed from the list comes back once a new session starts in it.
     saveRecent(opened(recent, folder));
     remember();
@@ -865,7 +970,8 @@
     {home}
     groups={recent.map((path) => ({ folder: path, sessions: saved[path] ?? [] }))}
     current={pending ?? sessionFile}
-    {busy}
+    busy={opening}
+    {working}
     onnew={newSession}
     onresume={(path, session) => { page = "chat"; void open(path, session); }}
     onrename={rename}
@@ -939,7 +1045,7 @@
         {/each}
       </div>
     {:else if !chat.items.length && !chat.running}
-      <NewSession {folder} {recent} {busy} onopen={(p) => open(p)} onchoose={choose} onremove={removeFolder} onproviders={hasAccess ? undefined : () => (page = "settings")} />
+      <NewSession {folder} {recent} busy={opening} onopen={(p) => open(p)} onchoose={choose} onremove={removeFolder} onproviders={hasAccess ? undefined : () => (page = "settings")} />
     {:else}
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>
@@ -954,7 +1060,7 @@
             label="Working folder"
             title={`Working folder: ${folder}`}
             value={folder}
-            disabled={busy}
+            disabled={opening}
             options={[...[folder, ...recent.filter((p) => p !== folder)].map((p) => ({ value: p, label: name(p), hint: p })), { value: "", label: "Choose folder…" }]}
             onpick={(p) => (p === "" ? choose() : p !== folder && open(p))}
           >

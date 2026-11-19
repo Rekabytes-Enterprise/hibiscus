@@ -10,6 +10,7 @@
     groups,
     current,
     busy,
+    working,
     onnew,
     onresume,
     onrename,
@@ -28,7 +29,10 @@
     home: string;
     groups: { folder: string; sessions: SavedSession[] }[];
     current: string | null;
+    /** A session is opening; nothing else can open until it has. */
     busy: boolean;
+    /** Sessions running a turn, shown or in the background. */
+    working: string[];
     onnew: () => void;
     onresume: (folder: string, session: string) => void;
     /** An empty name restores the automatic title. */
@@ -118,12 +122,13 @@
               {:else}
                 <button class="row" class:active={s.path === current} onclick={() => onresume(g.folder, s.path)} disabled={busy || s.path === current} title={s.title}>
                   <span class="title">{s.title || "Untitled"}</span>
+                  {#if working.includes(s.path)}<span class="spinner" role="status" aria-label="Working"></span>{/if}
                 </button>
                 <Menu
                   actions
                   label="Session actions"
-                  title="Session actions"
-                  disabled={busy}
+                  title={working.includes(s.path) ? "Wait for this session to finish" : "Session actions"}
+                  disabled={busy || working.includes(s.path)}
                   options={[{ value: "rename", label: "Rename" }, { value: "delete", label: "Delete" }]}
                   onpick={(action) => (action === "rename" ? (editing = s.path) : ondelete(g.folder, s.path))}
                 >
