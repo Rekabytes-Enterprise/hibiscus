@@ -1,10 +1,10 @@
 //! Private plain-text memory layout, legacy import and native-write backups.
+use crate::sys::{DirBuilderExt, OpenOptionsExt};
 use crate::Result;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -100,7 +100,7 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     }
     let file = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(crate::sys::O_NOFOLLOW)
         .open(path)?;
     if file.metadata()?.len() > MAX_FILE {
         return Err("Memory migration exceeds 16 MiB; original kept".into());
@@ -139,7 +139,7 @@ fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
             }
             Err(e) => return Err(e.into()),
         }
-        fs::File::open(parent)?.sync_all()?;
+        crate::sys::sync_dir(parent)?;
         Ok(())
     })();
     let _ = fs::remove_file(temp);
@@ -379,5 +379,6 @@ fn date(days: i64) -> String {
 /// What `/memory tidy` asks the agent to do.
 pub(crate) const TIDY: &str = "Tidy my Hibiscus memory, global and project. For each scope, read MEMORY.md and every topic file beside it. Merge duplicate facts, and where facts contradict each other keep the one confirmed most recently. Move details out of the index into topic files, so the index is one line per topic plus the few facts every session needs, under 4 KiB. Split topic files over 8 KiB by subject. Delete facts that are clearly outdated, such as ones about code or tools that no longer exist. Keep each fact's [YYYY-MM-DD] date. Facts not confirmed in 90 days: list them and ask me whether each still holds before removing any. Then tell me what changed.";
 
-#[cfg(test)]
+// The tests check Unix file modes and symlinks.
+#[cfg(all(test, unix))]
 mod tests;

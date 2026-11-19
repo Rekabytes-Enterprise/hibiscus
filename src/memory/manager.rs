@@ -1,6 +1,5 @@
 //! Local memory operations; no provider, session transcript or model calls.
 use super::*;
-use std::os::fd::AsRawFd;
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -133,9 +132,7 @@ fn revision_id(s: &str) -> bool {
 struct Lock(fs::File);
 impl Drop for Lock {
     fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-        }
+        let _ = self.0.unlock();
     }
 }
 
@@ -153,12 +150,12 @@ pub(crate) fn change(
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .custom_flags(crate::sys::O_NOFOLLOW | crate::sys::O_NONBLOCK)
         .open(dir.join(".lock"))?;
     if !file.metadata()?.is_file() {
         return Err("Memory lock must be a regular file.".into());
     }
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if file.try_lock().is_err() {
         return Err("Memory is being updated; reopen it and try again.".into());
     }
     let _lock = Lock(file);
@@ -179,7 +176,7 @@ pub(crate) fn change(
         Some(bytes) => crate::engine::config::atomic(target, bytes)?,
         None => {
             fs::remove_file(target)?;
-            fs::File::open(dir)?.sync_all()?;
+            crate::sys::sync_dir(dir)?;
         }
     }
     Ok(true)
