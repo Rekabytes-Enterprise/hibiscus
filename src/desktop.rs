@@ -147,6 +147,11 @@ pub(crate) fn skill_dirs() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+/// The skills folder shipped with the app, once the app has set it.
+pub(crate) fn bundled_skills() -> Option<std::path::PathBuf> {
+    BUNDLED_SKILLS.get().cloned()
+}
+
 /// The video styles from the app's bundled skills and `~/.hibiscus/skills`, sorted by name.
 pub fn styles() -> Vec<Style> {
     let mut found: Vec<Style> = Vec::new();

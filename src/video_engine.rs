@@ -117,6 +117,48 @@ pub(crate) fn prepare(command: &mut std::process::Command) {
     command.env("HYPERFRAMES_NO_TELEMETRY", "1");
 }
 
+/// A folder of `hyperframes` and `ffmpeg` commands for a WSL-connected folder,
+/// whose shell runs in Linux and can't run the Windows engine by name. Each
+/// calls the Windows copy through WSL interop. `None` off Windows or before
+/// the engine is installed.
+pub(crate) fn wsl_bin() -> Option<PathBuf> {
+    if !cfg!(windows) || !installed() {
+        return None;
+    }
+    let node = node_exe()?;
+    let mut tools = vec![(
+        "hyperframes",
+        wsl_wrapper(&node, hyperframes_cli().as_deref())?,
+    )];
+    if let Some(ffmpeg) = crate::video::ffmpeg() {
+        tools.push(("ffmpeg", wsl_wrapper(&ffmpeg, None)?));
+    }
+    let bin = runtime().ok()?.join("wsl-bin");
+    std::fs::create_dir_all(&bin).ok()?;
+    for (name, text) in tools {
+        let path = bin.join(name);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+            std::fs::write(&path, text).ok()?;
+        }
+    }
+    Some(bin)
+}
+
+/// A sh script that runs the Windows program `exe` (with `script` as its first
+/// argument, for Node.js) and turns Linux path arguments into Windows ones.
+/// shortcut: only arguments that are whole absolute paths are converted, not
+/// `--out=/x`; convert `=` forms too if the agent's commands need them.
+fn wsl_wrapper(exe: &Path, script: Option<&Path>) -> Option<String> {
+    let (_, exe) = crate::wsl::to_linux(&exe.to_string_lossy())?;
+    let script = script
+        .map(|s| format!(" {}", crate::wsl::quote(&s.to_string_lossy())))
+        .unwrap_or_default();
+    Some(format!(
+        "#!/bin/sh\n# Written by Hibiscus: runs the Windows video engine from WSL.\nfor a do\n  shift\n  case \"$a\" in /*) if [ -e \"$a\" ] || [ -d \"$(dirname \"$a\")\" ]; then a=$(wslpath -w \"$a\"); fi ;; esac\n  set -- \"$@\" \"$a\"\ndone\nexec {}{script} \"$@\"\n",
+        crate::wsl::quote(&exe)
+    ))
+}
+
 /// HyperFrames' own skills, shipped inside its npm package.
 pub(crate) fn skills_dir() -> Option<PathBuf> {
     installed()
@@ -299,6 +341,23 @@ fn tool_dirs_for_setup() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wsl_wrappers_call_the_windows_programs() {
+        let text = wsl_wrapper(
+            Path::new(r"C:\Users\me\.hibiscus\runtime\node\node.exe"),
+            Some(Path::new(
+                r"C:\Users\me\.hibiscus\runtime\hf\hyperframes.mjs",
+            )),
+        )
+        .unwrap();
+        assert!(text.starts_with("#!/bin/sh\n"));
+        assert!(text.contains("a=$(wslpath -w \"$a\")"));
+        assert!(text.ends_with(
+            "exec '/mnt/c/Users/me/.hibiscus/runtime/node/node.exe' 'C:\\Users\\me\\.hibiscus\\runtime\\hf\\hyperframes.mjs' \"$@\"\n"
+        ));
+        assert!(wsl_wrapper(Path::new("/usr/bin/ffmpeg"), None).is_none());
+    }
 
     #[test]
     fn every_supported_machine_has_a_pinned_node() {

@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-19
+
+### Fixed
+
+- Desktop release builds make canvas videos again. The content security policy blocked the app from reading its own voiceover and dropped references, so **Confirm and make video** failed with "Load failed", or on a styled video with a wrong "Make the voiceover first" message. A failed voiceover save now shows its real error.
+- Windows desktop with a WSL-connected folder: canvas videos build inside the distro. Paths the app gives the agent, such as the voiceover and the style's skill, are written as `/mnt/...` paths, and `hyperframes` and `ffmpeg` in the distro run the Windows video engine.
+
 ## [0.4.1] - 2026-11-19
 
 ### Fixed
