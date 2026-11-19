@@ -414,7 +414,7 @@ fn rooxcode_compacts_large_tool_history_in_bounded_requests_and_continues() {
     let f = Fixture::new("chat_completions", replies);
     setup(
         &f,
-        json!([{"id":"bounded-model","reasoning":true,"reasoning_efforts":["high"],"context_window":20000,"max_request_bytes":10485760,"max_messages":256}]),
+        json!([{"id":"bounded-model","reasoning":true,"reasoning_efforts":["high"],"context_window":22000,"max_request_bytes":10485760,"max_messages":256}]),
     );
     fs::write(
         f.root.join("large.txt"),
@@ -447,7 +447,7 @@ fn rooxcode_compacts_large_tool_history_in_bounded_requests_and_continues() {
     );
     for request in &*requests {
         assert_eq!(request["reasoning_effort"], "high");
-        assert!(serde_json::to_vec(request).unwrap().len() < 12723);
+        assert!(serde_json::to_vec(request).unwrap().len() < (22000 - 4096) * 4 / 5);
     }
     assert!(requests.last().unwrap()["messages"]
         .as_array()
@@ -486,7 +486,7 @@ fn rooxcode_failed_compaction_keeps_original_prompt_and_tool_history() {
     );
     setup(
         &f,
-        json!([{"id":"bounded-model","context_window":20000,"max_request_bytes":10485760}]),
+        json!([{"id":"bounded-model","context_window":22000,"max_request_bytes":10485760}]),
     );
     fs::write(
         f.root.join("large.txt"),

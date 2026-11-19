@@ -233,6 +233,10 @@ impl Client {
                 }
                 return Ok(record.get_mut("data").map_or(Value::Null, Value::take));
             }
+            if record["type"] == "memory_saved" {
+                memory_saved(display, &record)?;
+                continue;
+            }
             if record["type"] == "thinking_reset" {
                 display.thinking_reset()?;
                 continue;
@@ -375,6 +379,7 @@ impl Client {
                 }
                 match event["type"].as_str() {
                     Some("thinking_reset") => display.thinking_reset()?,
+                    Some("memory_saved") => memory_saved(display, &event)?,
                     Some("provider_status") => provider_status(display, &event)?,
                     Some("compaction_start") => display.set_work("Compacting context…")?,
                     Some("compaction_end") if event["aborted"] == true => {
@@ -908,6 +913,7 @@ fn exchange<F: BufRead, W: ScrollDisplay>(
                 display.set_work("Retrying context summary…")?;
             }
             Some("thinking_reset") => display.thinking_reset()?,
+            Some("memory_saved") => memory_saved(display, &event)?,
             Some("extension_ui_request" | "extension_error" | "provider_error") => {
                 // Full-screen dialogs render through the shared cached modal
                 // component; only line mode uses direct terminal prompts.
@@ -1494,6 +1500,15 @@ impl std::io::Read for SocketReader {
             }
         }
     }
+}
+
+fn memory_saved(display: &mut impl ScrollDisplay, event: &Value) -> Result<()> {
+    if let Ok(scope) =
+        serde_json::from_value::<crate::memory::manager::Scope>(event["scope"].clone())
+    {
+        display.memory_notice(&format!("Memory saved · {}", scope.label()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

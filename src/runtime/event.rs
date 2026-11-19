@@ -7,6 +7,7 @@ pub enum Event<'a> {
     Text(&'a str),
     ProviderWaiting(bool),
     ThinkingReset,
+    MemorySaved(crate::memory::manager::Scope),
     MessageStarted(&'a Message),
     MessageFinished(&'a Message),
     ToolStarted {
@@ -35,6 +36,7 @@ impl Event<'_> {
                 json!({"type":"provider_status","provider":"rooxcode","waiting":waiting})
             }
             Self::ThinkingReset => json!({"type":"thinking_reset"}),
+            Self::MemorySaved(scope) => json!({"type":"memory_saved", "scope":scope}),
             Self::MessageStarted(message) => json!({"type":"message_start","message":message}),
             Self::MessageFinished(message) => json!({"type":"message_end","message":message}),
             Self::ToolStarted { id, name, args } => {

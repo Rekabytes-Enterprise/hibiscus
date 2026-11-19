@@ -676,8 +676,97 @@ fn project_instructions_and_skill_catalog_enter_native_prompt() {
     assert!(system.contains("Available project skill: example"));
     assert!(system.contains("Writing guidance"));
 }
+#[test]
+fn global_and_project_memory_enter_every_native_prompt() {
+    let f = Fixture::new(
+        "responses",
+        vec![response("MEMORY_ONE"), response("MEMORY_TWO")],
+    );
+    fs::create_dir_all(f.root.join("app")).unwrap();
+    fs::write(f.root.join("app/MEMORY.md"), "- GLOBAL_FACT_FOR_TEST\n").unwrap();
+    good(&f.run("", &["hello"]));
+    let system = f.captured()[0]["instructions"].as_str().unwrap().to_owned();
+    assert!(system.contains("Memory from"));
+    assert!(system.contains("GLOBAL_FACT_FOR_TEST"));
+    let project = system
+        .split("for every project; ")
+        .nth(1)
+        .and_then(|rest| rest.split(" holds decisions").next())
+        .unwrap();
+    assert!(project.starts_with(f.root.join("app/memory/projects/").to_str().unwrap()));
+    // A later request sees memory written since the previous one.
+    fs::create_dir_all(std::path::Path::new(project).parent().unwrap()).unwrap();
+    fs::write(project, "- PROJECT_FACT_FOR_TEST\n").unwrap();
+    fs::write(
+        f.root.join("app/memory/global/MEMORY.md"),
+        "x".repeat(65537),
+    )
+    .unwrap();
+    good(&f.run("", &["hello"]));
+    let system = f.captured()[1]["instructions"].as_str().unwrap().to_owned();
+    assert!(system.contains("PROJECT_FACT_FOR_TEST"));
+    assert!(system.contains("exceeds 64 KiB and was not loaded"));
+}
+#[test]
+fn native_memory_writes_keep_revisions_and_reload_only_active_facts() {
+    let f = Fixture::new(
+        "responses",
+        vec![
+            calls(vec![(
+                "write",
+                json!({"path":"app/memory/global/MEMORY.md","content":"MEMORY_SECOND_FACT"}),
+            )]),
+            calls(vec![(
+                "edit",
+                json!({"path":"app/memory/global/MEMORY.md","oldText":"MEMORY_SECOND_FACT","newText":"MEMORY_CURRENT_FACT"}),
+            )]),
+            response("MEMORY_SAVED"),
+            response("MEMORY_RESUMED"),
+        ],
+    );
+    fs::write(f.root.join("app/MEMORY.md"), "MEMORY_LEGACY_FACT").unwrap();
+    let output = f.run("", &["remember this"]);
+    good(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .matches("Memory saved · Global")
+            .count(),
+        2
+    );
+    let r = f.captured();
+    assert!(r[0]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("MEMORY_LEGACY_FACT"));
+    assert!(r[1]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("MEMORY_SECOND_FACT"));
+    let current = r[2]["instructions"].as_str().unwrap();
+    assert!(current.contains("MEMORY_CURRENT_FACT"));
+    assert!(!current.contains("MEMORY_LEGACY_FACT"));
+    assert!(!current.contains("MEMORY_SECOND_FACT"));
+    let revisions: Vec<_> = fs::read_dir(f.root.join("app/memory/global/revisions"))
+        .unwrap()
+        .map(|e| fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(revisions.len(), 2);
+    assert!(revisions.contains(&"MEMORY_LEGACY_FACT".into()));
+    assert!(revisions.contains(&"MEMORY_SECOND_FACT".into()));
+    good(&f.run("continue\n/quit\n", &["--continue"]));
+    assert!(f.captured()[3]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("MEMORY_CURRENT_FACT"));
+    assert_eq!(
+        fs::read_to_string(f.root.join("app/MEMORY.md")).unwrap(),
+        "MEMORY_LEGACY_FACT"
+    );
+}
 #[path = "native_runtime/config.rs"]
 mod config;
+#[path = "native_runtime/memory.rs"]
+mod memory;
 #[test]
 fn malformed_tool_arguments_fail_before_any_execution() {
     let bad = sse(

@@ -189,9 +189,18 @@ impl Store {
             Image::Missing => 0o600,
         };
         let Some(relative) = relative else {
-            files::atomic(&target, bytes, mode)?;
+            let mut memory_scope = None;
+            if let Some(scope) = crate::memory::scope(&self.home, &target) {
+                let expected =
+                    matches!(current, Image::Present { .. }).then_some(original.as_slice());
+                if crate::memory::manager::change(&self.home, &target, expected, Some(bytes))? {
+                    memory_scope = Some(scope);
+                }
+            } else {
+                files::atomic(&target, bytes, mode)?;
+            }
             return Ok(
-                json!({"protected":false,"reason":"Outside workspace checkpoint coverage: external paths, Git metadata and Hibiscus data are excluded"}),
+                json!({"protected":false,"memoryScope":memory_scope,"reason":"Outside workspace checkpoint coverage: external paths, Git metadata and Hibiscus data are excluded"}),
             );
         };
         let request = &mut context.request;

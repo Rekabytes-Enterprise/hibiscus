@@ -83,6 +83,9 @@ pub struct Session {
 impl Session {
     pub fn open(start: &SessionStart, config: &Config) -> Result<Self> {
         let cwd = std::env::current_dir()?.canonicalize()?;
+        crate::memory::Layout::new(&crate::paths::home()?, &cwd)
+            .prepare(&cwd)
+            .map_err(|e| format!("Could not prepare Hibiscus memory: {e}"))?;
         let path = match start {
             SessionStart::Selected(p) => Some(p.clone()),
             SessionStart::Latest => crate::chat::sessions::list(&cwd)?

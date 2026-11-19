@@ -139,6 +139,30 @@ New sessions use a versioned Hibiscus JSONL format in `sessions/`. Resume and se
 
 Compaction stores a private copy of the previous JSONL under `archives/`, then replaces active context with the summary. Archives do not appear as duplicate live sessions. If summarization fails or is cancelled, active history is unchanged. Archives may contain private conversations and file contents; do not publish them.
 
+Persistent memory is grouped under the Hibiscus home, normally `~/.hibiscus`:
+
+```text
+memory/
+├── global/
+│   ├── MEMORY.md
+│   └── revisions/
+└── projects/
+    └── <canonical-workspace SHA-256>/
+        ├── workspace.json
+        ├── MEMORY.md
+        └── revisions/
+```
+
+Global memory holds user preferences across projects. Project memory holds decisions, lessons and constraints for that workspace. `workspace.json` records its name and canonical path locally; it is not included in the prompt. Moving the workspace changes its hash. `AGENTS.md`, sessions, archives and checkpoints keep their existing locations.
+
+The installer creates the global memory and project directories. On first launch in a workspace, the runtime creates its directory and metadata, also covering Cargo installs. Active `MEMORY.md` files are created only when there are facts to save. Normal chat and tool-continuation requests reload both active files alongside `AGENTS.md`. Compaction uses its own summary prompt and leaves these files intact; subsequent chat reloads them. Revisions never enter model context automatically.
+
+The agent maintains memory using normal `write`/`edit` tools. Keep files below the recommended 8 KiB each; the loader skips files over the enforced 64 KiB limit and tells the agent to ask for shortening. Memory is plain text sent to the selected provider during normal chat; keep secrets out. `/memory` opens a local manager in both CLI and TUI. Choose Global or Current Project, then view, edit, delete or browse revisions. `/memory global` and `/memory project` open a scope directly. Viewing and managing memory requires no model call or credentials. With piped input these commands only display memory; they never consume later lines as dialog answers.
+
+On startup, legacy `~/.hibiscus/MEMORY.md` migrates to `memory/global/MEMORY.md`. The current workspace's legacy `memory/<hash>/MEMORY.md` migrates to `memory/projects/<hash>/MEMORY.md`; other workspaces migrate when opened. Migration copies and verifies contents without deleting the original or overwriting an existing destination. New-format files take precedence. A private `.migration-complete` marker in each scope prevents deleted memories from being imported again. If preparation fails, startup reports an error and preserves the original files.
+
+Memory writes remain outside workspace checkpoint coverage. Native `write`/`edit` calls separately preserve up to 20 previous versions per scope under `revisions/`, with private file permissions. The manager previews revisions before confirming restore and backs up the current file before replacement. Deletion also keeps a revision. Multiline editing supports Enter to save, Alt+Enter or Ctrl+J for a newline, and Esc to cancel. Files over 8 KiB show a recommendation to shorten them; files over 64 KiB show that Hibi will not load them and must be shortened with an external editor before editing here. Saves reject stale contents if another native edit changed the file while the manager was open. Native memory writes and local manager saves show a small scope-specific notice; manager dialogs and their contents are not stored as conversation messages. Direct editor, shell and extension changes do not create these backups. Retained legacy files and revisions can still contain forgotten facts; remove those copies too when permanent erasure is needed.
+
 ## Tools
 
 The native registry owns `read`, `write`, `edit`, `bash` and `goal`. Tool arguments are validated before dispatch. Tools run only after an authoritative complete provider response, never from partial streamed arguments. Results retain tool-call IDs so continuation requests can pair each call/result.

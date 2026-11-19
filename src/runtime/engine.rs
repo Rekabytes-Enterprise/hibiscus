@@ -735,6 +735,13 @@ async fn run_turns(
                     .wire(),
                 )
                 .await?;
+                if !is_error && matches!(name.as_str(), "write" | "edit") {
+                    if let Ok(scope) = serde_json::from_value(
+                        result["details"]["checkpoint"]["memoryScope"].clone(),
+                    ) {
+                        emit(out, Event::MemorySaved(scope).wire()).await?;
+                    }
+                }
             }
         }
         if !completed && !*cancel.borrow() {

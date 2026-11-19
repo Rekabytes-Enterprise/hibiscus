@@ -1,0 +1,198 @@
+use super::manager::{Manager, Scope};
+use super::*;
+use std::os::unix::fs::{symlink, PermissionsExt};
+
+#[test]
+fn manager_conflicts_delete_and_restore_preserve_versions() {
+    let f = Fixture::new();
+    let manager = Manager::open(&f.0, &f.0.join("workspace")).unwrap();
+    assert!(manager.save(Scope::Global, None, "first").unwrap());
+    assert!(!manager.save(Scope::Global, Some("first"), "first").unwrap());
+    assert!(manager.save(Scope::Global, None, "stale missing").is_err());
+    assert!(manager
+        .save(Scope::Global, Some("first"), "second")
+        .unwrap());
+    assert!(manager
+        .save(Scope::Global, Some("first"), "stale edit")
+        .is_err());
+    assert!(manager.delete(Scope::Global, Some("first")).is_err());
+    assert_eq!(
+        manager.load(Scope::Global).unwrap().as_deref(),
+        Some("second")
+    );
+    assert!(manager.load(Scope::Project).unwrap().is_none());
+    assert!(manager.delete(Scope::Global, Some("second")).unwrap());
+    assert!(manager.load(Scope::Global).unwrap().is_none());
+    let revisions = manager.revisions(Scope::Global).unwrap();
+    assert_eq!(revisions.len(), 2);
+    let restored = manager.revision(Scope::Global, &revisions[1].id).unwrap();
+    assert_eq!(restored, "first");
+    manager.save(Scope::Global, None, &restored).unwrap();
+    assert_eq!(manager.load(Scope::Global).unwrap().unwrap(), "first");
+    assert!(manager
+        .revision(Scope::Global, "../../config.json")
+        .is_err());
+    assert!(manager
+        .save(Scope::Global, Some("first"), &"x".repeat(65537))
+        .is_err());
+    assert_eq!(manager.load(Scope::Global).unwrap().unwrap(), "first");
+}
+
+struct Fixture(PathBuf);
+impl Fixture {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "hibiscus-memory-{}-{}",
+            std::process::id(),
+            crate::runtime::config::unique()
+        ));
+        fs::create_dir(&root).unwrap();
+        Self(root.canonicalize().unwrap())
+    }
+    fn layout(&self, name: &str) -> Layout {
+        Layout::new(&self.0, &self.0.join(name))
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn fresh_layout_is_private_scoped_and_does_not_invent_facts() {
+    let f = Fixture::new();
+    let a = f.layout("a");
+    let b = f.layout("b");
+    a.prepare(&f.0.join("a")).unwrap();
+    b.prepare(&f.0.join("b")).unwrap();
+    assert_eq!(a.global, b.global);
+    assert_ne!(a.project, b.project);
+    assert!(!a.global.exists());
+    assert!(!a.project.exists());
+    let metadata = a.project.with_file_name("workspace.json");
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    assert_eq!(value["name"], "a");
+    assert_eq!(value["path"], f.0.join("a").to_str().unwrap());
+    assert_eq!(
+        fs::metadata(metadata).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(a.project.with_file_name("revisions"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+#[test]
+fn migration_preserves_originals_and_does_not_resurrect_deleted_memory() {
+    let f = Fixture::new();
+    let layout = f.layout("a");
+    fs::write(&layout.legacy_global, "global fact").unwrap();
+    fs::create_dir_all(layout.legacy_project.parent().unwrap()).unwrap();
+    fs::write(&layout.legacy_project, "project fact").unwrap();
+    layout.prepare(&f.0.join("a")).unwrap();
+    for (new, old) in [
+        (&layout.global, &layout.legacy_global),
+        (&layout.project, &layout.legacy_project),
+    ] {
+        assert_eq!(fs::read(new).unwrap(), fs::read(old).unwrap());
+        assert_eq!(
+            fs::metadata(new).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_file(new).unwrap();
+    }
+    layout.prepare(&f.0.join("a")).unwrap();
+    assert!(!layout.global.exists());
+    assert!(!layout.project.exists());
+    assert_eq!(
+        fs::read_to_string(layout.legacy_global).unwrap(),
+        "global fact"
+    );
+}
+
+#[test]
+fn existing_destination_wins_and_blocked_paths_preserve_legacy_data() {
+    let f = Fixture::new();
+    let layout = f.layout("a");
+    fs::write(&layout.legacy_global, "old fact").unwrap();
+    fs::create_dir_all(layout.global.parent().unwrap()).unwrap();
+    fs::write(&layout.global, "new fact").unwrap();
+    layout.prepare(&f.0.join("a")).unwrap();
+    assert_eq!(fs::read_to_string(&layout.global).unwrap(), "new fact");
+    assert_eq!(
+        fs::read_to_string(&layout.legacy_global).unwrap(),
+        "old fact"
+    );
+    let other = Fixture::new();
+    let layout = other.layout("a");
+    fs::write(&layout.legacy_global, "keep me").unwrap();
+    fs::write(other.0.join("memory"), "blocking file").unwrap();
+    assert!(layout.prepare(&other.0.join("a")).is_err());
+    assert_eq!(fs::read_to_string(layout.legacy_global).unwrap(), "keep me");
+}
+
+#[test]
+fn migration_rejects_symlinks_and_oversized_sources() {
+    let f = Fixture::new();
+    let layout = f.layout("a");
+    let external = f.0.join("external");
+    fs::write(&external, "untouched").unwrap();
+    symlink(&external, &layout.legacy_global).unwrap();
+    assert!(layout.prepare(&f.0.join("a")).is_err());
+    fs::remove_file(&layout.legacy_global).unwrap();
+    let file = fs::File::create(&layout.legacy_global).unwrap();
+    file.set_len(MAX_FILE + 1).unwrap();
+    assert!(layout.prepare(&f.0.join("a")).is_err());
+    assert!(!layout.global.exists());
+    assert!(!layout.global.with_file_name(".migration-complete").exists());
+    assert_eq!(fs::read_to_string(external).unwrap(), "untouched");
+}
+
+#[test]
+fn publish_never_replaces_existing_data() {
+    let f = Fixture::new();
+    let path = f.0.join("MEMORY.md");
+    publish(&path, b"first").unwrap();
+    publish(&path, b"second").unwrap();
+    assert_eq!(fs::read(path).unwrap(), b"first");
+}
+
+#[test]
+fn revisions_are_bounded_and_only_apply_to_active_memory() {
+    let f = Fixture::new();
+    let layout = f.layout("a");
+    layout.prepare(&f.0.join("a")).unwrap();
+    let dir = layout.project.with_file_name("revisions");
+    fs::write(dir.join("notes.md"), "keep user file").unwrap();
+    for n in 0..25 {
+        backup(&f.0, &layout.project, n.to_string().as_bytes()).unwrap();
+    }
+    let mut files: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.file_name().unwrap() != "notes.md")
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), REVISIONS);
+    assert_eq!(fs::read_to_string(&files[0]).unwrap(), "5");
+    assert_eq!(fs::read_to_string(files.last().unwrap()).unwrap(), "24");
+    assert_eq!(
+        fs::read_to_string(dir.join("notes.md")).unwrap(),
+        "keep user file"
+    );
+    backup(&f.0, &f.0.join("ordinary.txt"), b"ignored").unwrap();
+    assert!(!f.0.join("revisions").exists());
+    backup(&f.0, &layout.global, b"global previous").unwrap();
+    assert_eq!(
+        fs::read_dir(layout.global.with_file_name("revisions"))
+            .unwrap()
+            .count(),
+        1
+    );
+}

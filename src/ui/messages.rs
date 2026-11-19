@@ -113,6 +113,10 @@ impl Ui {
     pub(crate) fn help(&self, out: &mut impl Write) -> io::Result<()> {
         writeln!(out,)?;
         writeln!(out, "\n  Chat        /new  /continue  /sessions  /quit")?;
+        writeln!(
+            out,
+            "  Memory      /memory [global|project]  (local view, edit, delete, restore)"
+        )?;
         writeln!(out, "  CLI input   Enter send · Alt+Enter / Ctrl+J newline · arrows edit · paste keeps lines")?;
         writeln!(
             out,

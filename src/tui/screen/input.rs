@@ -147,6 +147,7 @@ impl Screen {
         self.modal = Some(modal);
         let result = (|| {
             self.render()?;
+            let mut paste: Option<PasteInput> = None;
             loop {
                 if cancelled()? || self.modal.as_ref().is_none_or(Modal::expired) {
                     return Ok(None);
@@ -168,10 +169,27 @@ impl Screen {
                 if self.modal.as_ref().is_some_and(Modal::expired) {
                     return Ok(None);
                 }
+                if let Some(input) = paste.as_mut() {
+                    if let Some(result) = input.push(byte) {
+                        paste = None;
+                        if let Some(text) = result {
+                            self.modal.as_mut().unwrap().paste(&text);
+                        } else {
+                            self.modal.as_mut().unwrap().reject_paste();
+                        }
+                        self.render()?;
+                    }
+                    continue;
+                }
                 if byte == 25 && self.auth_url.is_some() {
                     self.copy_auth_url()?;
                 } else if byte == 27 {
                     match escape_key(events) {
+                        Navigation::PasteStart
+                            if self.modal.as_ref().is_some_and(Modal::is_memory_editor) =>
+                        {
+                            paste = Some(PasteInput::with_limit(65536))
+                        }
                         Navigation::Escape => return Ok(None),
                         Navigation::EscapeWith(next) => {
                             self.defer_input(next);
@@ -190,6 +208,19 @@ impl Screen {
         let cleanup = self.render();
         cleanup?;
         result
+    }
+
+    pub(crate) fn memory_editor(
+        &mut self,
+        title: &str,
+        text: &str,
+        events: &Receiver<u8>,
+    ) -> Result<Option<String>> {
+        let modal = Modal::memory_editor(title, text)
+            .ok_or("Memory exceeds 64 KiB; shorten it in a text editor first.")?;
+        Ok(self
+            .run_modal(modal, events, || Ok(false))?
+            .and_then(|v| v["value"].as_str().map(str::to_owned)))
     }
 
     pub(crate) fn take_images(&mut self) -> Vec<SharedImage> {

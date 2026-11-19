@@ -1,4 +1,5 @@
 mod extension_commands;
+mod memory;
 mod models;
 pub(crate) mod sessions;
 mod tool_outputs;
@@ -264,6 +265,9 @@ fn chat<R: BufRead>(
         let result: Result<()> = (|| {
             match message {
                 "/help" => ui.help(output)?,
+                _ if message == "/memory" || message.starts_with("/memory ") => {
+                    memory::open(message, output, events.as_ref().map(|e| &e.receiver), raw)?;
+                }
                 "/cli" | "/tui" => {
                     if !interactive || events.is_none() {
                         return Err(
