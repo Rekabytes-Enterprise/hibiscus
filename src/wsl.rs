@@ -143,6 +143,84 @@ pub(crate) fn description(distro: &str) -> String {
     )
 }
 
+/// `text` with Windows paths under the app's own folders (`~/.hibiscus`, where
+/// canvas voiceovers and references are saved, and the bundled skills) written
+/// as the distro sees them, when `cwd` runs in WSL. The agent's shell there
+/// can't open `C:\...` paths.
+pub(crate) fn agent_text(cwd: &Path, text: String) -> String {
+    if distro_for(cwd).is_none() {
+        return text;
+    }
+    let roots: Vec<String> = crate::paths::home()
+        .ok()
+        .into_iter()
+        .chain(crate::desktop::bundled_skills())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    linux_paths(&text, &roots)
+}
+
+/// Rewrites every path that starts with one of `roots`, up to the next space,
+/// quote, backtick or bracket, in its Linux form.
+pub(crate) fn linux_paths(text: &str, roots: &[String]) -> String {
+    let mut out = text.to_owned();
+    for root in roots {
+        let Some((_, linux)) = to_linux(root) else {
+            continue;
+        };
+        let mut done = String::new();
+        let mut rest = out.as_str();
+        while let Some(i) = rest.find(root.as_str()) {
+            done.push_str(&rest[..i]);
+            let after = &rest[i + root.len()..];
+            let end = after
+                .find(|c: char| c.is_whitespace() || "\"'`()".contains(c))
+                .unwrap_or(after.len());
+            done.push_str(&linux);
+            done.push_str(&after[..end].replace('\\', "/"));
+            rest = &after[end..];
+        }
+        done.push_str(rest);
+        out = done;
+    }
+    out
+}
+
+/// Shell lines that put the video engine on `PATH` inside the distro: the
+/// Windows `hyperframes` and `ffmpeg`, called through WSL interop, with their
+/// settings passed to Windows through `WSLENV`. Empty until the engine is installed.
+fn engine_setup() -> String {
+    let Some(bin) = crate::video_engine::wsl_bin() else {
+        return String::new();
+    };
+    let Some((_, dir)) = to_linux(&bin.to_string_lossy()) else {
+        return String::new();
+    };
+    let mut vars = vec![("HYPERFRAMES_NO_TELEMETRY", "1".to_owned())];
+    if let Some(ffmpeg) = crate::video::ffmpeg() {
+        vars.push((
+            "HYPERFRAMES_FFMPEG_PATH",
+            ffmpeg.to_string_lossy().into_owned(),
+        ));
+    }
+    let names: Vec<_> = vars.iter().map(|(n, _)| *n).collect();
+    let values: Vec<_> = vars
+        .iter()
+        .map(|(n, v)| format!("{n}={}", quote(v)))
+        .collect();
+    format!(
+        "d={}; [ -x \"$d/hyperframes\" ] || chmod +x \"$d\"/* 2>/dev/null\nexport PATH=\"$d:$PATH\" {}\nexport WSLENV=\"{}${{WSLENV:+:$WSLENV}}\"\n",
+        quote(&dir),
+        values.join(" "),
+        names.join(":")
+    )
+}
+
+/// `text` in single quotes for sh.
+pub(crate) fn quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
 /// One command running in a distro. Dropping it kills the command's whole
 /// process group inside Linux, as process groups do for Unix shells: killing
 /// `wsl.exe` alone can leave the Linux side running.
@@ -177,7 +255,7 @@ impl Run {
         command.args(["-d", &self.distro, "--cd", &linux, "--exec", "bash", "-c"]).arg(
             r#"setsid bash -lc "$1" & p=$!; printf %s "$p" > "/tmp/hibiscus-$2.pid"; wait "$p""#,
         );
-        command.args(["hibiscus", script, &self.id]);
+        command.args(["hibiscus", &format!("{}{script}", engine_setup()), &self.id]);
         Ok(command)
     }
 }
@@ -435,6 +513,18 @@ mod tests {
             let (_, linux) = to_linux(path).unwrap();
             assert_eq!(to_windows("Ubuntu", &linux), path);
         }
+    }
+
+    #[test]
+    fn app_paths_in_prompts_become_linux_paths() {
+        let roots = [r"C:\Users\Jo Ann\.hibiscus".to_owned()];
+        let text = r"Voiceover: C:\Users\Jo Ann\.hibiscus\canvas\references\1-voiceover.mp3
+- Read `C:\Users\Jo Ann\.hibiscus\skills\style\SKILL.md` first. D:\other\x stays.";
+        assert_eq!(
+            linux_paths(text, &roots),
+            "Voiceover: /mnt/c/Users/Jo Ann/.hibiscus/canvas/references/1-voiceover.mp3\n- Read `/mnt/c/Users/Jo Ann/.hibiscus/skills/style/SKILL.md` first. D:\\other\\x stays."
+        );
+        assert_eq!(quote("it's"), r"'it'\''s'");
     }
 
     #[test]
