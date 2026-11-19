@@ -771,7 +771,13 @@
    */
   async function buildStyled(storyboard: Card, style: Style, script: Card | undefined) {
     // The episode is never built on silent stand-ins: it needs this session's voice.
-    const voice = await voiceBlock(script).catch(() => null);
+    let voice: string | null;
+    try {
+      voice = await voiceBlock(script);
+    } catch (e) {
+      storyboard.status = `Couldn't hand the voiceover to the agent: ${message(e)}`;
+      return;
+    }
     if (!voice) {
       storyboard.status = "Make the voiceover on the script card first with Generate, or connect ElevenLabs. The video isn't built without it.";
       return;

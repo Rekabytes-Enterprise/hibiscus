@@ -619,7 +619,8 @@ async fn run_turns(
         maybe_compact(&session, &config, out, cancel).await?;
         {
             let mut s = session.lock().unwrap();
-            let mut blocks = vec![Block::Text { text: prompt.text }];
+            let text = crate::wsl::agent_text(&s.cwd, prompt.text);
+            let mut blocks = vec![Block::Text { text }];
             blocks.extend(prompt.images.into_iter().map(|i| Block::Image {
                 mime_type: i.mime_type,
                 data: i.data,
@@ -647,8 +648,9 @@ async fn run_turns(
             };
             if let Some(steering) = steering {
                 checkpoint_request = crate::checkpoints::Request::new(&session.lock().unwrap().id);
+                let cwd = session.lock().unwrap().cwd.clone();
                 let mut content = vec![Block::Text {
-                    text: steering.text,
+                    text: crate::wsl::agent_text(&cwd, steering.text),
                 }];
                 content.extend(steering.images.into_iter().map(|i| Block::Image {
                     mime_type: i.mime_type,
