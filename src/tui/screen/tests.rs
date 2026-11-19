@@ -918,6 +918,7 @@ fn slash_suggestions_complete_and_follow_arrows() {
         Screen::new(false).unwrap().prompt(&recv).unwrap().unwrap()
     }
     assert_eq!(input(b"/m\r"), "/models");
+    assert_eq!(input(b"/mem\r"), "/memory");
     assert_eq!(input(b"/lo\x1b[B\r"), "/logout");
     assert_eq!(input(b"/mo\t\r"), "/models");
     assert_eq!(input(b"/mx\x7f\r"), "/models");

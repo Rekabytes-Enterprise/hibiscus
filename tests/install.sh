@@ -56,6 +56,8 @@ run_case() {
  "$home/bin/hibiscus" | grep -q 'test hibiscus'
  test -d "$home/.hibiscus/cache"
  test -d "$home/.hibiscus/extensions"
+ test -d "$home/.hibiscus/memory/global/revisions"
+ test -d "$home/.hibiscus/memory/projects"
  if [ "$mode" = existing ] || [ "$mode" = legacy ]; then
   cmp "$home/.hibiscus/config.json" "$home/config-before.json"
   [ "$(cat "$home/.hibiscus/extensions/keep/main.py")" = 'user extension source' ]
@@ -73,7 +75,7 @@ run_case Linux x86_64 x86_64-unknown-linux-musl latest existing
 run_case Linux x86_64 x86_64-unknown-linux-musl latest legacy
 run_case Linux aarch64 aarch64-unknown-linux-musl latest native
 run_case Darwin x86_64 x86_64-apple-darwin latest native
-run_case Darwin arm64 aarch64-apple-darwin 0.4.2 missing
+run_case Darwin arm64 aarch64-apple-darwin 0.4.3 missing
 run_case Darwin arm64 aarch64-apple-darwin latest checksum
 run_case Linux x86_64 x86_64-unknown-linux-musl latest download
 printf 'native installer tests passed\n'

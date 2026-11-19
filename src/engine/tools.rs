@@ -19,6 +19,7 @@ pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
         json!({"name":"read","description":"Read a UTF-8 text file, up to 2000 lines or 50 KB. Each line starts with its number and a tab, which is not part of the file. A negative offset reads from the end.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}}),
         json!({"name":"grep","description":"Regex search of file contents, skipping ignored, hidden and binary files. Returns up to 200 path:line: text matches. Use it before reading whole files.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"ignore_case":{"type":"boolean"},"files_only":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}}),
         json!({"name":"glob","description":"List up to 200 files matching a glob such as src/**/*.ts.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"],"additionalProperties":false}}),
+        json!({"name":"session_search","description":"Search earlier sessions in this workspace for what the user and you said, such as a past decision, a fix or a request. Returns up to 20 matching messages, newest session first, with the session's title and age. Use it when the user refers to earlier work that memory doesn't cover.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Words that must all appear in the message, in any case."}},"required":["query"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
         json!({"name":"bash","description":shell,"parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
@@ -34,7 +35,7 @@ pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
     if canvas() {
         definitions.push(json!({"name":"ask_user","description":"Ask the user on the canvas when a canvas request needs an answer before you can go on. Give each question 2 to 5 short suggested `options`. The user can also type an answer. Then end your turn. The answers arrive as the user's next message.","parameters":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":500},"options":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"string","minLength":1,"maxLength":200}}},"required":["question","options"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}}));
         definitions.push(json!({"name":"storyboard","description":"Open a storyboard on the canvas for the user to review before any video is made. Each beat has the script `line` it goes with and an `svg`: a complete <svg> element, viewBox 0 0 1920 1080, with no scripts or external links.\n- Follow the style of any reference frames.\n- With a style, set each beat's `component` to the style body it uses. No two beats share one.\n- Send long storyboards in batches of up to 4: the first call without `from`, later calls with `from` set to the batch's first beat number (5, 9, …).\nThe user keeps or removes beats and confirms. Only then build the video.","parameters":{"type":"object","properties":{"title":{"type":"string","maxLength":200},"beats":{"type":"array","minItems":1,"maxItems":40,"items":{"type":"object","properties":{"line":{"type":"string","minLength":1,"maxLength":2000},"svg":{"type":"string","minLength":10,"maxLength":200000},"component":{"type":"string","maxLength":80}},"required":["line","svg"],"additionalProperties":false}},"from":{"type":"integer","minimum":1,"maximum":40}},"required":["beats"],"additionalProperties":false}}));
-        definitions.push(json!({"name":"video_preview","description":"Show a video in a preview card joined to the user's Video card.\n- url: the local HyperFrames preview address, once the preview is running.\n- project: the HyperFrames project folder, so the app can check the video's length against the voiceover.\n- video: the rendered MP4, once there is one.","parameters":{"type":"object","properties":{"url":{"type":"string","maxLength":2048},"project":{"type":"string","maxLength":4096},"video":{"type":"string","maxLength":4096}},"required":["url"],"additionalProperties":false}}));
+        definitions.push(json!({"name":"video_preview","description":"Show a video in a preview card joined to the user's Video card.\n- project: the HyperFrames project folder. The app starts its preview server and shows it; don't start one yourself. It also checks the video's length against the voiceover.\n- video: the rendered MP4, once there is one.\n- url: only for a page you serve some other way, at http://localhost or http://127.0.0.1.","parameters":{"type":"object","properties":{"project":{"type":"string","maxLength":4096},"video":{"type":"string","maxLength":4096},"url":{"type":"string","maxLength":2048}},"additionalProperties":false}}));
         definitions.push(json!({"name":"text_to_speech","description":"Open a script on the canvas as a Text to speech card, where the user reviews it and makes the audio with ElevenLabs.\n- script: only the words to be spoken.\n- video: one line on what the video shows, if there is one.\n- references: paths of images or videos the user gave as references.","parameters":{"type":"object","properties":{"script":{"type":"string","minLength":1,"maxLength":20000},"video":{"type":"string","maxLength":2000},"references":{"type":"array","items":{"type":"string","maxLength":4096},"maxItems":32}},"required":["script"],"additionalProperties":false}}));
     }
     definitions.extend(crate::extensions::agent_definitions());
@@ -63,6 +64,11 @@ struct GrepArgs {
     glob: Option<String>,
     ignore_case: Option<bool>,
     files_only: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionSearch {
+    query: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,7 +165,7 @@ struct Storyboard {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VideoPreview {
-    url: String,
+    url: Option<String>,
     #[allow(dead_code)]
     video: Option<String>,
     project: Option<String>,
@@ -329,6 +335,12 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
                 return Err("glob takes a pattern of 1 to 500 characters".into());
             }
         }
+        "session_search" => {
+            let a: SessionSearch = serde_json::from_value(args.clone())?;
+            if a.query.trim().is_empty() || a.query.len() > 500 {
+                return Err("session_search takes a query of 1 to 500 characters".into());
+            }
+        }
         "write" => {
             let a: Write = serde_json::from_value(args.clone())?;
             if a.path.is_empty() || a.content.len() > 16 * 1024 * 1024 {
@@ -435,10 +447,13 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
         }
         "video_preview" => {
             let a: VideoPreview = serde_json::from_value(args.clone())?;
-            if !canvas() || !local_url(&a.url) {
+            if !canvas() || a.url.as_deref().is_some_and(|u| !local_url(u)) {
                 return Err(
                     "video_preview shows only http://localhost or http://127.0.0.1 pages".into(),
                 );
+            }
+            if a.url.is_none() && a.project.is_none() {
+                return Err("video_preview needs the project folder".into());
             }
         }
         "text_to_speech" => {
@@ -528,6 +543,15 @@ pub async fn execute(
                 None => cwd.to_path_buf(),
             };
             let text = search::glob(a.pattern, root, cwd.to_path_buf(), cancel.clone()).await?;
+            Ok(result(text, json!({})))
+        }
+        "session_search" => {
+            let a: SessionSearch = serde_json::from_value(args.clone())?;
+            let (cwd, current) = (cwd.to_path_buf(), context.request.session_id().to_owned());
+            let text = tokio::task::spawn_blocking(move || {
+                super::session_search::search(&cwd, &current, &a.query)
+            })
+            .await??;
             Ok(result(text, json!({})))
         }
         "write" => {
@@ -759,19 +783,32 @@ pub async fn execute(
         )),
         "video_preview" => {
             let a: VideoPreview = serde_json::from_value(args.clone())?;
+            let project = a.project.as_deref().map(|p| path(cwd, p)).transpose()?;
+            let url = match a.url {
+                Some(url) => url,
+                None => {
+                    let dir = project.as_deref().ok_or("video_preview needs the project folder")?;
+                    tokio::select! {
+                        url = crate::video_engine::preview(dir) => url?,
+                        _ = cancel.changed() => return Err("Tool cancelled; the preview server keeps running".into()),
+                    }
+                }
+            };
             // The app checks this against the voiceover and the storyboard.
-            let found = a
-                .project
+            let found = project
                 .as_deref()
-                .and_then(|p| path(cwd, p).ok())
                 .and_then(|p| std::fs::read_to_string(p.join("index.html")).ok())
                 .and_then(|html| timeline(&html));
+            let project = project.map(|p| p.display().to_string());
             Ok(match found {
                 Some((duration, scenes)) => result(
-                    format!("The preview is showing in a card on the canvas. The project's timeline is {duration:.1} s long with {scenes} scenes."),
-                    json!({"duration":duration,"scenes":scenes}),
+                    format!("The preview is showing in a card on the canvas at {url}. The project's timeline is {duration:.1} s long with {scenes} scenes."),
+                    json!({"url":url,"project":project,"duration":duration,"scenes":scenes}),
                 ),
-                None => result("The preview is showing in a card on the canvas.".into(), json!({})),
+                None => result(
+                    format!("The preview is showing in a card on the canvas at {url}."),
+                    json!({"url":url,"project":project}),
+                ),
             })
         }
         // The app opens the cards from the tool call event; nothing runs here.
@@ -1106,6 +1143,9 @@ mod tests {
             "video_preview",
             json!({"url":"http://localhost.example.com/"})
         ));
+        // The app serves the preview when the agent names only the project.
+        assert!(ok("video_preview", json!({"project":"video"})));
+        assert!(!ok("video_preview", json!({"video":"/tmp/out.mp4"})));
     }
     #[test]
     fn text_to_speech_needs_a_script_and_the_canvas() {

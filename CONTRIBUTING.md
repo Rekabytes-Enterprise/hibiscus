@@ -1,6 +1,6 @@
 # Contributing to Hibiscus
 
-Thanks for helping improve Hibiscus. Start with the [architecture](docs/architecture.md), [terminal guide](docs/terminal.md), and [development guide](docs/development.md). Read `AGENTS.md` and the current `.pi/STATE.md` and `.pi/MEMORY.md` before changing code.
+Thanks for helping improve Hibiscus. Start with the [architecture](docs/architecture.md), [terminal guide](docs/terminal.md), and [development guide](docs/development.md). Read `AGENTS.md` before changing code.
 
 ## Scope
 
@@ -43,7 +43,6 @@ Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, se
    ```
 
 4. Pushes and pull requests to `dev` must pass `.github/workflows/ci.yml`: formatting, Clippy with warnings denied, installer checks, and Rust tests on Ubuntu and macOS. If behavior depends on a provider or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.
-5. Reconcile `.pi/STATE.md` with current progress. Add to `.pi/MEMORY.md` only when a reusable decision or root cause is confirmed, updating an existing matching entry rather than duplicating it.
 
 ## Safety and privacy
 

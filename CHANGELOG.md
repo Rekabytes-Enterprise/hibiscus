@@ -4,6 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-19
+
+### Added
+
+- Persistent memory (#216). The agent keeps notes that carry across sessions: a global memory in `~/.hibiscus/memory` and one per project. Each holds a short `MEMORY.md` index loaded into every session plus topic files the agent reads when it needs them. Every save keeps a revision. `/memory global` or `/memory project` opens the index, topic files and past revisions to edit or restore, and `/memory tidy` asks the agent to merge duplicates, drop stale notes and move long sections into topic files. Hibiscus says when an index runs past its size budget or has notes not confirmed in 90 days.
+- `session_search` tool (#216): the agent finds messages in this folder's other saved sessions by keyword, for when you refer to earlier work.
+
+### Fixed
+
+- Canvas video previews stay up, including in WSL-connected folders on Windows, where the preview card showed "localhost refused to connect". The app now starts the HyperFrames preview server itself when the agent calls `video_preview` with the project folder, keeps it running until the app quits, and the card's reload button restarts a preview that stopped. Before, the agent started it in the background, and in WSL it died when the agent's command ended.
+
 ## [0.4.2] - 2026-11-19
 
 ### Fixed

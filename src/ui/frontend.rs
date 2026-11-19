@@ -257,6 +257,23 @@ impl Frontend {
             None => Ok(None),
         }
     }
+    pub(crate) fn memory_editor(
+        &mut self,
+        title: &str,
+        text: &str,
+        events: &Receiver<u8>,
+        raw: &mut terminal::RawMode,
+    ) -> Result<Option<String>> {
+        match &mut self.view {
+            View::Tui(s) => s.memory_editor(title, text, events),
+            View::Cli(s) => {
+                raw.write(&format!(
+                    "\r\n{title}\r\nEnter save · Alt+Enter / Ctrl+J newline · Esc cancel\r\n❯ "
+                ))?;
+                cli::edit(events, raw, text, s.styled())
+            }
+        }
+    }
     pub(crate) fn select_searchable(
         &mut self,
         title: &str,
@@ -343,6 +360,12 @@ impl Write for Frontend {
 }
 
 impl ScrollDisplay for Frontend {
+    fn memory_notice(&mut self, message: &str) -> io::Result<()> {
+        match &mut self.view {
+            View::Tui(s) => s.memory_notice(message),
+            View::Cli(s) => s.memory_notice(message),
+        }
+    }
     fn thinking_reset(&mut self) -> io::Result<()> {
         match &mut self.view {
             View::Tui(s) => s.thinking_reset(),

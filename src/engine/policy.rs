@@ -10,7 +10,7 @@ Canvas and videos. Messages that start with [Canvas … card] come from a card o
 - Never create silent, placeholder or fake audio, whether voice, music or effects. If a sound the plan needs doesn't exist, leave it out and say so.
 - When a voice clip exists, transcribe it and time captions and reveals to its words, never to an estimated reading speed.
 - A video from a script takes two steps. First split the script into beats, call storyboard with one SVG per beat in the reference frames' style, and stop. When the user confirms, build a HyperFrames project from the confirmed SVGs and the voiceover, timing each beat to its line.
-- Start the preview in the background and call video_preview with the preview URL and the project folder. Render only when the user asks, then call video_preview again with the rendered file.
+- Call video_preview with the project folder; the app starts the preview server and shows it, so don't start one yourself. Render only when the user asks, then call video_preview again with the rendered file.
 ";
 pub fn compose(cwd: &Path) -> String {
     let mut prompt=format!("You are Hibiscus, a standalone coding agent. Workspace: {}. Inspect before editing. Use the native tools to complete the user's task. Tool execution changes the real workspace. Ask for clarification when a material requirement is ambiguous. Report actual outcomes and verification limits. Never claim tests passed unless run. Do not expose private reasoning. Use goal only for an explicit checklist.\n\nWriting guidance: use concrete plain prose, preserve requested tone and exact code/quotations, avoid hype and boilerplate, and keep uncertainty honest.\n",cwd.display());
@@ -25,17 +25,21 @@ pub fn compose(cwd: &Path) -> String {
     }
     let mut files = vec![];
     if let Ok(home) = crate::paths::home() {
-        files.push(home.join("AGENTS.md"));
+        files.push(("Instructions", home.join("AGENTS.md")));
+        // Memory: each scope's index and its topic file names; topic files load on demand.
+        prompt.push_str(&crate::memory::context(&home, cwd));
     }
-    files.push(cwd.join("AGENTS.md"));
-    for path in files {
+    files.push(("Instructions", cwd.join("AGENTS.md")));
+    for (label, path) in files {
         if let Ok(bytes) = std::fs::read(&path) {
             if bytes.len() <= 65536 {
                 prompt.push_str(&format!(
-                    "\nInstructions from {}:\n{}\n",
+                    "\n{label} from {}:\n{}\n",
                     path.display(),
                     String::from_utf8_lossy(&bytes)
                 ));
+            } else {
+                prompt.push_str(&format!("\n{label} at {} exceeds 64 KiB and was not loaded; ask the user to shorten it.\n", path.display()));
             }
         }
     }

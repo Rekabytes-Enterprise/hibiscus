@@ -182,7 +182,7 @@ pub fn styles() -> Vec<Style> {
 /// The video engine (Node.js, HyperFrames and its Chrome) the canvas's
 /// "Download engine" button installs into `~/.hibiscus/runtime`.
 pub mod video_engine {
-    pub use crate::video_engine::{install, installed, Progress};
+    pub use crate::video_engine::{install, installed, preview, Progress};
 }
 
 /// The ElevenLabs connector: its key, models, voices and text to speech.

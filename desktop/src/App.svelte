@@ -272,7 +272,12 @@
       if (event.type === "tool_execution_start") lastStep = activity(event.toolName, event.args);
       if (event.type === "tool_execution_end") afterTool = lastStep;
       if (event.type === "message_end" && event.message?.role === "assistant" && !event.message?.errorMessage) afterTool = undefined;
-      if (event.type === "tool_execution_end" && event.toolName === "video_preview" && !event.isError) void checkSync(event.result?.details);
+      // The app starts the preview server during the call, so its address arrives with the result.
+      if (event.type === "tool_execution_end" && event.toolName === "video_preview" && !event.isError) {
+        const details = event.result?.details;
+        if (details?.url) openPreview({ url: details.url, project: details.project });
+        void checkSync(details);
+      }
       if (working) {
         if (event.type === "agent_start") working.activity = "Thinking";
         if (event.type === "tool_execution_start") working.activity = activity(event.toolName, event.args);
@@ -552,6 +557,7 @@
       case "read": return `Reading ${file(args?.path)}`;
       case "grep": return "Searching the code";
       case "glob": return "Finding files";
+      case "session_search": return "Searching past sessions";
       case "write": return `Writing ${file(args?.path)}`;
       case "edit": return `Editing ${file(args?.path)}`;
       case "bash": return /hyperframes\s+(check|lint)/.test(args?.command ?? "") ? "Checking the video" : /hyperframes\s+(snapshot)/.test(args?.command ?? "") ? "Taking snapshots" : /hyperframes\s+render/.test(args?.command ?? "") ? "Rendering" : /transcribe/.test(args?.command ?? "") ? "Transcribing the voice" : "Running a command";

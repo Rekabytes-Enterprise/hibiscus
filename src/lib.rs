@@ -9,6 +9,7 @@ mod devserver;
 mod elevenlabs;
 mod engine;
 mod extensions;
+mod memory;
 mod paths;
 mod process;
 mod sys;

@@ -18,6 +18,7 @@ pub(crate) mod reka;
 mod rooxcode;
 mod search;
 pub(crate) mod session;
+mod session_search;
 mod thinking;
 pub(crate) mod tool_output;
 mod tools;

@@ -1,6 +1,7 @@
 //! Shared terminal services and frontend selection.
 pub(crate) mod dialog;
 pub(crate) mod display;
+pub(crate) mod editor;
 pub(crate) mod format;
 mod frontend;
 pub(crate) mod input;

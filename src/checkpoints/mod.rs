@@ -174,6 +174,10 @@ pub(crate) struct Request {
     lease: Option<fs::File>,
 }
 impl Request {
+    /// The session this request belongs to.
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
     pub(crate) fn new(session_id: &str) -> Self {
         Self {
             id: Id::new(),

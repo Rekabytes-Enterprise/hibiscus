@@ -1,124 +1,18 @@
 //! CLI draft editing. Repaint only the bounded input region, never chat history.
 use super::style as inline;
+use crate::ui::editor::{Draft, Layout};
 use crate::ui::{
     input::{escape_key, Navigation},
     paste::Input as Paste,
     terminal::RawMode,
 };
 use crate::Result;
-use std::{ops::Range, sync::mpsc::Receiver};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use std::sync::mpsc::Receiver;
+use unicode_width::UnicodeWidthChar;
 
 const LIMIT: usize = 65536;
 const ENABLE_PASTE: &str = "\x1b[?2004h";
 const DISABLE_PASTE: &str = "\x1b[?2004l";
-
-#[derive(Default)]
-struct Draft {
-    text: String,
-    cursor: usize,
-    preferred_column: Option<usize>,
-}
-impl Draft {
-    fn insert(&mut self, text: &str) -> bool {
-        if self.text.len() + text.len() > LIMIT {
-            return false;
-        }
-        self.text.insert_str(self.cursor, text);
-        self.cursor += text.len();
-        self.preferred_column = None;
-        true
-    }
-    fn left(&mut self) {
-        if let Some((at, _)) = self.text[..self.cursor].char_indices().next_back() {
-            self.cursor = at;
-        }
-        self.preferred_column = None;
-    }
-    fn right(&mut self) {
-        if let Some(ch) = self.text[self.cursor..].chars().next() {
-            self.cursor += ch.len_utf8();
-        }
-        self.preferred_column = None;
-    }
-    fn backspace(&mut self) {
-        let end = self.cursor;
-        self.left();
-        self.text.replace_range(self.cursor..end, "");
-    }
-    fn delete(&mut self) {
-        if let Some(ch) = self.text[self.cursor..].chars().next() {
-            self.text.drain(self.cursor..self.cursor + ch.len_utf8());
-        }
-        self.preferred_column = None;
-    }
-    fn home(&mut self) {
-        self.cursor = self.text[..self.cursor].rfind('\n').map_or(0, |at| at + 1);
-        self.preferred_column = None;
-    }
-    fn end(&mut self) {
-        self.cursor += self.text[self.cursor..]
-            .find('\n')
-            .unwrap_or(self.text.len() - self.cursor);
-        self.preferred_column = None;
-    }
-    fn vertical(&mut self, direction: isize, columns: usize) {
-        let layout = Layout::new(&self.text, columns);
-        let (row, col) = layout.cursor(&self.text, self.cursor);
-        let desired = *self.preferred_column.get_or_insert(col.saturating_sub(2));
-        let target = row
-            .saturating_add_signed(direction)
-            .min(layout.rows.len() - 1);
-        let range = &layout.rows[target];
-        let mut used = 0;
-        self.cursor = range.start;
-        for (at, ch) in self.text[range.clone()].char_indices() {
-            let width = ch.width().unwrap_or(0);
-            if used + width > desired {
-                break;
-            }
-            used += width;
-            self.cursor = range.start + at + ch.len_utf8();
-        }
-    }
-}
-
-struct Layout {
-    rows: Vec<Range<usize>>,
-}
-impl Layout {
-    fn new(text: &str, columns: usize) -> Self {
-        let available = columns.saturating_sub(3).max(2);
-        let mut rows = Vec::new();
-        let (mut start, mut used) = (0, 0);
-        for (at, ch) in text.char_indices() {
-            if ch == '\n' {
-                rows.push(start..at);
-                start = at + 1;
-                used = 0;
-                continue;
-            }
-            let width = ch.width().unwrap_or(0);
-            if used + width > available {
-                rows.push(start..at);
-                start = at;
-                used = 0;
-            }
-            used += width;
-        }
-        rows.push(start..text.len());
-        Self { rows }
-    }
-    fn cursor(&self, text: &str, cursor: usize) -> (usize, usize) {
-        let row = self
-            .rows
-            .iter()
-            .rposition(|r| r.start <= cursor)
-            .unwrap_or(0);
-        let range = &self.rows[row];
-        (row, 2 + text[range.start..cursor.min(range.end)].width())
-    }
-}
 
 struct Frame {
     rows: Vec<String>,
@@ -253,7 +147,7 @@ pub(crate) fn read(
     color: bool,
 ) -> Result<Option<String>> {
     raw.write(ENABLE_PASTE)?;
-    let result = read_draft(events, raw, color);
+    let result = read_draft(events, raw, color, None);
     let cleanup = raw.write(DISABLE_PASTE);
     match result {
         Err(error) => Err(error),
@@ -263,13 +157,40 @@ pub(crate) fn read(
         }
     }
 }
-fn read_draft(events: &Receiver<u8>, raw: &mut RawMode, color: bool) -> Result<Option<String>> {
+pub(crate) fn edit(
+    events: &Receiver<u8>,
+    raw: &mut RawMode,
+    text: &str,
+    color: bool,
+) -> Result<Option<String>> {
+    if text.len() > LIMIT {
+        return Err("Memory exceeds 64 KiB; shorten it in a text editor first.".into());
+    }
+    raw.write(ENABLE_PASTE)?;
+    let result = read_draft(events, raw, color, Some(text));
+    let cleanup = raw.write(DISABLE_PASTE);
+    let value = result?;
+    cleanup?;
+    Ok(value)
+}
+fn read_draft(
+    events: &Receiver<u8>,
+    raw: &mut RawMode,
+    color: bool,
+    prefill: Option<&str>,
+) -> Result<Option<String>> {
     let mut draft = Draft::default();
     let mut frame = Frame::initial();
     let mut pending = Vec::new();
     let mut paste: Option<Paste> = None;
     let mut notice = None;
     let mut size = raw.size();
+    if let Some(text) = prefill {
+        draft.insert(text);
+        let next = Frame::new(&draft, size, None);
+        repaint(raw, &frame, &next, color)?;
+        frame = next;
+    }
     while let Ok(byte) = events.recv() {
         if let Some(input) = paste.as_mut() {
             if let Some(result) = input.push(byte) {
@@ -311,6 +232,10 @@ fn read_draft(events: &Receiver<u8>, raw: &mut RawMode, color: bool) -> Result<O
                     notice = Some("  Draft limit is 64 KiB; text was not inserted.");
                 }
             }
+            3 | 4 if prefill.is_some() => {
+                raw.write("\r\n")?;
+                return Ok(None);
+            }
             3 => {
                 if draft.text.is_empty() {
                     return Ok(None);
@@ -338,6 +263,10 @@ fn read_draft(events: &Receiver<u8>, raw: &mut RawMode, color: bool) -> Result<O
                         if !draft.insert("\n") {
                             notice = Some("  Draft limit is 64 KiB; text was not inserted.");
                         }
+                    }
+                    Navigation::Escape if prefill.is_some() => {
+                        raw.write("\r\n")?;
+                        return Ok(None);
                     }
                     Navigation::Left => draft.left(),
                     Navigation::Right => draft.right(),
@@ -394,6 +323,7 @@ fn read_draft(events: &Receiver<u8>, raw: &mut RawMode, color: bool) -> Result<O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
     #[test]
     fn edits_stay_on_utf8_boundaries_and_join_lines() {
         let mut draft = Draft::default();

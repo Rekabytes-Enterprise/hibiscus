@@ -129,6 +129,7 @@ Inside a chat:
 | `/cli` | Switch to inline terminal chat |
 | `/tui` | Return to full-screen chat |
 | `/output [list\|number]` | Inspect saved tool output locally without rerunning tools |
+| `/memory [global\|project]` | View, edit, delete or restore local memory without a model call |
 | Custom commands, e.g. `/review [input]` | Run an installed extension command locally |
 | `/new` | Open a blank chat while keeping previous sessions saved |
 | `/continue` | Resume the latest saved session in this directory |
