@@ -39,6 +39,8 @@ export type Card = {
   beats?: { line: string; svg: string; component?: string }[];
   /** A video preview card's local page, and the rendered file once there is one. */
   url?: string;
+  /** The HyperFrames project the preview serves, so a stopped preview can restart. */
+  project?: string;
   video?: string;
   /** Bumped to reload the preview page. */
   reload?: number;
@@ -246,17 +248,17 @@ export function openStoryboard(args: { title?: string; beats?: { line: string; s
 }
 
 /** The video preview from video_preview: one card per video, updated as the agent renders. */
-export function openPreview(args: { url?: string; video?: string }) {
+export function openPreview(args: { url?: string; video?: string; project?: string }) {
   const video = videoCard(null, undefined, {}, true);
   const shown = board.cards.find((c) => c.kind === "preview" && c.parent === video.id);
   const script = scriptOf(video)?.text;
   if (shown) {
     // A new URL means a rebuilt video: its old render no longer matches.
     if (args.url && args.url !== shown.url) shown.video = undefined;
-    Object.assign(shown, { url: args.url ?? shown.url, video: args.video ?? shown.video, script, status: undefined, sync: undefined, reload: (shown.reload ?? 0) + 1 });
+    Object.assign(shown, { url: args.url ?? shown.url, video: args.video ?? shown.video, project: args.project ?? shown.project, script, status: undefined, sync: undefined, reload: (shown.reload ?? 0) + 1 });
     return;
   }
-  addCard(null, { kind: "preview", text: "Video preview", url: args.url, video: args.video, script, ...besides(video), parent: video.id, w: 560, h: 400 });
+  addCard(null, { kind: "preview", text: "Video preview", url: args.url, video: args.video, project: args.project, script, ...besides(video), parent: video.id, w: 560, h: 400 });
 }
 
 /** A Frames card for an analyze_video call, waiting for its frames. */

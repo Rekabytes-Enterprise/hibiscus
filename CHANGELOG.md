@@ -4,6 +4,10 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Canvas video previews stay up, including in WSL-connected folders on Windows, where the preview card showed "localhost refused to connect". The app now starts the HyperFrames preview server itself when the agent calls `video_preview` with the project folder, keeps it running until the app quits, and the card's reload button restarts a preview that stopped. Before, the agent started it in the background, and in WSL it died when the agent's command ended.
+
 ## [0.4.2] - 2026-11-19
 
 ### Fixed

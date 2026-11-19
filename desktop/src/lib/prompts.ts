@@ -8,8 +8,7 @@ export const STEPS = "- Work in steps: write or edit the generator a few scenes 
 
 /** How every build or change ends. */
 export const PREVIEW = lines(
-  "- Start the preview with `hyperframes preview --background --no-open`, or keep it running.",
-  "- Call video_preview with the preview URL and the project folder.",
+  "- Call video_preview with the project folder. The app starts the preview server; don't start one yourself.",
   "- Don't render until I ask.",
 );
 
