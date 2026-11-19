@@ -4,6 +4,8 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-19
+
 ### Fixed
 
 - Desktop release builds play the canvas voiceover and dropped reference videos again. The app's content security policy blocked `data:` and `blob:` audio and video, so the player showed Error even though ElevenLabs had made the audio.
