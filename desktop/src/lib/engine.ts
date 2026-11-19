@@ -81,10 +81,23 @@ export async function post(command: Record): Promise<void> {
   await request(command);
 }
 
+/** True when `session` was still running in the background and came back as it is. */
 export const openProject = async (folder: string, latest: boolean, session?: string) => {
   await ready;
-  await invoke<void>("open_project", { folder, latest, session: session ?? null });
+  return invoke<boolean>("open_project", { folder, latest, session: session ?? null });
 };
+/**
+ * Keeps the open engine running in the background while its turn finishes, so
+ * another session can open. Returns the id its `onBackground` events carry, or
+ * null when no turn is running.
+ */
+export const parkProject = (session: string) => invoke<number | null>("park_project", { session });
+/** Events from engines running in the background, with the id `parkProject` returned. */
+export const onBackground = (listener: (id: number, event: Record) => void) =>
+  listen<{ id: number; event: Record }>("engine-background", (e) => listener(e.payload.id, e.payload.event));
+/** Quitting would stop `count` running turns; the window asks, then calls `quit`. */
+export const onConfirmQuit = (listener: (count: number) => void) => listen<number>("confirm-quit", (e) => listener(e.payload));
+export const quit = () => invoke<void>("quit");
 export const closeProject = () => invoke<void>("close_project");
 export const listSessions = (folder: string) => invoke<SavedSession[]>("sessions", { folder });
 /** Names a session no engine has open; use `set_session_name` for the open one. */
