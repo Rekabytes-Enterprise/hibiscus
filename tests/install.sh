@@ -56,6 +56,8 @@ run_case() {
  "$home/bin/hibiscus" | grep -q 'test hibiscus'
  test -d "$home/.hibiscus/cache"
  test -d "$home/.hibiscus/extensions"
+ test -d "$home/.hibiscus/memory/global/revisions"
+ test -d "$home/.hibiscus/memory/projects"
  if [ "$mode" = existing ] || [ "$mode" = legacy ]; then
   cmp "$home/.hibiscus/config.json" "$home/config-before.json"
   [ "$(cat "$home/.hibiscus/extensions/keep/main.py")" = 'user extension source' ]

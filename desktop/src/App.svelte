@@ -557,6 +557,7 @@
       case "read": return `Reading ${file(args?.path)}`;
       case "grep": return "Searching the code";
       case "glob": return "Finding files";
+      case "session_search": return "Searching past sessions";
       case "write": return `Writing ${file(args?.path)}`;
       case "edit": return `Editing ${file(args?.path)}`;
       case "bash": return /hyperframes\s+(check|lint)/.test(args?.command ?? "") ? "Checking the video" : /hyperframes\s+(snapshot)/.test(args?.command ?? "") ? "Taking snapshots" : /hyperframes\s+render/.test(args?.command ?? "") ? "Rendering" : /transcribe/.test(args?.command ?? "") ? "Transcribing the voice" : "Running a command";

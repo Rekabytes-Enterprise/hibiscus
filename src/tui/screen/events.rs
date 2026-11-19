@@ -1,6 +1,10 @@
 //! Runtime display events applied to the fullscreen state.
 use super::*;
 impl ScrollDisplay for Screen {
+    fn memory_notice(&mut self, message: &str) -> io::Result<()> {
+        self.input_notice = Some(message.to_owned());
+        self.render()
+    }
     fn thinking_reset(&mut self) -> io::Result<()> {
         self.input_notice = Some(crate::ui::display::THINKING_RESET.into());
         self.render()

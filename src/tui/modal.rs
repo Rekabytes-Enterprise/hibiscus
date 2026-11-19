@@ -183,6 +183,9 @@ pub(crate) fn picker_panel(
 }
 
 pub(crate) struct Modal {
+    editor: Option<crate::ui::editor::Draft>,
+    editor_columns: usize,
+    editor_notice: bool,
     title: String,
     details: String,
     picker: Option<Picker>,
@@ -202,6 +205,9 @@ pub(crate) struct Modal {
 impl Modal {
     pub(crate) fn input(title: &str, text: String, placeholder: String, secret: bool) -> Self {
         Self {
+            editor: None,
+            editor_columns: 80,
+            editor_notice: false,
             title: title.into(),
             details: String::new(),
             picker: None,
@@ -217,6 +223,27 @@ impl Modal {
             utf8: Vec::new(),
             cursor: None,
         }
+    }
+    pub(crate) fn memory_editor(title: &str, text: &str) -> Option<Self> {
+        let mut draft = crate::ui::editor::Draft::default();
+        if !draft.insert(text) {
+            return None;
+        }
+        let mut modal = Self::input(title, String::new(), String::new(), false);
+        modal.text = None;
+        modal.editor = Some(draft);
+        Some(modal)
+    }
+    pub(crate) fn paste(&mut self, text: &str) {
+        if let Some(editor) = &mut self.editor {
+            self.editor_notice = !editor.insert(text);
+        }
+    }
+    pub(crate) fn is_memory_editor(&self) -> bool {
+        self.editor.is_some()
+    }
+    pub(crate) fn reject_paste(&mut self) {
+        self.editor_notice = true;
     }
     pub(crate) fn from_rpc(event: &Value) -> Option<Self> {
         let raw_title = event["title"].as_str().unwrap_or("Runtime request");
@@ -293,6 +320,22 @@ impl Modal {
             .is_some_and(|deadline| Instant::now() >= deadline)
     }
     pub(crate) fn navigate(&mut self, key: Navigation) {
+        if let Some(editor) = &mut self.editor {
+            match key {
+                Navigation::Left => editor.left(),
+                Navigation::Right => editor.right(),
+                Navigation::Up => editor.vertical(-1, self.editor_columns),
+                Navigation::Down => editor.vertical(1, self.editor_columns),
+                Navigation::Home => editor.home(),
+                Navigation::End => editor.end(),
+                Navigation::Delete => editor.delete(),
+                Navigation::Newline | Navigation::FollowUp => {
+                    self.editor_notice = !editor.insert("\n")
+                }
+                _ => {}
+            }
+            return;
+        }
         if let Navigation::ScrollPage(direction) = key {
             if self.detail_total > self.detail_rows {
                 self.details_scroll = self
@@ -323,6 +366,33 @@ impl Modal {
     pub(crate) fn key(&mut self, byte: u8) -> Option<Value> {
         if self.expired() {
             return Some(json!({"cancelled":true}));
+        }
+        if let Some(editor) = &mut self.editor {
+            match byte {
+                3 | 4 => return Some(json!({"cancelled":true})),
+                b'\r' => return Some(json!({"value":editor.text})),
+                b'\n' => self.editor_notice = !editor.insert("\n"),
+                1 => editor.home(),
+                5 => editor.end(),
+                8 | 127 => {
+                    self.utf8.clear();
+                    editor.backspace();
+                }
+                b'\t' => self.editor_notice = !editor.insert("    "),
+                32..=126 | 128..=255 => {
+                    self.utf8.push(byte);
+                    match std::str::from_utf8(&self.utf8) {
+                        Ok(value) => {
+                            self.editor_notice = !editor.insert(value);
+                            self.utf8.clear();
+                        }
+                        Err(e) if e.error_len().is_some() => self.utf8.clear(),
+                        Err(_) => {}
+                    }
+                }
+                _ => {}
+            }
+            return None;
         }
         match byte {
             3 | 4 => return Some(json!({"cancelled":true})),
@@ -363,6 +433,27 @@ impl Modal {
         None
     }
     pub(crate) fn rows(&mut self, width: usize, height: usize) -> Vec<Row> {
+        if let Some(editor) = &self.editor {
+            self.editor_columns = width.saturating_sub(3);
+            let layout = crate::ui::editor::Layout::new(&editor.text, self.editor_columns);
+            let cursor = layout.cursor(&editor.text, editor.cursor);
+            let visible = height.saturating_sub(3).max(1);
+            let start = cursor.0.saturating_sub(visible - 1);
+            let body = layout
+                .rows
+                .iter()
+                .skip(start)
+                .take(visible)
+                .map(|range| inner(&editor.text[range.clone()], width, TEXT, '│'))
+                .collect();
+            self.cursor = Some((1 + cursor.0 - start, cursor.1));
+            let hint = if self.editor_notice {
+                "64 KiB limit · text not inserted"
+            } else {
+                "Enter save · Alt+Enter / Ctrl+J newline · Esc cancel"
+            };
+            return panel(&self.title, body, hint, width);
+        }
         let body_height = height.saturating_sub(3).max(1);
         let details = wrap_details(&self.details, width.saturating_sub(4).max(1));
         self.detail_total = details.len();
@@ -445,6 +536,25 @@ fn wrap_details(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn memory_editor_preserves_multiline_unicode_and_bounds_paste() {
+        let mut modal = Modal::memory_editor("Memory", "first\n世界").unwrap();
+        modal.navigate(Navigation::Left);
+        modal.key(127);
+        modal.paste("café");
+        modal.key(b'\n');
+        let rows = modal.rows(50, 12);
+        assert!(rows.iter().any(|r| r.text.contains("first")));
+        assert!(rows.iter().any(|r| r.text.contains("Enter save")));
+        assert_eq!(modal.key(b'\r').unwrap()["value"], "first\ncafé\n界");
+        assert!(Modal::memory_editor("Memory", &"x".repeat(65537)).is_none());
+        modal.paste(&"x".repeat(65536));
+        assert!(modal
+            .rows(50, 12)
+            .iter()
+            .any(|r| r.text.contains("not inserted")));
+        assert_eq!(modal.key(3).unwrap()["cancelled"], true);
+    }
     #[test]
     fn confirm_timeout_and_masked_input_use_the_same_chrome() {
         let mut modal =

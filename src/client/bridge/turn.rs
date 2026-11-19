@@ -410,6 +410,7 @@ pub(super) fn exchange<F: BufRead, W: ScrollDisplay>(
                 display.set_work("Retrying context summary…")?;
             }
             Some("thinking_reset") => display.thinking_reset()?,
+            Some("memory_saved") => memory_saved(display, &event)?,
             Some("extension_ui_request" | "extension_error" | "provider_error") => {
                 // Full-screen dialogs render through the shared cached modal
                 // component; only line mode uses direct terminal prompts.
@@ -505,6 +506,15 @@ pub(super) fn preserve_uncertain_queue(
             submission,
             "Delivery uncertain: RPC connection failed; check history before resending",
         )?;
+    }
+    Ok(())
+}
+
+pub(super) fn memory_saved(display: &mut impl ScrollDisplay, event: &Value) -> io::Result<()> {
+    if let Ok(scope) =
+        serde_json::from_value::<crate::memory::manager::Scope>(event["scope"].clone())
+    {
+        display.memory_notice(&format!("Memory saved · {}", scope.label()))?;
     }
     Ok(())
 }

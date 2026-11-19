@@ -5,6 +5,7 @@ mod extension_commands;
 mod history;
 mod login;
 mod logout;
+mod memory;
 mod models;
 pub(crate) mod saved_sessions;
 mod tool_output_command;

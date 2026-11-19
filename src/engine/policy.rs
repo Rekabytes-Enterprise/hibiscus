@@ -25,17 +25,21 @@ pub fn compose(cwd: &Path) -> String {
     }
     let mut files = vec![];
     if let Ok(home) = crate::paths::home() {
-        files.push(home.join("AGENTS.md"));
+        files.push(("Instructions", home.join("AGENTS.md")));
+        // Memory: each scope's index and its topic file names; topic files load on demand.
+        prompt.push_str(&crate::memory::context(&home, cwd));
     }
-    files.push(cwd.join("AGENTS.md"));
-    for path in files {
+    files.push(("Instructions", cwd.join("AGENTS.md")));
+    for (label, path) in files {
         if let Ok(bytes) = std::fs::read(&path) {
             if bytes.len() <= 65536 {
                 prompt.push_str(&format!(
-                    "\nInstructions from {}:\n{}\n",
+                    "\n{label} from {}:\n{}\n",
                     path.display(),
                     String::from_utf8_lossy(&bytes)
                 ));
+            } else {
+                prompt.push_str(&format!("\n{label} at {} exceeds 64 KiB and was not loaded; ask the user to shorten it.\n", path.display()));
             }
         }
     }

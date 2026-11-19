@@ -46,6 +46,9 @@ pub(crate) enum ActiveAction {
 }
 
 pub(crate) trait ScrollDisplay: Write {
+    fn memory_notice(&mut self, message: &str) -> io::Result<()> {
+        writeln!(self, "{message}")
+    }
     fn thinking_reset(&mut self) -> io::Result<()> {
         writeln!(self, "{THINKING_RESET}")
     }

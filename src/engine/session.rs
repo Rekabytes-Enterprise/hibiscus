@@ -163,6 +163,9 @@ impl Session {
         config: &Config,
     ) -> Result<Self> {
         let cwd = workspace.canonicalize()?;
+        crate::memory::Layout::new(&crate::paths::home()?, &cwd)
+            .prepare(&cwd)
+            .map_err(|e| format!("Could not prepare Hibiscus memory: {e}"))?;
         let path = match start {
             SessionStart::Selected(p) => Some(p.clone()),
             SessionStart::Latest => crate::chat::saved_sessions::list(&cwd)?

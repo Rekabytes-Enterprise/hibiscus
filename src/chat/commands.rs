@@ -45,6 +45,10 @@ const COMMANDS: &[Command<'static>] = &[
         description: "Choose a model",
     },
     Command {
+        name: "/memory",
+        description: "View and manage local memory",
+    },
+    Command {
         name: "/new",
         description: "Start a new session",
     },
@@ -114,7 +118,7 @@ mod tests {
                 .iter()
                 .map(|cmd| cmd.name)
                 .collect::<Vec<_>>(),
-            ["/models"]
+            ["/models", "/memory"]
         );
         assert_eq!(
             matches("/lo", &[])

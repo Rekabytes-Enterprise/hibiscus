@@ -249,6 +249,10 @@ impl Client {
                 }
                 return Ok(record.get_mut("data").map_or(Value::Null, Value::take));
             }
+            if record["type"] == "memory_saved" {
+                memory_saved(display, &record)?;
+                continue;
+            }
             if record["type"] == "thinking_reset" {
                 display.thinking_reset()?;
                 continue;
@@ -391,6 +395,7 @@ impl Client {
                 }
                 match event["type"].as_str() {
                     Some("thinking_reset") => display.thinking_reset()?,
+                    Some("memory_saved") => memory_saved(display, &event)?,
                     Some("provider_status") => provider_status(display, &event)?,
                     Some("compaction_start") => display.set_work("Compacting context…")?,
                     Some("compaction_end") if event["aborted"] == true => {
