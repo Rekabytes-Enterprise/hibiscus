@@ -4,6 +4,8 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-19
+
 ### Fixed
 
 - Desktop release builds make canvas videos again. The content security policy blocked the app from reading its own voiceover and dropped references, so **Confirm and make video** failed with "Load failed", or on a styled video with a wrong "Make the voiceover first" message. A failed voiceover save now shows its real error.
