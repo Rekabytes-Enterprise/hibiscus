@@ -1,6 +1,6 @@
 [package]
 name = "hibiscus"
-version = "0.3.28"
+version = "0.4.2"
 edition = "2021"
 description = "A standalone Rust coding agent"
 license = "MIT"
@@ -16,10 +16,16 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "process", "macros"] }
 base64 = "0.23"
-sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+sha2 = "0.11"
 rand = "0.10"
 unicode-width = { version = "0.2.2", default-features = false }
-jsonschema = { version = "0.60.2", default-features = false }
+jsonschema = { version = "0.61.2", default-features = false }
+ignore = "0.4.34"
+regex = "1.13.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # Integration tests use only the standard library.

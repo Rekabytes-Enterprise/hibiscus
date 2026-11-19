@@ -1,7 +1,7 @@
 //! Local memory manager shared by the CLI and TUI. Never submits model prompts.
 use crate::{
+    client::error::local,
     memory::manager::{Manager, Scope},
-    runtime::error::local,
     ui::{display::ScrollDisplay, terminal::RawMode, Frontend},
     Result,
 };

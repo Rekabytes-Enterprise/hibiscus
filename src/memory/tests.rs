@@ -44,7 +44,7 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!(
             "hibiscus-memory-{}-{}",
             std::process::id(),
-            crate::runtime::config::unique()
+            crate::engine::config::unique()
         ));
         fs::create_dir(&root).unwrap();
         Self(root.canonicalize().unwrap())

@@ -1,0 +1,28 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hibiscus",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 480,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 22
+        },
+        "transparent": true,
+        "windowEffects": {
+          "effects": [
+            "sidebar"
+          ],
+          "state": "followsWindowActiveState"
+        },
+        "dragDropEnabled": false
+      }
+    ]
+  }
+}

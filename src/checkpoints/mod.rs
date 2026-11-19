@@ -4,7 +4,6 @@ mod store;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,

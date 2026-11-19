@@ -4,8 +4,9 @@ Version 0.3.5 replaces Pi's SDK and subprocess runtime with Hibiscus-owned Rust 
 
 ## Provider configuration
 
-Rooxcode is built in at `https://api-rooxcode.reka-bytes.my/v1`. No account,
-login, key or config entry is needed. Hibiscus fetches `GET /models` when needed
+Rooxcode is built in at `https://api-rooxcode.reka-bytes.my/v1`. No key or
+config entry is needed, and the model list loads without an account. Sending a
+prompt to a Rooxcode model needs a Reka Bytes sign-in (see below). Hibiscus fetches `GET /models` when needed
 at startup and when opening `/models`, then uses the existing streaming Chat
 Completions adapter. With no explicit model, the first discovered Rooxcode model starts a new
 conversation, even if another provider key exists in the environment. Explicit selections
@@ -19,6 +20,31 @@ Older sessions receive a UUID when loaded and persist it before generation.
 These copyable headers are client metadata, not authentication or separate quota
 buckets. No provider key, Codex token or shared product secret is attached.
 Rooxcode does not appear in the API-key login choices.
+
+### Reka Bytes sign-in
+
+Rooxcode chat requests carry `Authorization: Bearer` with the signed-in Reka
+Bytes device session. Sign in from `/login` → Browser Login → Reka Bytes in the
+terminal, or from the desktop app's sign-in screen. Both use the browser with
+PKCE, `state` and `nonce` and a loopback callback on `127.0.0.1` port 14565,
+14566 or 14567 at `/oauth/callback` (the first free one), with a paste-the-URL
+fallback. The issuer and client ID come from the gateway's
+`GET /api/hibiscus/auth`, and the gateway exchanges the code for its own
+tokens. They're stored in `rooxcode-auth.json` (mode 0600) in the Hibiscus home,
+shared by the desktop app and the terminal, and sent only to the built-in
+Rooxcode origin, never to a provider configured at another address.
+
+- A prompt to a Rooxcode model without a session is refused before it's added
+  to the conversation. The TUI puts it back in the input; the desktop app puts
+  it back in the message box and shows the sign-in screen.
+- The access token is refreshed when it expires within a minute, under a lock
+  shared across processes, because refresh tokens rotate. If the gateway
+  reports the access token expired, Hibiscus refreshes and sends the same
+  request once more; the gateway refused it before queueing.
+- A revoked or unknown session (`rooxcode_sign_in_required`) removes the local
+  session and asks for sign-in again. Nothing is resent.
+- `/logout` → `rooxcode`, or Sign out in the desktop settings, deletes the local
+  session and revokes the device on the gateway when it can be reached.
 
 The catalog supplies IDs and may advertise verified context, request-byte and
 message limits. Missing context stays unknown; image and reasoning capabilities
@@ -94,11 +120,33 @@ For other providers, optionally create `~/.hibiscus/config.json`, or the equival
 }
 ```
 
-Supported `api` values are `responses`, `chat_completions` and `anthropic`. A custom OpenAI-compatible provider uses its own ID, base URL, key environment variable and model IDs. These providers use explicit configuration; Rooxcode alone discovers its public catalog directly. Only configure endpoints you trust to receive your prompts and credential. HTTPS is required except on loopback for local providers and tests. Redirects are disabled.
+### Training-data opt-out (terminal and desktop)
+
+The terminal client uses the same privacy preference as the desktop app's
+Settings → Privacy switch. To request that OpenRouter use only providers that
+do not store or train on your prompts, create `privacy.json` in the Hibiscus
+home directory (`~/.hibiscus` by default, or `$HIBISCUS_HOME` when set):
+
+```json
+{"denyTraining": true}
+```
+
+When enabled, OpenRouter request bodies include
+`"provider": {"data_collection": "deny"}`. This changes **OpenRouter
+requests only**; requests to other providers are unaffected. The preference
+is **off by default**, including when the file is missing, unreadable or
+invalid. Some free OpenRouter models may not be available under this restriction.
+Hibiscus reads `privacy.json` on every request, so no restart is needed.
+
+Supported `api` values are `responses`, `chat_completions` and `anthropic`. A custom OpenAI-compatible provider uses its own ID, base URL, key environment variable and model IDs. These providers use explicit configuration; Rooxcode and the OpenRouter and OpenCode Go providers below discover their catalogs. Only configure endpoints you trust to receive your prompts and credential. HTTPS is required except on loopback for local providers and tests. Redirects are disabled.
 
 `model` is `provider/model-id`; `HIBISCUS_MODEL` can override it at launch. Explicit model preferences and resumed-session selections are preserved. Otherwise a new session discovers and selects an available Rooxcode model, with no paid-provider fallback. The header shows no active model when neither provider credentials nor an available Rooxcode catalog provide access. Credential presence does not prove remote model access. Model IDs may contain slashes. `maxSteps` bounds provider/tool iterations per user turn, from 1 to 1024. `maxTokens` is the output limit. Optional `contextWindow` must exceed `maxTokens` and should match the provider's actual capability. Unknown context limits stay unknown. `reasoning: true` enables off/low/medium/high for the Responses adapter; it is not inferred from a model name. Only mark `images: true` when the model supports them.
 
 Usage comes from provider receipts. Missing usage and unconfigured pricing remain unknown; Hibiscus does not invent context counts or dollar costs. Automatic compaction starts when confirmed usage exceeds 80% of a configured context window. This is a scheduling threshold, not an exact tokenizer or a guarantee against provider context errors. `/compact` is available explicitly.
+
+OpenRouter (`openrouter`, `https://openrouter.ai/api/v1`, `OPENROUTER_API_KEY`) and OpenCode Go (`opencode-go`, `https://opencode.ai/inference/go/openai/v1`, `OPENCODE_API_KEY`) are built in as Chat Completions providers. Add a key with `/login` → API Key, which then opens the model picker. When a key exists, Hibiscus fetches each provider's own model list (`/api/v1/models` and `https://opencode.ai/inference/go/v1/models`) with that key at startup and when opening `/models`. Context window, image input and reasoning support are copied from the catalog; models without tool support are skipped. No `max_tokens` is sent, so each provider applies its own output limit. A failed refresh keeps the last list and shows the provider's error. Listing `models` for one of these providers in `config.json` turns discovery off for it and uses that configuration instead.
+
+`/models` lists only providers with access: a key, a Codex sign-in, or Rooxcode's anonymous catalog. The TUI picker has one tab per provider plus All, opens on the current model's provider, and switches with Tab or ←/→; search covers the open tab, and All also matches provider names. Rows show the context window, image and reasoning support each catalog reports. In the CLI, more than 50 models print a provider summary instead of one numbered list. `/models <provider> [search]` narrows the list (or opens that tab in the TUI) and `/models <provider>/<model>` selects a model directly.
 
 ## Authentication
 
@@ -110,7 +158,7 @@ Codex tokens live in Hibiscus's own `codex-auth.json`, mode 0600, with expiry an
 
 The protocol reference is the installed Pi 1.1.0 **legacy Codex** adapter, independently implemented in Rust. This uses the public Codex client ID and ChatGPT's Codex backend. It is distinct from the newer [Sign in with ChatGPT open-source flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), which dynamically registers an app client and uses the public Responses API. Hibiscus does not currently implement that separate flow or Codex device-code login. No Pi code, Node process or SDK is loaded at runtime. Real-account login and inference still require manual verification.
 
-The built-in `openai-codex` provider uses `authentication: "codex"`, `api: "responses"` and the fixed `baseUrl: "https://chatgpt.com/backend-api/codex"`. It defaults to `gpt-6.1-sol`; customize its `models` in `config.json` when needed. The native catalog is explicit configuration, not a live account catalog. The model ID does not guarantee subscription access. Context limits remain unknown unless configured. The subscription endpoint does not accept `max_output_tokens`, so `maxTokens` is not sent as an output cap there.
+The built-in `openai-codex` provider uses `authentication: "codex"`, `api: "responses"` and the fixed `baseUrl: "https://chatgpt.com/backend-api/codex"`. While signed in, its models come from the plan's own list (`GET /models` on that endpoint), fetched when the engine starts and when `/models` opens: the models Codex lists, with their context windows, image support and thinking levels (`/thinking` offers exactly those levels). Hidden models are left out. The endpoint lists a model only to clients at least as new as its minimum Codex version, so the request carries the current official Codex release, looked up from npm (`@openai/codex`) once each time the engine starts and reused for that run. The answer is saved in `codex-client-version` in the Hibiscus home only as a fallback: without npm, Hibiscus uses the last version seen, then one pinned in Hibiscus. If the fetch fails, the last list stays; before the first fetch, `gpt-6.1-sol` is the fallback. Writing an `openai-codex` entry with `models` in `config.json` turns discovery off and uses that list instead. The subscription endpoint does not accept `max_output_tokens`, so `maxTokens` is not sent as an output cap there.
 
 API Key → provider masks key entry. Keys are stored in Hibiscus's own `auth.json`, mode 0600, using atomic replacement. A configured key environment variable takes precedence for API-key providers. Stored keys are not validated until a provider request. `/logout` requires selection and confirmation, removes the selected local key or Codex token file and reloads runtime state. It does not revoke the remote grant or unset environment variables.
 
@@ -175,7 +223,7 @@ Native tools execute directly, including shell commands in interactive and piped
 
 ## Implementation and verification
 
-`src/runtime/` owns configuration, credentials, sessions, providers, tools, typed lifecycle events and the agent loop. The existing terminal adapter consumes bounded presentation records over a local in-process socket. It does not start another executable. Queued steering is inserted at a tool boundary; followups wait for the current turn. Settlement follows tool results and queue delivery.
+`src/engine/` owns configuration, credentials, sessions, providers, tools, typed lifecycle events and the agent loop, and never imports terminal code. `src/client/` is the terminal's side of the connection: the worker client, bounded transport, run state and user-facing errors. The existing terminal adapter consumes bounded presentation records over a local in-process socket. It does not start another executable. Queued steering is inserted at a tool boundary; followups wait for the current turn. Settlement follows tool results and queue delivery.
 
 The former Pi-only integration fixtures were retired. Their history remains in Git. Current native integration tests use local HTTP fixtures to exercise the actual CLI, all three provider protocols, file/shell tools, direct shell execution, cancellation, sessions, compaction, queues and masked credentials. Existing TUI/transport unit coverage remains active. Mock success is not real-provider verification.
 

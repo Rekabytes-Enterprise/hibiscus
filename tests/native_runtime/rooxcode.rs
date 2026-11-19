@@ -447,6 +447,7 @@ fn rooxcode_compacts_large_tool_history_in_bounded_requests_and_continues() {
     );
     for request in &*requests {
         assert_eq!(request["reasoning_effort"], "high");
+        // The request budget: four fifths of the window less the default 4096 output tokens.
         assert!(serde_json::to_vec(request).unwrap().len() < (22000 - 4096) * 4 / 5);
     }
     assert!(requests.last().unwrap()["messages"]

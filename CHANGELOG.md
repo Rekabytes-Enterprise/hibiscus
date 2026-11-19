@@ -4,6 +4,169 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-19
+
+### Fixed
+
+- Desktop release builds make canvas videos again. The content security policy blocked the app from reading its own voiceover and dropped references, so **Confirm and make video** failed with "Load failed", or on a styled video with a wrong "Make the voiceover first" message. A failed voiceover save now shows its real error.
+- Windows desktop with a WSL-connected folder: canvas videos build inside the distro. Paths the app gives the agent, such as the voiceover and the style's skill, are written as `/mnt/...` paths, and `hyperframes` and `ffmpeg` in the distro run the Windows video engine.
+
+## [0.4.1] - 2026-11-19
+
+### Fixed
+
+- Desktop release builds play the canvas voiceover and dropped reference videos again. The app's content security policy blocked `data:` and `blob:` audio and video, so the player showed Error even though ElevenLabs had made the audio.
+
+## [0.4.0] - 2026-11-18
+
+### Added
+
+- Canvas in Hibiscus Desktop (#208). A Canvas button in the sidebar opens a dot-grid page where **New +** adds Video, Image and Text to speech cards with references, a model and reasoning level per card, and drag and resize. Each session keeps its own canvas.
+- Video from a script on the canvas (#208): the agent writes the script, ElevenLabs reads it, the storyboard shows one picture per scene, and HyperFrames builds the video into a preview inside the card. A finished video takes follow-ups: Visuals only, Change the words, Rebuild, or Add the voiceover. **Download engine** installs Node.js and HyperFrames once (about 250 MB); ffmpeg ships with the app.
+- Sign in with ElevenLabs (#208), or paste an API key, from Settings → Connectors.
+- Video styles as skills (#208). The app ships the `tech-explainer-short` style, and a personal skill in `~/.hibiscus/skills` with `hibiscus-style: true` becomes a style too.
+- `grep` and `glob` tools (#208) search file contents and names, skipping ignored, hidden and binary files, so the agent reads less.
+- The preview card warns when a video's length or scene count doesn't match its voiceover or storyboard, with a **Fix the timing** button. A run that stops without a reply offers **Continue** (#208).
+
+### Changed
+
+- Fewer tokens per request (#208). Claude requests use prompt caching; older tool output goes to the model as a short note once the session has moved on; command output over 30,000 characters keeps its start and end, with the full text saved to `~/.hibiscus/tool-output/` for 7 days. On the 12 largest saved sessions, requests carry 60% less text.
+- `read` numbers its lines, returns at most 2,000 lines or 50 KB, cuts very long lines, and can read from the end of a file (#208).
+- The bash tool warns when a script exits 0 even though its output shows a crash (#208).
+- Windows desktop: a folder inside WSL runs in its distro, and folder pickers start there (#207).
+- Clearer canvas prompts, messages and docs (#209).
+
+## [0.3.41] - 2026-11-16
+
+### Added
+
+- Windows desktop: a WSL button beside the browser button in the title bar connects the open folder to a WSL 2 distro (#201, #202). Hibiscus finds installed distros on its own. Once connected, the shell tool and dev servers run inside the distro, and Linux paths map to Windows paths. The choice is saved per folder, and clicking the button again disconnects. With several distros, the button opens a menu with the default one first.
+
+### Changed
+
+- Updated the jsonschema dependency to 0.61.2 (#203).
+
+## [0.3.40] - 2026-11-16
+
+### Added
+
+- Hibiscus Desktop for Windows (#195, #196, #198). Download `hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe` from the release; it installs for your user without administrator rights and updates itself like the macOS and Linux apps. The installer is not code-signed yet, so Windows SmartScreen asks you to click **More info**, then **Run anyway** the first time. The shell tool uses Git Bash when it is installed and PowerShell otherwise. The terminal UI is not available on Windows yet; use WSL for the CLI.
+- Release notes start with a Download table that links the right file for macOS, Windows, Linux and the terminal installer (#197).
+
+### Fixed
+
+- Browser sign-in no longer hangs on Windows (#195).
+
+### Documentation
+
+- How terminal users turn on the training-data opt-out (#190, thanks @jdotc1).
+
+## [0.3.39] - 2026-11-14
+
+### Added
+
+- The desktop sidebar shows who is signed in (#192). The footer has a profile button with your Reka Bytes pixel avatar and name. Click it for Manage account, Settings and Sign out. The avatar idles with a small dip and blink, and stays still when your system asks for reduced motion.
+- Settings → Account shows your Rooxcode usage: the 5-hour and weekly limits as percent bars with the next refresh time, your wallet credits, and links to change your avatar or open the account website.
+
+## [0.3.38] - 2026-11-12
+
+### Added
+
+- Sign in with Reka Bytes to use Rooxcode models (#185). The desktop app opens on a sign-in screen with "Sign in with Reka Bytes", or "Continue with my own provider" for people who only use their own API key or Codex. Sign-in happens in the browser and uses the same account as the Rooxcode website. In the terminal, the model list still loads without an account; the first prompt to a Rooxcode model asks you to sign in with `/login` → Browser Login → Reka Bytes and puts the prompt back in the input. One sign-in covers the desktop app and the terminal on the same computer. Sign out from Settings → Providers in the desktop app, or `/logout` in the terminal.
+
+## [0.3.37] - 2026-11-12
+
+The 0.3.36 desktop build never finished, so this is the first desktop release with the 0.3.36 changes below.
+
+### Fixed
+
+- Release: the desktop Linux build skips the GitHub runner's Azure Ubuntu mirror and downloads its libraries from archive.ubuntu.com. The Azure mirror stalled the 0.3.36 build for over 30 minutes.
+
+## [0.3.36] - 2026-11-11
+
+### Added
+
+- Desktop app: Hibi can test web pages in a built-in browser. A new `browser` tool drives a headless Chrome through [agent-browser](https://github.com/vercel-labs/agent-browser), which ships inside the app, and a browser pane shows the page live. The pane opens on the first browser call of a run, or from the globe button in the title bar. A cursor moves to each element Hibi clicks or types into, and you can click, scroll and type in the page, use the address bar, or have the pane find a running dev server on the usual local ports. The browser uses Google Chrome when it's installed; otherwise the app downloads Chrome for Testing the first time Hibi needs it.
+- Desktop app: Hibi sees browser screenshots as images, not just the page's text, so it can check layout, overlap, colours and blank areas. `screenshot` captures the visible page, one element, or the whole page with `--full`. The app scales each image down to JPEG before sending it, and the chat shows a thumbnail you can click to see full size. Models that don't accept images get a note instead.
+- Desktop app: comment on elements in the browser pane. The comment button outlines the element under the pointer; click one, type what should change, and add more if you like. "Add to message" puts the comments in the message box, each with the element's CSS path, text, page URL and a cropped image (up to 4), so Hibi changes that exact element. The pins stay on the page until Hibi's run ends.
+- Desktop app: the app can start the project's dev server. When none is running, the browser pane offers the usual command (a `package.json` dev or start script, Django, Rails, or a static `index.html`), starts it in the background and opens its URL. Hibi gets a `dev_server` tool that starts, checks, reads and stops the same server, so it can test a change and read build errors without a terminal. The pane shows the server's output with a Stop button. One server runs per folder, and it stops when you open another folder, remove the folder from the sidebar, or quit.
+- Desktop app: the browser pane shows a red badge with a count when the page logs a console error, throws an uncaught exception, or gets a 4xx or 5xx response. Click it to list them, or clear them. Hibi's `browser` tool now tells it how to read the console, exceptions, failed requests and one request's detail, and shows only the latest 100 entries, each cut to 500 characters.
+
+### Changed
+
+- Desktop app: opening a saved session loads its latest 60 messages instead of the whole conversation, and older ones as you scroll up. Tool output over 2 KB loads in full when you open or copy its row, and screenshots load as they scroll into view. The session panel still lists every file the session edited. Hibi still sees the whole conversation.
+
+## [0.3.35] - 2026-11-11
+
+### Changed
+
+- Desktop app: clicking a session that hasn't been opened yet highlights it and changes the title at once. If its conversation takes longer than 150 ms to load, grey placeholders fill the chat and the details panel, and the message box is disabled until the session is ready.
+
+## [0.3.34] - 2026-11-10
+
+### Added
+
+- Desktop app: in-app updates. The app checks for a newer release when it starts and every 6 hours, shows a banner, and on request downloads the update, installs it and restarts. Updates are signed, and each release now has 14 files: the macOS `.app.tar.gz`, signatures for it and the AppImage, and `latest.json` are new. Versions before this one have to be updated by hand once.
+- Desktop app: rename and delete saved sessions from the menu next to each session in the sidebar. Delete asks first. The name is saved in the session file.
+- Desktop app: an "Add folder" button in the sidebar and a "Remove from sidebar" item on each folder. The new-session picker can also remove folders from its list. The sidebar keeps up to 8 recent folders.
+- Desktop app: Settings has an About page with the installed version, whether a newer one is out, and the release notes for this version and earlier ones.
+
+### Changed
+
+- Desktop app: Settings pages use the full window width and keep their content centred.
+- `scripts/bump-version.sh` moves the `## [Unreleased]` entries in `CHANGELOG.md` under the new version with today's date, and refuses to bump while Unreleased is empty.
+
+## [0.3.33] - 2026-11-10
+
+### Changed
+
+- Desktop app: switching to another session in the same folder no longer restarts the engine or downloads the model lists again. The conversation shows as soon as its messages load, and the session details, git changes and session list then load in parallel. In our measurements a switch went from about 600 ms (up to 1.9 s on a cold start) to about 35 ms.
+- The changes pane compares the branch with its nearest base branch, such as `dev`, instead of always using the repository's default branch, so unreleased work on the base no longer shows as the branch's own. The base label is now a menu for picking another branch, and the app remembers the pick per folder.
+- `docs/desktop/release.md` explains how to open the unsigned desktop app on macOS 15 with System Settings' "Open Anyway".
+- Dependency updates: `sha2` 0.11, plus GitHub Actions updates including `actions/setup-node` 7.1.0.
+
+### Fixed
+
+- Desktop app: edit diffs no longer squeeze the code into a third of the width when they start partway through a file. Long lines wrap between words, durations under 0.1 s are hidden, back-to-back goal updates show as one row, and paths inside the session folder show as relative paths in command rows.
+
+## [0.3.32] - 2026-11-09
+
+### Fixed
+
+- Desktop release files are signed and attached to the release. The v0.3.31 desktop build could not be signed (its provenance lacked a field GitHub requires), so v0.3.31 was not published; this release ships everything listed under 0.3.31.
+
+## [0.3.31] - 2026-11-08
+
+### Added
+
+- Desktop app for macOS (Apple Silicon) and Linux (x86_64), in `desktop/` (Tauri v2 + Svelte). It has a sidebar of sessions by folder, chat with Markdown, highlighted code blocks and copy buttons, grouped tool calls with edit diffs, a session details panel, a branch diff view, image attachments, and a Settings page for providers with Codex browser sign-in and sign-out.
+- Release tags now also build `hibiscus-desktop-aarch64-apple-darwin.dmg` and `hibiscus-desktop-x86_64.AppImage`, with their own `SHA256SUMS-desktop` and signed provenance, in the same draft release. The builds are unsigned; see `docs/desktop/release.md` for how to open them.
+- Privacy and Terms of Use pages in the desktop app's Settings.
+- A "Don't let providers train on my prompts" setting. While it is on, OpenRouter requests ask for providers that don't store or train on prompts. It is stored in `privacy.json` in the Hibiscus home, applies to the terminal app too, and is off by default.
+- `hibiscus::desktop` library API used by the app: start engines per project folder, send commands, read events, save or remove credentials, sign in to Codex through the browser, list sessions, and read or set the training preference.
+
+### Changed
+
+- Internal restructuring with no behaviour change: the engine (`src/engine/`) and the terminal's side of the connection (`src/client/`) are now separate, the login screens moved out of the engine, and the largest files were split.
+
+## [0.3.30] - 2026-11-08
+
+### Added
+
+- Codex models now come from the signed-in plan's own list at startup and when opening `/models`, in the TUI and CLI. Each model shows the context window, image support and thinking levels Codex reports, and `/thinking` offers exactly those levels (up to `xhigh` and `max` where listed). Hidden models are left out. `gpt-6.1-sol` remains the fallback before the first fetch or if it fails, and listing `openai-codex` models in `config.json` turns discovery off.
+- The list request carries the current official Codex release, looked up from npm once per run, because Codex lists a model only to clients at least as new as its minimum version. Without npm, Hibiscus uses the last release seen, then a pinned one. Other providers' thinking levels are unchanged.
+
+## [0.3.29] - 2026-11-08
+
+### Added
+
+- Built-in OpenRouter (`OPENROUTER_API_KEY`) and OpenCode Go (`OPENCODE_API_KEY`) API-key providers. With a key, Hibiscus loads each provider's own model list at startup and when opening `/models`, using the context window, image and reasoning support it reports and skipping models without tool support. No `max_tokens` is sent, so each provider applies its own output limit. `/login` → API Key shows where to create the key, then opens the model picker. Listing `models` for either provider in `config.json` turns discovery off for it.
+- `/models` shows one tab per provider you can use, plus All. Tab or ←/→ switches provider, search covers the open tab, and each row shows the context window, image and reasoning support its provider reports. Providers without a key or sign-in are hidden; `/login` still lists them. The picker opens on the current model's provider and shows up to 10 rows.
+- CLI `/models` prints a provider summary when there are more than 50 models. `/models <provider> [search]` lists one provider and `/models <provider>/<model>` selects directly; the TUI opens the matching tab and search.
+
+### Fixed
+
+- A model discovery error is shown once rather than again every time `/models` opens.
 ## [0.3.28] - 2026-11-05
 
 ### Added

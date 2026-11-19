@@ -6,7 +6,7 @@
 pub(crate) mod messages;
 #[path = "../src/paths.rs"]
 mod paths;
-#[path = "../src/chat/sessions.rs"]
+#[path = "../src/chat/saved_sessions.rs"]
 mod sessions;
 mod ui {
     pub(crate) use crate::messages;

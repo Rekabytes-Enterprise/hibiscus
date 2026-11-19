@@ -1,7 +1,7 @@
 //! Logical Rust allocation counts/bytes, not RSS or allocator-internal overhead.
 //! Instrumentation is separate from timing and never used in the CLI binary.
 #![allow(dead_code)]
-#[path = "../src/tui/markdown.rs"]
+#[path = "../src/tui/markdown/mod.rs"]
 mod markdown;
 use std::{
     alloc::{GlobalAlloc, Layout, System},

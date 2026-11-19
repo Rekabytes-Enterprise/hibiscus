@@ -1,0 +1,178 @@
+//! The /login prompts. Credential storage stays in the runtime (auth, oauth).
+use crate::{
+    engine::{auth, oauth, reka},
+    ui::Frontend,
+    Result,
+};
+use std::{future::Future, sync::mpsc::Receiver, time::Duration};
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AuthOutcome {
+    Success,
+    Cancelled,
+}
+
+pub(crate) fn sign_in(
+    output: &mut Frontend,
+    events: &Receiver<u8>,
+    provider: &str,
+    auth_type: &str,
+) -> Result<AuthOutcome> {
+    if auth_type == "oauth" && provider == "openai-codex" {
+        let sign_in = oauth::BrowserSignIn::start()?;
+        let url = sign_in.url().to_owned();
+        return browser(
+            output,
+            events,
+            "Codex",
+            url,
+            move |rx| sign_in.complete(rx),
+            |token| oauth::save(&token),
+        );
+    }
+    if auth_type == "oauth" && provider == "rooxcode" {
+        // Starting asks the gateway for its issuer, so it runs on its own thread.
+        let sign_in = std::thread::spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(reka::BrowserSignIn::start("terminal"))
+        })
+        .join()
+        .map_err(|_| "Reka Bytes sign-in stopped unexpectedly")??;
+        let url = sign_in.url().to_owned();
+        return browser(
+            output,
+            events,
+            "Reka Bytes",
+            url,
+            move |rx| sign_in.complete(rx),
+            |account| reka::save(&account),
+        );
+    }
+    if auth_type != "api_key" {
+        return Err("This provider requires a supported native authentication flow. Use a configured API-key provider.".into());
+    }
+    auth::known_api_key_provider(provider)?;
+    let answer = match crate::engine::catalog::key_page(provider) {
+        Some(page) => output.auth_prompt(
+            events,
+            &format!("{provider} API key · create one at {page}"),
+            "Enter API key",
+            true,
+            || Ok(false),
+        )?,
+        None => output.auth_input(events, true, || Ok(false))?,
+    };
+    let Some(answer) = answer else {
+        return Ok(AuthOutcome::Cancelled);
+    };
+    auth::save_api_key(provider, answer)?;
+    Ok(AuthOutcome::Success)
+}
+
+/// Drives one browser sign-in: opens `url`, takes a pasted redirect URL, and
+/// saves the result only when it completes, never after a cancel.
+fn browser<T: Send + 'static, F: Future<Output = Result<T>> + 'static>(
+    output: &mut Frontend,
+    events: &Receiver<u8>,
+    label: &'static str,
+    url: String,
+    complete: impl FnOnce(tokio::sync::mpsc::Receiver<String>) -> F + Send + 'static,
+    save: impl FnOnce(T) -> Result<()> + 'static,
+) -> Result<AuthOutcome> {
+    output.set_auth_url(&url)?;
+    let (manual_tx, manual_rx) = tokio::sync::mpsc::channel(1);
+    let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = (|| -> Result<T> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = cancelled.changed() => Err(format!("{label} sign-in cancelled").into()),
+                    result = tokio::time::timeout(Duration::from_secs(600), complete(manual_rx)) =>
+                        result.map_err(|_| format!("{label} sign-in timed out. Retry /login."))?,
+                }
+            })
+        })();
+        let _ = done_tx.send(result);
+    });
+    // Launch only the validated fixed-origin authorization URL, without a shell.
+    open_browser(&url);
+    let mut completed = None;
+    let ui_result = (|| -> Result<()> {
+        let mut submitted = false;
+        loop {
+            let placeholder = if submitted {
+                "Completing sign-in… Esc cancels"
+            } else {
+                "Finish in browser, or paste the full redirect URL"
+            };
+            let answer = output.auth_prompt(
+                events,
+                &format!("{label} browser sign-in · Ctrl+Y copy link"),
+                placeholder,
+                true,
+                || match done_rx.try_recv() {
+                    Ok(result) => {
+                        completed = Some(result);
+                        Ok(true)
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => Ok(false),
+                    Err(_) => Err("Sign-in worker stopped unexpectedly".into()),
+                },
+            )?;
+            if completed.is_some() || answer.is_none() {
+                break;
+            }
+            if !submitted {
+                manual_tx
+                    .try_send(answer.unwrap())
+                    .map_err(|_| "Sign-in is no longer waiting for a redirect")?;
+                submitted = true;
+            }
+        }
+        Ok(())
+    })();
+    cancel.send_replace(true);
+    let joined = worker.join();
+    let cleared = output.clear_auth_url();
+    ui_result?;
+    joined.map_err(|_| "Sign-in worker stopped unexpectedly")?;
+    cleared?;
+    let Some(token) = completed else {
+        return Ok(AuthOutcome::Cancelled);
+    };
+    // Cancellation never commits, and failed attempts preserve the previous login.
+    save(token?)?;
+    Ok(AuthOutcome::Success)
+}
+
+fn open_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("/usr/bin/open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    // Unlike `cmd /c start`, this passes a URL containing `&` through intact.
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("rundll32.exe");
+        c.arg("url.dll,FileProtocolHandler");
+        c
+    };
+    if let Ok(mut child) = command
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+}

@@ -1,13 +1,8 @@
 //! Native tools for agent-authored extensions. No user-facing setup commands.
 use super::*;
+use crate::sys::{DirBuilderExt, OpenOptionsExt};
 use serde::Deserialize;
-use std::{
-    collections::HashSet,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::Component,
-    sync::RwLock,
-};
+use std::{collections::HashSet, io::Write, path::Component, sync::RwLock};
 
 #[derive(Clone, Copy)]
 pub(crate) enum AgentTool {
@@ -257,7 +252,7 @@ pub(super) fn create_at(root: &Path, args: &Value, registry: &Registry) -> Resul
         output.write_all(file.content.as_bytes())?;
     }
     // The manifest is last: discovery never loads a half-written declaration.
-    crate::runtime::config::atomic(&directory.join("extension.json"), &bytes)?;
+    crate::engine::config::atomic(&directory.join("extension.json"), &bytes)?;
     Ok(directory)
 }
 pub(crate) fn definitions() -> Vec<Value> {

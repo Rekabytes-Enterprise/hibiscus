@@ -1,0 +1,76 @@
+# Desktop app plan
+
+Status: Phase 0 done; Phase 1 in progress (the app runs from source; packaging in releases is next). The engine protocol is in [protocol.md](protocol.md).
+
+Hibiscus has a desktop app for **macOS Apple Silicon**, **Linux x86_64** and **Windows x64** (see [Windows](later-windows.md)). The CLI and TUI stay as they are; the desktop app is an extra way to use the same engine.
+
+## Phases
+
+| Phase | Doc | Result | Users see a change? |
+|---|---|---|---|
+| 0 | [Library API](phase-0-library.md) (done) | The engine can be driven from code other than the terminal UI | No |
+| 1 | [Desktop MVP](phase-1-mvp.md) | Tauri app, `.dmg` and `.AppImage` in the release ([Desktop release](release.md)), desktop install script | Yes |
+| 2 | [Updates and polish](phase-2-updates.md) | Signed auto-updates, window state, notifications | Yes |
+| Windows | [Windows](later-windows.md) | Native Windows port and `.exe` installer | Yes |
+
+Each phase ships on its own and leaves `main` releasable.
+
+## Fixed decisions
+
+- **Framework:** Tauri v2. The engine runs inside the app process, the same way the TUI runs it today, with no local server or open port of its own. The one bundled side program is agent-browser, for the browser tool (see [Browser](#browser)).
+- **Platforms:** `aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`. Intel Mac and Linux ARM are not in the first release.
+- **Signing:** no Apple Developer or Windows accounts for now. macOS builds get a free ad-hoc signature. Desktop files get their own `SHA256SUMS-desktop` and sigstore provenance in the same release ([Desktop release](release.md)). The updater uses its own Tauri signing key. See [Unsigned distribution](#unsigned-distribution).
+- **Products:** this is Hibiscus work only. It does not change the Rooxcode Gateway's code, behaviour or tests; the gateway stays one provider inside the engine.
+
+## Running from source
+
+Needs Node 20+, Rust and, on Linux, the [Tauri system packages](https://v2.tauri.app/start/prerequisites/) (`libwebkit2gtk-4.1-dev` and friends).
+
+```bash
+cd desktop
+npm install
+npm run tauri dev      # fetches agent-browser, opens the app; reloads on frontend changes
+npm test               # frontend unit tests
+npm run check          # Svelte/TypeScript checks
+npm run tauri build    # .app/.dmg on macOS, .AppImage/.deb on Linux, under src-tauri/target/release/bundle/
+```
+
+If the macOS `.dmg` step fails with "Finder got an error: AppleEvent timed out", run it as `CI=true npm run tauri build`; that skips the Finder window-layout step, as GitHub Actions does.
+
+The app uses the same `~/.hibiscus` (or `HIBISCUS_HOME`) config, keys and sessions as the terminal app. A Dock or menu launch copies the login shell's environment (PATH, provider key variables) so tools behave as they do in a terminal; set `HIBISCUS_DESKTOP_KEEP_ENV=1` to skip that.
+
+## Phase 1 decisions
+
+1. **UI:** a real GUI on the [engine protocol](protocol.md) (decided).
+2. **App name and bundle ID:** Rooxcode-branded (decided). `tauri.conf.json` uses the placeholder `com.rooxcode.hibiscus`; confirm the domain before the first release. Choose once: the updater and macOS settings key off it.
+3. **Linux:** `x86_64` only for the first release (decided).
+4. **Frontend:** Svelte 5 + TypeScript (decided).
+
+## Unsigned distribution
+
+| Platform | First launch | How the user gets past it |
+|---|---|---|
+| Linux | No prompt | `chmod +x` the AppImage, or install the `.deb` |
+| macOS, installed with `install-desktop.sh` | No prompt (`curl` does not set the quarantine flag) | Nothing |
+| macOS, `.dmg` from a browser | "Apple cannot check it for malicious software" | Try to open once, then System Settings → Privacy & Security → **Open Anyway** |
+
+Not possible without an Apple account: Homebrew casks, the Mac App Store, and a warning-free first launch from a browser download. Adding signing later only changes the release workflow, not the app.
+
+## Browser
+
+The engine's `browser` tool lets Hibi open and test web pages, and the browser pane shows them live. Both use [agent-browser](https://github.com/vercel-labs/agent-browser) (Apache-2.0), which the app bundles as a Tauri `externalBin`. Users install nothing.
+
+- `desktop/scripts/agent-browser.sh` fetches the pinned version for the build target and checks its SHA-256. `npm run tauri` runs it first, so `tauri dev` and release builds both bundle the same binary. To update agent-browser, change the version and both checksums in that script.
+- At startup the app sets `HIBISCUS_AGENT_BROWSER` to the bundled binary. The engine offers the `browser` tool only when that is set, so the CLI and TUI don't have it.
+- The tool runs every command in the `hibiscus` agent-browser session, headless. It refuses commands that manage agent-browser itself and flags that would attach the user's own Chrome or profile (`--profile`, `--cdp`, `--auto-connect` and similar).
+- agent-browser uses its own Chrome for Testing, or Google Chrome when it's installed. If it finds neither, the tool downloads Chrome for Testing once, about 150 MB, into `~/.agent-browser/browsers`, and retries.
+- The pane reads the session's stream port with `agent-browser stream status` and connects through the Tauri WebSocket plugin from Rust, because the stream accepts only localhost page origins and the Linux app's origin is `http://tauri.localhost`. The pane sizes the page to fit itself with `set viewport`, and uses ack pacing so the stream sends a new frame only after the last one is drawn. Frames are shown and never stored. Closing the pane, or quitting the app, closes the browser, so it starts blank next time.
+
+### Dev servers
+
+The app runs one dev server per folder for the pane and for Hibi's `dev_server` tool (`src/devserver.rs`).
+
+- The pane's empty state offers to start the project's usual command when no server is running: the `dev`, `start`, `serve` or `preview` script from `package.json` (run with pnpm, yarn, bun or npm by lockfile), `python3 manage.py runserver`, `bin/rails server`, or `python3 -m http.server 8000` for a folder with an `index.html`.
+- Hibi's tool starts, checks, reads and stops the same server. `start` waits up to 60 seconds for the first local URL in the output and returns it. A running server is reused, not started twice.
+- The server runs in its own process group with `BROWSER=none` and `PYTHONUNBUFFERED=1`. The app keeps its last 1,000 lines of output, which the pane shows under the page.
+- Opening another folder, removing the folder from the sidebar, or quitting the app stops the folder's server and everything it started.

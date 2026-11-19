@@ -97,6 +97,8 @@ fn first_launch_without_credentials_shows_welcome_and_empty_logout_keeps_no_acti
     let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
     config.as_object_mut().unwrap().remove("model");
     fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    // No Reka Bytes session either, so there's nothing to log out of.
+    fs::remove_file(f.root.join("app/rooxcode-auth.json")).unwrap();
     let mut command = f.command();
     command.env_remove("HIBISCUS_TEST_NATIVE_KEY");
     let mut tty = Pty::spawn(&mut command);
@@ -124,6 +126,7 @@ fn first_launch_without_credentials_shows_welcome_and_empty_logout_keeps_no_acti
 #[test]
 fn empty_logout_keeps_environment_authenticated_model_available() {
     let f = Fixture::new("responses", vec![]);
+    fs::remove_file(f.root.join("app/rooxcode-auth.json")).unwrap();
     let mut tty = Pty::spawn(&mut f.command());
     tty.wait_text("test/model");
     tty.send(b"/logout\r");

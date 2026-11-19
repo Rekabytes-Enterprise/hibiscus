@@ -16,6 +16,8 @@ TOOLCHAIN = "nightly-2026-10-01"
 # Dedicated test files are also excluded by cargo-llvm-cov's default filters.
 # Inline unit-test code remains in the source-file denominator; do not call this
 # production-only coverage or use it to attest the Best Practices 80% criterion.
+# Lines of the test log shown when the tests fail.
+LOG_TAIL = 80
 IGNORE = r"/tests/|/src/fuzzing.rs$|/src/[^ ]*/fuzzing.rs$"
 METRICS = ("lines", "regions", "functions", "branches")
 
@@ -82,10 +84,15 @@ def run(output):
     with (ROOT / "target/coverage.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with (output / "tests.log").open("w") as log:
-            subprocess.run(cargo + ["--locked", "--package", "hibiscus", "--features", "fuzzing",
-                                   "--branch", "--json", "--output-path", str(output / "coverage.json"),
-                                   "--ignore-filename-regex", IGNORE], cwd=ROOT, env=env,
-                           stdout=log, stderr=subprocess.STDOUT, check=True)
+            tests = subprocess.run(cargo + ["--locked", "--package", "hibiscus", "--features", "fuzzing",
+                                           "--branch", "--json", "--output-path", str(output / "coverage.json"),
+                                           "--ignore-filename-regex", IGNORE], cwd=ROOT, env=env,
+                                   stdout=log, stderr=subprocess.STDOUT)
+        if tests.returncode:
+            # The log is not uploaded, so show which test failed before giving up.
+            print("".join((output / "tests.log").read_text(errors="replace").splitlines(True)[-LOG_TAIL:]),
+                  file=sys.stderr)
+            tests.check_returncode()
         measured = summary(json.loads((output / "coverage.json").read_text()))
         subprocess.run(cargo + ["report", "--branch", "--html", "--output-dir", str(output),
                                "--ignore-filename-regex", IGNORE], cwd=ROOT, env=env, check=True)

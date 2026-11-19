@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - dev
-      - main
   pull_request:
     branches:
       - dev
@@ -20,6 +19,8 @@ concurrency:
 
 jobs:
   lint:
+    # A release promotion (this repo's dev into main) is the exact commit already checked on the push to dev.
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'dev' || github.event.pull_request.head.repo.full_name != github.repository
     name: Format, Clippy, and installer
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -70,6 +71,8 @@ jobs:
         run: sh -n install.sh && sh -n scripts/bump-version.sh && sh tests/install.sh && sh tests/bump-version.sh
 
   test:
+    # A release promotion (this repo's dev into main) is the exact commit already checked on the push to dev.
+    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'dev' || github.event.pull_request.head.repo.full_name != github.repository
     name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -77,8 +80,12 @@ jobs:
         os:
           - ubuntu-latest
           - macos-15
+          # The desktop app's engine. The PTY and Unix-fixture tests are
+          # cfg(unix), so this runs the unit tests and tests/desktop_api.rs.
+          - windows-latest
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Cold Rust builds on Windows runners take about twice as long.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,14 +94,18 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Test npm installer without downloads
+        # The npm package ships macOS and Linux binaries only.
+        if: runner.os != 'Windows'
         run: node tests/npm-install.mjs
+      - name: Build Rust tests
+        run: cargo test --locked --no-run
       - name: Run Rust tests
         timeout-minutes: 5
         # PTY fixtures must configure their own terminal, not inherit the runner's.

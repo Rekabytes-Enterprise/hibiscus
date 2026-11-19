@@ -7,6 +7,7 @@ Start with [Native runtime migration](native-runtime.md). Performance/profiling 
 - [Terminal UI](terminal.md) — shortcuts, scrolling, pickers, progress, and fallbacks.
 - [Error handling and recovery](error-handling.md) — native failures, draft restoration, cancellation, and reconnecting without automatic replay.
 - [RPC transport](rpc-transport.md) — queue budgets, overload recovery, blocked writes, cancellation, and pressure tests.
+- [Desktop app plan](desktop/README.md) — phased plan and protocol for the macOS and Linux desktop app.
 - [Development](development.md) — build, tests, manual checks, and project records.
 - [Security policy](../SECURITY.md) — private vulnerability reporting, supported versions, and execution limits.
 - [Security checks](development/security-checks.md) — protected branches, dependency audits, CodeQL, and the single-maintainer review policy.

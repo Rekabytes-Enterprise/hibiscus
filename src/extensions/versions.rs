@@ -1,17 +1,13 @@
 //! Complete version bundles and one atomic commit point. No process execution.
 use super::{manifest, Registry};
-use crate::{runtime::config, Result};
+use crate::sys::{DirBuilderExt, OpenOptionsExt};
+use crate::{engine::config, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
-    },
     path::{Component, Path, PathBuf},
 };
 
@@ -187,9 +183,9 @@ fn tree(directory: &Path) -> Result<(Inventory, BTreeMap<String, Vec<u8>>)> {
                 files.insert(
                     rel.into(),
                     Fingerprint {
-                        sha256: format!("{:x}", Sha256::digest(&bytes)),
+                        sha256: crate::sha256_hex(&bytes),
                         bytes: bytes.len(),
-                        executable: metadata.permissions().mode() & 0o111 != 0,
+                        executable: crate::sys::executable(&path, &metadata),
                     },
                 );
                 data.insert(rel.into(), bytes);
@@ -203,7 +199,7 @@ fn tree(directory: &Path) -> Result<(Inventory, BTreeMap<String, Vec<u8>>)> {
     Ok((files, data))
 }
 fn digest(files: &Inventory) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(files)?)))
+    Ok(crate::sha256_hex(&serde_json::to_vec(files)?))
 }
 fn changes(before: &Inventory, after: &Inventory) -> Vec<Change> {
     before
@@ -229,9 +225,7 @@ fn changes(before: &Inventory, after: &Inventory) -> Vec<Change> {
 pub(super) struct Lock(File);
 impl Drop for Lock {
     fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-        }
+        let _ = self.0.unlock();
     }
 }
 pub(super) fn lock(root: &Path) -> Result<Lock> {
@@ -242,7 +236,7 @@ pub(super) fn lock(root: &Path) -> Result<Lock> {
         .write(true)
         .mode(0o600)
         .open(root.join(STORAGE).join("lock"))?;
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if file.try_lock().is_err() {
         return Err(
             "Another extension activation is in progress; retry with the current version".into(),
         );
@@ -443,7 +437,7 @@ impl Store {
             if old != new {
                 match (std::str::from_utf8(&old), std::str::from_utf8(&new)) {
                     (Ok(old), Ok(new)) if old.len() + new.len() <= 131072 => {
-                        let (preview, _, _) = crate::runtime::edit_diff(old, new);
+                        let (preview, _, _) = crate::engine::edit_diff(old, new);
                         text.push_str(&preview);
                     }
                     _ => text.push_str("[Binary or large file content changed]\n"),
@@ -571,7 +565,7 @@ impl Candidate {
             self.record.files = files;
         }
         self.record.validation = Validation::Failed {
-            message: crate::runtime::error::safe_message(message),
+            message: crate::client::error::safe_message(message),
             checks,
         };
         self.save()
@@ -603,9 +597,9 @@ impl Candidate {
             .join(&self.record.version);
         private_dir(destination.parent().ok_or("Missing versions parent")?)?;
         sync_dirs(&self.files())?;
-        File::open(&self.directory)?.sync_all()?;
+        crate::sys::sync_dir(&self.directory)?;
         fs::rename(&self.directory, &destination)?;
-        File::open(destination.parent().ok_or("Missing versions parent")?)?.sync_all()?;
+        crate::sys::sync_dir(destination.parent().ok_or("Missing versions parent")?)?;
         let state = State {
             active: self.record.version.clone(),
             source_digest: self.source_digest.clone(),
@@ -614,7 +608,7 @@ impl Candidate {
             &self.store.home().join("active.json"),
             &serde_json::to_vec(&state)?,
         )?;
-        File::open(self.store.home())?.sync_all()?;
+        crate::sys::sync_dir(&self.store.home())?;
         Ok(self.record.clone())
     }
 }
@@ -625,6 +619,6 @@ fn sync_dirs(dir: &Path) -> Result<()> {
             sync_dirs(&path)?;
         }
     }
-    File::open(dir)?.sync_all()?;
+    crate::sys::sync_dir(dir)?;
     Ok(())
 }

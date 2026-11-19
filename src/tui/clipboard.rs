@@ -3,16 +3,20 @@
 use serde_json::{json, Value};
 use std::{
     env,
-    io::{self, Read},
-    os::{fd::AsRawFd, unix::process::CommandExt},
-    process::{Command, Stdio},
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
         Arc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
+};
+#[cfg(unix)]
+use std::{
+    io::{self, Read},
+    process::Stdio,
+    time::Instant,
 };
 
 const MAX_IMAGE: usize = 10 * 1024 * 1024;
@@ -171,12 +175,19 @@ fn image_content(bytes: &[u8]) -> Result<crate::ui::display::SharedImage, String
     Ok(Arc::new(image))
 }
 
+#[cfg(windows)]
+fn capture(_: &mut Command, _: Duration, _: usize, _: &AtomicBool) -> Result<Vec<u8>, String> {
+    Err("Pasting images isn't available on Windows yet".into())
+}
+
+#[cfg(unix)]
 fn capture(
     command: &mut Command,
     timeout: Duration,
     limit: usize,
     cancelled: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
+    use std::os::{fd::AsRawFd, unix::process::CommandExt};
     if cancelled.load(Ordering::Relaxed) {
         return Err("Clipboard read cancelled".into());
     }
@@ -241,7 +252,7 @@ fn capture(
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

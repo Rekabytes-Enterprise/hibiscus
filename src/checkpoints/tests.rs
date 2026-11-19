@@ -422,6 +422,13 @@ fn explicit_pruning_retains_active_and_pending_requests_and_collects_only_orphan
     assert_eq!(result["deletedCheckpoints"].as_array().unwrap().len(), 2);
 }
 #[test]
+fn digest_is_lowercase_hex_sha256() {
+    assert_eq!(
+        files::digest(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+}
+#[test]
 fn workspace_lock_serializes_writers_and_record_permissions_are_private() {
     let f = Fixture::new();
     let store = f.store();
@@ -476,7 +483,7 @@ fn full_checkpoint_store_refuses_a_new_write_without_changing_the_project() {
             id: Id::new(),
             workspace: store.workspace.clone(),
             session_id: "s".into(),
-            created_at: crate::runtime::config::unique().to_string(),
+            created_at: crate::engine::config::unique().to_string(),
             files: BTreeMap::new(),
         };
         store.save(&record).unwrap();

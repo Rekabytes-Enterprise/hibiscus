@@ -32,7 +32,7 @@ Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, se
 
 ## Making a change
 
-1. Keep the change focused and follow the [module map](docs/architecture.md). Shared workflows belong in `src/chat/`, the agent in `src/runtime/`, extensions in `src/extensions/`, file recovery in `src/checkpoints/`, and presentation in `src/cli/`, `src/tui/` or `src/ui/`. Update docs when usage, layout, or behavior changes.
+1. Keep the change focused and follow the [module map](docs/architecture.md). Shared workflows belong in `src/chat/`, the agent in `src/engine/`, its terminal client in `src/client/`, extensions in `src/extensions/`, file recovery in `src/checkpoints/`, and presentation in `src/cli/`, `src/tui/` or `src/ui/`. Update docs when usage, layout, or behavior changes.
 2. Add automated tests for every major new feature. For other behavior changes and bug fixes, add a unit or integration regression test when feasible and explain any testing gap in the PR. Local HTTP fixtures are suitable for provider behavior; use a controlling PTY for input/rendering/authentication behavior. Drain PTY output concurrently.
 3. Run:
 
@@ -56,7 +56,7 @@ For `/login`, keep key entry masked and store credentials only in Hibiscus's pri
 
 ## Required checks and review
 
-Both `dev` and `main` require passing Linux/macOS tests, formatting/Clippy/installer checks, the RustSec dependency audit, and CodeQL analysis for Rust, JavaScript/TypeScript, Python and GitHub Actions. Update your PR branch when its target changes and resolve review threads before merging. The current single-maintainer policy has no independent-approval requirement or configured bypass actor. See [security checks and protected branches](docs/development/security-checks.md) for exact check names, scanner coverage, the future independent-review requirement and administrator recovery.
+Both `dev` and `main` require passing Linux/macOS tests (a `dev` → `main` release promotion reuses the results of the push to `dev`), formatting/Clippy/installer checks, the RustSec dependency audit, and CodeQL analysis for Rust, JavaScript/TypeScript, Python and GitHub Actions. Update your PR branch when its target changes and resolve review threads before merging. The current single-maintainer policy has no independent-approval requirement or configured bypass actor. See [security checks and protected branches](docs/development/security-checks.md) for exact check names, scanner coverage, the future independent-review requirement and administrator recovery.
 
 Native parser fuzzing, local reproduction and crash triage are documented in [the fuzzing guide](docs/development/fuzzing.md).
 

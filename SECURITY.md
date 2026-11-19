@@ -18,6 +18,20 @@ If the form is unavailable, open a public issue asking only for a private report
 
 Security fixes target the [latest stable GitHub release](https://github.com/Rekabytes-Enterprise/hibiscus/releases/latest). Upgrade to that release before testing whether a problem still occurs, when it is safe to do so. Older releases do not receive a separate security backport stream. Reports affecting older versions or unreleased development code are still welcome; state the exact version or commit.
 
+## Desktop application
+
+The Hibiscus desktop app is covered by this security policy. Report suspected
+desktop vulnerabilities through the same private reporting form, including the
+affected desktop release and operating system.
+
+Desktop releases are currently unsigned for distribution: macOS builds have an
+ad-hoc signature, but no Apple Developer ID signature or notarization. macOS may
+warn on first launch. Before installing a downloaded desktop release, compare
+its SHA-256 digest with `SHA256SUMS-desktop` from the **same GitHub release** and
+review the accompanying signed provenance file,
+`hibiscus-desktop-provenance.sigstore.json`. See the
+[desktop release verification guide](docs/desktop/release.md) for details.
+
 ## Triage and coordinated disclosure
 
 Maintainers use the private report to assess impact, ask for reproduction details, and coordinate a fix and disclosure with the reporter. Response and remediation times depend on maintainer availability and the issue's complexity; there is no guaranteed response deadline or service-level agreement.

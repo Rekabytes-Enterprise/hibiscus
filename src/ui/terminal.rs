@@ -1,18 +1,45 @@
 use crate::Result;
 use std::fs::File;
-use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-use std::sync::mpsc::{self, Receiver};
+#[cfg(unix)]
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
 use std::thread;
 
 /// Owns a terminal in raw mode, independent of piped chat input/output.
 /// The independently opened, nonblocking reader can be stopped before handoff.
+///
+/// Windows has no raw console support yet: `open` finds no terminal there, so
+/// the CLI runs as it does with piped input. The desktop app does not use this.
 pub(crate) struct Terminal {
+    #[cfg(unix)]
     tty: File,
+    #[cfg(unix)]
     original: libc::termios,
+    #[cfg(windows)]
+    _never: std::convert::Infallible,
 }
 
+#[cfg(windows)]
+impl Terminal {
+    pub(crate) fn open() -> Option<Self> {
+        None
+    }
+    pub(crate) fn events(&self) -> io::Result<TerminalEvents> {
+        match self._never {}
+    }
+    pub(crate) fn raw(&self) -> io::Result<RawMode> {
+        match self._never {}
+    }
+}
+
+#[cfg(unix)]
 impl Terminal {
     pub(crate) fn open() -> Option<Self> {
         let tty = File::options()
@@ -97,7 +124,7 @@ impl Terminal {
                                 return;
                             }
                         }
-                        crate::runtime::transport::signal_activity();
+                        crate::client::transport::signal_activity();
                     }
                     Err(error)
                         if matches!(
@@ -156,12 +183,19 @@ impl Drop for TerminalEvents {
 }
 
 pub(crate) struct RawMode {
+    #[cfg(unix)]
     fd: i32,
+    #[cfg(unix)]
     original: libc::termios,
     tty: File,
 }
 
 impl RawMode {
+    #[cfg(windows)]
+    pub(crate) fn size(&self) -> (usize, usize) {
+        size()
+    }
+    #[cfg(unix)]
     pub(crate) fn size(&self) -> (usize, usize) {
         let mut size: libc::winsize = unsafe { std::mem::zeroed() };
         if unsafe { libc::ioctl(self.fd, libc::TIOCGWINSZ, &mut size) } == 0
@@ -179,6 +213,7 @@ impl RawMode {
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawMode {
     fn drop(&mut self) {
         // SAFETY: fd is owned by Terminal and remains open for this guard's lifetime.
@@ -228,6 +263,12 @@ pub(crate) fn read_line(events: &Receiver<u8>, raw: &mut RawMode) -> Result<Opti
 }
 
 /// Current output dimensions, shared by fullscreen layout and inline wrapping.
+#[cfg(windows)]
+pub(crate) fn size() -> (usize, usize) {
+    (80, 24)
+}
+/// Current output dimensions, shared by fullscreen layout and inline wrapping.
+#[cfg(unix)]
 pub(crate) fn size() -> (usize, usize) {
     let mut size = libc::winsize {
         ws_row: 0,
@@ -246,7 +287,7 @@ pub(crate) fn size() -> (usize, usize) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::fd::FromRawFd;

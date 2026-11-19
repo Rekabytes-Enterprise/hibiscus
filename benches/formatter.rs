@@ -1,6 +1,6 @@
 //! Run with `cargo bench --bench formatter`. Timings are diagnostic, not CI gates.
 #![allow(dead_code)]
-#[path = "../src/tui/markdown.rs"]
+#[path = "../src/tui/markdown/mod.rs"]
 mod markdown;
 use std::{hint::black_box, time::Instant};
 

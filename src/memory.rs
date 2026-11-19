@@ -122,7 +122,7 @@ fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
     directory(parent)?;
     let temp = parent.join(format!(
         ".memory-{:032x}.tmp",
-        crate::runtime::config::unique()
+        crate::engine::config::unique()
     ));
     let result = (|| -> Result<()> {
         let mut file = fs::OpenOptions::new()
@@ -178,7 +178,7 @@ pub(crate) fn backup(home: &Path, target: &Path, previous: &[u8]) -> Result<()> 
     let revisions = target.with_file_name("revisions");
     directory(&revisions)?;
     publish(
-        &revisions.join(format!("{:032x}.md", crate::runtime::config::unique())),
+        &revisions.join(format!("{:032x}.md", crate::engine::config::unique())),
         previous,
     )?;
     let mut files = fs::read_dir(&revisions)?

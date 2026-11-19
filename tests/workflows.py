@@ -52,7 +52,8 @@ class WorkflowPolicy(unittest.TestCase):
         text = (ROOT / '.github/workflows/coverage.yml').read_text()
         for forbidden in ['pull_request_target:', ': write', 'secrets.', 'continue-on-error:', 'if: always()']:
             self.assertNotIn(forbidden, text)
-        self.assertEqual(text.count('branches: [dev, main]'), 2)
+        self.assertIn('  push:\n    branches: [dev]\n', text)
+        self.assertIn('  pull_request:\n    branches: [dev, main]\n', text)
         self.assertIn('toolchain: nightly-2026-10-01', text)
         self.assertIn('components: llvm-tools-preview', text)
         self.assertIn('/v0.9.1/', text)
@@ -69,12 +70,26 @@ class WorkflowPolicy(unittest.TestCase):
                 section = re.search(r'^  ' + event + r':\n(.*?)(?=^  \w|\npermissions:)',
                                     text, re.M | re.S)[1]
                 self.assertIn('dev', section)
-                self.assertIn('main', section)
+                # Pull requests into main are checked; pushes to main are merges of checked PRs.
+                (self.assertIn if event == 'pull_request' else self.assertNotIn)('main', section)
                 self.assertNotIn('paths:', section)
                 self.assertNotIn('paths-ignore:', section)
             for unsafe in ['pull_request_target:', 'secrets.', 'secrets: inherit',
                            'contents: write', 'id-token: write']:
                 self.assertNotIn(unsafe, text)
+
+    def test_only_same_repository_dev_promotions_into_main_skip_checks(self):
+        condition = ("if: github.event_name != 'pull_request' || github.base_ref != 'main' || "
+                     "github.head_ref != 'dev' || github.event.pull_request.head.repo.full_name != github.repository")
+        for name, jobs in {'ci.yml': ['lint', 'test'], 'codeql.yml': ['analyze'],
+                           'dependency-security.yml': ['audit'], 'coverage.yml': ['coverage'],
+                           'fuzzing.yml': ['fuzz']}.items():
+            source = (ROOT / '.github/workflows' / name).read_text()
+            for job_name in jobs:
+                self.assertIn(condition, job(source, job_name), (name, job_name))
+        # main itself is still covered by the default-branch schedules.
+        for name in ['codeql.yml', 'dependency-security.yml', 'fuzzing.yml']:
+            self.assertIn('schedule:', (ROOT / '.github/workflows' / name).read_text())
 
     def test_codeql_uses_isolated_upload_permissions_and_actual_rust_probe(self):
         text = (ROOT / '.github/workflows/codeql.yml').read_text()
@@ -293,6 +308,75 @@ class WorkflowPolicy(unittest.TestCase):
         self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', source)
 
 
+class DesktopReleasePolicy(unittest.TestCase):
+    """release-desktop.yml adds the desktop app to release.yml's draft without changing it."""
+    source = (ROOT / '.github/workflows/release-desktop.yml').read_text()
+
+    def test_only_tags_from_main_publish_and_builds_cannot_write(self):
+        authorize = job(self.source, 'verify')
+        self.assertIn('if [ -n "$RELEASE_TAG" ]; then branches=main; else branches="main dev"; fi', authorize)
+        self.assertIn('\npermissions:\n  contents: read\n', self.source)
+        self.assertEqual(self.source.count('contents: write'), 1)
+        self.assertIn('contents: write', job(self.source, 'publish'))
+        self.assertEqual(self.source.count('id-token: write'), 1)
+        self.assertIn('id-token: write', job(self.source, 'provenance'))
+        for name in ['verify', 'macos_arm64', 'linux_x64', 'windows_x64', 'sign_updates']:
+            block = job(self.source, name)
+            self.assertNotIn(': write', block)
+            if name != 'verify':
+                self.assertNotIn('GH_TOKEN', block)
+        for name in ['sign_updates', 'provenance', 'publish']:
+            self.assertIn("if: github.event_name == 'push'\n", job(self.source, name))
+        # The build checks out only the commit that triggered the run, never a computed ref.
+        self.assertNotIn('inputs.', self.source)
+        self.assertNotIn('ref: ${{', self.source)
+        for unsafe in ['pull_request', 'secrets: inherit']:
+            self.assertNotIn(unsafe, self.source)
+
+    def test_only_the_update_signer_sees_a_secret_and_runs_no_repository_code(self):
+        signer = job(self.source, 'sign_updates')
+        self.assertEqual(sorted(set(re.findall(r'secrets\.\w+', self.source))),
+                         ['secrets.TAURI_SIGNING_PRIVATE_KEY', 'secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD'])
+        self.assertEqual(self.source.count('secrets.'), signer.count('secrets.'))
+        for unsafe in ['actions/checkout@', 'npm ci', 'cargo ', 'run build']:
+            self.assertNotIn(unsafe, signer)
+        self.assertIn('--ignore-scripts @tauri-apps/cli@2.', signer)
+        self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign the update files'))
+
+    def test_builds_use_the_authorized_commit_and_pinned_toolchains(self):
+        for name in ['macos_arm64', 'linux_x64', 'windows_x64']:
+            block = job(self.source, name)
+            self.assertIn('test "$(git rev-parse HEAD)" = "$AUTHORIZED_COMMIT"', block)
+            self.assertIn('toolchain: 1.99.1', block)
+            self.assertIn('npm ci', block)
+        self.assertIn('--bundles app,dmg', job(self.source, 'macos_arm64'))
+        self.assertIn('--bundles appimage', job(self.source, 'linux_x64'))
+        self.assertIn('--bundles nsis', job(self.source, 'windows_x64'))
+        # Every build is part of a tag release, and the updater gets every platform.
+        self.assertNotIn("if: github.event_name == 'workflow_dispatch'", self.source)
+        self.assertIn('needs: [verify, macos_arm64, linux_x64, windows_x64]', job(self.source, 'sign_updates'))
+        self.assertIn('"windows-x86_64": {signature: $windows_sig, url: $windows_url}', job(self.source, 'sign_updates'))
+        self.assertNotIn('cargo ', job(self.source, 'publish'))
+
+    def test_signed_files_are_receipt_checked_and_published_only_into_a_draft(self):
+        signer = job(self.source, 'provenance')
+        self.assertLess(signer.index('name: Verify build receipts'), signer.index('name: Sign desktop files'))
+        self.assertIn('test "${#files[@]}" -eq 12', signer)
+        self.assertIn('sign_updates', signer)
+        # GitHub's attestation API rejects SLSA provenance without internalParameters.
+        self.assertIn('"internalParameters":{"github":{"event_name":', signer)
+        publisher = job(self.source, 'publish')
+        self.assertIn('test "$draft" = true', publisher)
+        self.assertNotIn('gh release create', publisher)
+        self.assertNotIn('actions/checkout@', publisher)
+        self.assertLess(publisher.index('test "$draft" = true'), publisher.index('gh release upload'))
+
+    def test_app_version_follows_the_release_version(self):
+        config = json.loads((ROOT / 'desktop/src-tauri/tauri.conf.json').read_text())
+        self.assertEqual(config['version'], '../../package.json')
+        self.assertEqual(config['identifier'], 'com.rooxcode.hibiscus')
+
+
 class ReleaseShell(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='hibiscus-workflow-')
@@ -464,6 +548,16 @@ if sys.argv[1:3] not in [['release','upload'],['release','create']]: sys.exit(9)
                 if not exists:
                     self.assertIn('--verify-tag', calls[-1])
                     self.assertIn('--draft', calls[-1])
+                    self.assertIn('--generate-notes', calls[-1])
+                    notes = Path(calls[-1][calls[-1].index('--notes-file') + 1]).read_text()
+                    self.assertTrue(notes.startswith('## Download\n'))
+                    base = 'https://github.com/fixture/repo/releases/download/v1.2.3/'
+                    for name in ['hibiscus-desktop-aarch64-apple-darwin.dmg',
+                                 'hibiscus-desktop-x86_64-pc-windows-msvc-setup.exe',
+                                 'hibiscus-desktop-x86_64.AppImage']:
+                        self.assertIn('](' + base + name + ')', notes)
+                    self.assertIn('`curl -fsSL https://raw.githubusercontent.com/fixture/repo/v1.2.3/install.sh '
+                                  '\\| HIBISCUS_VERSION=v1.2.3 sh`', notes)
                 self.assertEqual(len((self.root / 'dist/SHA256SUMS').read_text().splitlines()), 4)
 
     def test_normal_rebuild_also_refuses_an_already_published_release(self):

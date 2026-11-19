@@ -1,3 +1,5 @@
+// The evaluation harness drives the CLI with Unix process groups.
+#![cfg(unix)]
 use std::process::Command;
 
 #[test]
