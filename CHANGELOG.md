@@ -8,6 +8,10 @@ All notable changes to Hibiscus are documented here.
 
 - Hibiscus Desktop: switch sessions while the agent works. A running turn, such as a canvas video build, keeps going in the background, its session shows a spinner in the sidebar, and opening it again shows the live conversation and catches its canvas up. Up to 3 turns run in the background at once, and quitting asks first when any are still working.
 
+### Fixed
+
+- Hibiscus Desktop: a deleted folder no longer stays in the sidebar. The app drops it at launch, and clicking one that was deleted since says so instead of "No such file or directory (os error 2)".
+
 ## [0.4.3] - 2026-11-19
 
 ### Added
