@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import type { RekaAccount, SavedSession } from "./engine";
   import Icon from "./Icon.svelte";
   import Menu from "./Menu.svelte";
@@ -25,6 +26,7 @@
     account,
     onsignin,
     onsignout,
+    update,
   }: {
     home: string;
     groups: { folder: string; sessions: SavedSession[] }[];
@@ -53,6 +55,8 @@
     account: RekaAccount | null;
     onsignin: () => void;
     onsignout: () => void;
+    /** The update row, shown above the profile when a new version is out. */
+    update?: Snippet;
   } = $props();
 
   // Signed out, the footer shows the computer's user.
@@ -143,6 +147,7 @@
       {/if}
     {/each}
   </div>
+  {@render update?.()}
   <footer>
     <div class="menu profile grow" bind:this={profile}>
       <button class="profilebtn" aria-haspopup="menu" aria-expanded={profileOpen} onclick={() => (profileOpen = !profileOpen)}>

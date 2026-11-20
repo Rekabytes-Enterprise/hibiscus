@@ -61,13 +61,18 @@
 </script>
 
 {#if update}
-  <div class="banner update" role="status">
-    <span class="grow">{status(update.version, progress)}</span>
+  <!-- A row above the profile in the sidebar, like "Relaunch to update". -->
+  <div class="updaterow" class:failed={progress.phase === "failed"} role="status">
     {#if progress.phase === "available" || progress.phase === "failed"}
-      <button class="primary" onclick={install} disabled={busy} title={busy ? "Wait for the current turn to finish" : undefined}><Icon name="download" size={14} /> Update</button>
+      <button class="grow" onclick={install} disabled={busy} title={busy ? "Wait for the running sessions to finish" : progress.phase === "failed" ? progress.error : `Install Hibiscus ${update.version} and relaunch`}>
+        <span class="grow ellipsis">{status(update.version, progress)}</span>
+        <Icon name="arrow-right" size={14} />
+      </button>
+    {:else}
+      <span class="grow ellipsis">{status(update.version, progress)}</span>
     {/if}
     {#if !working}
-      <button class="link" onclick={() => openUrl(`https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v${update!.version}`).catch(() => {})}>View release</button>
+      <button class="iconbtn" onclick={() => openUrl(`https://github.com/Rekabytes-Enterprise/hibiscus/releases/tag/v${update!.version}`).catch(() => {})} title="View release" aria-label="View release"><Icon name="arrow-up-right" size={14} /></button>
       <button class="iconbtn" onclick={dismiss} title="Dismiss" aria-label="Dismiss update"><Icon name="x" size={14} /></button>
     {/if}
   </div>

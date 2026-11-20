@@ -12,6 +12,10 @@ All notable changes to Hibiscus are documented here.
 
 - Hibiscus Desktop: a deleted folder no longer stays in the sidebar. The app drops it at launch, and clicking one that was deleted since says so instead of "No such file or directory (os error 2)".
 
+### Changed
+
+- Hibiscus Desktop: a new version shows as a row above your profile in the sidebar, "Relaunch to update to X", instead of a banner across the top, which the session panel covered.
+
 ## [0.4.3] - 2026-11-19
 
 ### Added

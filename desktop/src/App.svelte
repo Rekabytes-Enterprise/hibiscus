@@ -992,7 +992,9 @@
     {account}
     onsignin={showSignIn}
     onsignout={rekaSignOut}
-  />
+  >
+    {#snippet update()}<UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />{/snippet}
+  </Sidebar>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="resizer" onpointerdown={resizeSidebar} ondblclick={() => { sidebarWidth = 260; localStorage.removeItem(SIDEBAR_WIDTH); }} title="Drag to resize, double-click to reset"></div>
   {/if}
@@ -1032,7 +1034,6 @@
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
     </div>
-    <UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />
     <div class="body">
   {#if page === "settings"}
     {#key settingsStart}
