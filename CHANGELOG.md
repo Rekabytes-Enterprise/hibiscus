@@ -7,6 +7,7 @@ All notable changes to Hibiscus are documented here.
 ### Added
 
 - Hibiscus Desktop: switch sessions while the agent works. A running turn, such as a canvas video build, keeps going in the background, its session shows a spinner in the sidebar, and opening it again shows the live conversation and catches its canvas up. Up to 3 turns run in the background at once, and quitting asks first when any are still working.
+- Hibiscus Desktop: other models when Rooxcode is down. A session that opens with no model, because the Rooxcode Gateway could not list its models, now uses the first model from another signed-in provider, such as Codex, and says which in the chat. When a Rooxcode request fails with a server error, the error offers a one-click switch to that model, which sends the failed message again. A running turn never changes provider by itself.
 
 ## [0.4.3] - 2026-11-19
 

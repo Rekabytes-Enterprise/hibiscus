@@ -3,8 +3,8 @@
   import { homeDir } from "@tauri-apps/api/path";
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick, untrack } from "svelte";
-  import { apply, ChatCache, empty, fromMessages, newer, type Chat } from "./lib/chat";
-  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, onBackground, onConfirmQuit, parkProject, quit, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type SavedSession } from "./lib/engine";
+  import { apply, ChatCache, empty, fromMessages, newer, outage, type Chat } from "./lib/chat";
+  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, onBackground, onConfirmQuit, parkProject, quit, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type ModelInfo, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -415,8 +415,49 @@
     if (sessionFile && chat.items.length && !chat.running) chats.keep(sessionFile, chat);
   }
 
-  function notice(text: string) {
-    chat = { ...chat, items: [...chat.items, { kind: "notice", text, error: true }] };
+  function notice(text: string, error = true) {
+    chat = { ...chat, items: [...chat.items, { kind: "notice", text, error }] };
+  }
+
+  /** The first model a signed-in provider other than Rooxcode offers, for when Rooxcode is down. */
+  async function otherModel(): Promise<ModelInfo | null> {
+    const data = await request({ type: "get_available_models" }).catch(() => null);
+    return (data?.models as ModelInfo[] | undefined)?.find((m) => m.provider !== "rooxcode") ?? null;
+  }
+
+  async function useModel(m: ModelInfo, why: string) {
+    await request({ type: "set_model", provider: m.provider, modelId: m.id });
+    notice(`${why} ${m.provider}/${m.id}. Use the model button to change it.`, false);
+    await refresh(false);
+  }
+
+  // Sessions already given a model, so one the user leaves without a model isn't picked for again.
+  const picked = new Set<string>();
+  /** A session with no model, as when Rooxcode is down, gets the first one another provider offers. */
+  async function pickModel(session: string | null) {
+    if (!session || picked.has(session)) return;
+    picked.add(session);
+    const m = await otherModel();
+    if (m && sessionFile === session && !model) await useModel(m, "No model was available, so this session now uses").catch((e) => notice(message(e)));
+  }
+
+  // While the chat ends on a Rooxcode outage, the model it can switch to.
+  let fallback = $state<ModelInfo | null>(null);
+  $effect(() => {
+    if (!folder || !outage(chat)) fallback = null;
+    else if (!fallback) void otherModel().then((m) => (fallback = m));
+  });
+
+  /** Switches to `fallback` after a Rooxcode outage, and sends the failed prompt again. */
+  async function switchModel(prompt: string | null) {
+    const m = fallback;
+    if (!m) return;
+    try {
+      await useModel(m, "Rooxcode is unavailable, so this session switched to");
+    } catch (e) {
+      return notice(message(e));
+    }
+    if (prompt) await send(prompt, [], false);
   }
 
   function saveRecent(next: string[]) {
@@ -481,6 +522,7 @@
     await Promise.all([
       request({ type: "get_state" }).then((state) => {
         model = state.model;
+        if (!model) void pickModel(state.sessionFile);
         hasAccess = state.hasAccess;
         thinking = state.thinkingLevel;
         sessionFile = state.sessionFile;
@@ -1050,7 +1092,7 @@
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>
       {/if}
-      {#key sessionFile}<ChatView {chat} {folder} onolder={older} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} />{/key}
+      {#key sessionFile}<ChatView {chat} {folder} onolder={older} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} fallback={fallback && `${fallback.provider}/${fallback.id}`} onswitch={switchModel} />{/key}
     {/if}
     {#if folder}
       <div class="dock">

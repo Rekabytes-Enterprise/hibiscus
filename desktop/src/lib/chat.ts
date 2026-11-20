@@ -383,3 +383,17 @@ export function newer(cached: Chat, fresh: Chat): Chat {
   if (tail.join("\n") !== now.join("\n")) return fresh;
   return cached.edited.join("\n") === fresh.edited.join("\n") ? cached : { ...cached, edited: fresh.edited };
 }
+
+/** Rooxcode errors that mean the gateway or its upstream is down, not that the request was wrong. */
+const DOWN = /^Rooxcode (HTTP 5\d\d:|model discovery failed)/;
+
+/**
+ * When the chat ends on a Rooxcode outage, what a switch to another model can
+ * resend: the prompt that failed, if nothing of the turn came back before the error.
+ */
+export function outage(chat: Chat): { prompt: string | null } | null {
+  const last = chat.items.at(-1);
+  if (chat.running || last?.kind !== "notice" || !last.error || !DOWN.test(last.text)) return null;
+  const before = [...chat.items].reverse().find((i) => i.kind !== "notice");
+  return { prompt: before?.kind === "user" && !before.images ? before.text : null };
+}
