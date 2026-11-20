@@ -10,6 +10,22 @@ use tokio::{process::Command, sync::watch};
 
 /// The built-in tools. `cwd` is the session folder: when it is connected to
 /// WSL, the bash tool says it runs there.
+/// The bash tool; in the desktop app it can also start background jobs.
+fn bash(shell: String) -> Value {
+    let mut properties = json!({"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600},"description":{"type":"string","maxLength":200,"description":"A few words on what the command does, shown to the user, such as \"Run the tests\"."}});
+    let mut description = shell;
+    if jobs() {
+        properties["background"] = json!({"type":"boolean","description":"Start it as a background job and return at once. Use it for long commands such as a render, a test suite or a watcher, then check on it with the job tool."});
+        description.push_str("\nSet background for commands that run long; they keep running between tool calls and show in the app's Background tasks pane.");
+    }
+    json!({"name":"bash","description":description,"parameters":{"type":"object","properties":properties,"required":["command"],"additionalProperties":false}})
+}
+
+/// Background jobs need the desktop app, which shows them and stops them on quit.
+fn jobs() -> bool {
+    agent_browser().is_some()
+}
+
 pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
     let shell = match cwd.and_then(crate::wsl::distro_for) {
         Some(distro) => crate::wsl::description(&distro),
@@ -22,12 +38,15 @@ pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
         json!({"name":"session_search","description":"Search earlier sessions in this workspace for what the user and you said, such as a past decision, a fix or a request. Returns up to 20 matching messages, newest session first, with the session's title and age. Use it when the user refers to earlier work that memory doesn't cover.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Words that must all appear in the message, in any case."}},"required":["query"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
-        json!({"name":"bash","description":shell,"parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}}),
+        bash(shell),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
     if agent_browser().is_some() {
         definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches in the app's browser pane. Pass one agent-browser command as args:\n- [\"open\",\"http://localhost:5173\"]\n- [\"snapshot\",\"-i\"] lists interactive elements with refs like @e1. Snapshot again after the page changes.\n- [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"]\n- [\"console\"] shows log lines and [\"errors\"] uncaught exceptions.\n- [\"network\",\"requests\",\"--status\",\"400-599\"] lists failed requests (also --filter, --method, --type). [\"network\",\"request\",\"<id>\"] shows one request's body.\n- Logs keep the latest 100 entries. Add --clear to empty them before reproducing a problem.\n- [\"screenshot\"] returns the page as an image you can see. Add \"#app\" for one element or \"--full\" for the whole page. Use it to check layout, overlap, colours and blank areas.\nStart the project's server with dev_server, not bash.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
         definitions.push(json!({"name":"dev_server","description":"Run the project's dev server in the background, one per folder. It keeps running between tool calls and shows in the browser pane.\n- start runs `command`, or the project's usual one (package.json dev or start script, Django, Rails, a static index.html), and returns its local URL. If a server is already running, it returns that one.\n- status reports it. output returns its last lines, where build errors show up. stop stops it.\nOpen the URL with the browser tool.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["start","status","output","stop"]},"command":{"type":"string","maxLength":4096},"lines":{"type":"integer","minimum":1,"maximum":500}},"required":["action"],"additionalProperties":false}}));
+    }
+    if jobs() {
+        definitions.push(json!({"name":"job","description":"Check on background jobs started with bash background.\n- list: every job in this folder and whether it is running.\n- output: a job's status and its last `lines` of output (default 50).\n- stop: stop a running job.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["list","output","stop"]},"id":{"type":"integer","minimum":1},"lines":{"type":"integer","minimum":1,"maximum":500}},"required":["action"],"additionalProperties":false}}));
     }
     if crate::video::ffmpeg().is_some() {
         definitions.push(json!({"name":"analyze_video","description":"See a video: returns `frames` stills spread across it (default 12, at most 24) as images with their times, plus its length. Use it before describing, analysing or remaking a video file. The frames also open on the canvas as a Frames card.","parameters":{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":4096},"frames":{"type":"integer","minimum":1,"maximum":24}},"required":["path"],"additionalProperties":false}}));
@@ -128,6 +147,17 @@ struct Edit {
 struct Bash {
     command: String,
     timeout: Option<u64>,
+    /// A few words for the user, shown as the command's label.
+    description: Option<String>,
+    /// Desktop only: run it as a background job and return at once.
+    background: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Job {
+    action: String,
+    id: Option<u64>,
+    lines: Option<usize>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -358,12 +388,27 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
             if a.command.trim().is_empty()
                 || a.command.len() > 65536
                 || !(1..=600).contains(&a.timeout.unwrap_or(120))
+                || a.description
+                    .as_ref()
+                    .is_some_and(|d| d.chars().count() > 200)
             {
                 return Err("Invalid command or timeout".into());
+            }
+            if a.background == Some(true) && !jobs() {
+                return Err("Background jobs need the desktop app".into());
             }
         }
         "goal" => {
             let _: Goal = serde_json::from_value(args.clone())?;
+        }
+        "job" => {
+            let a: Job = serde_json::from_value(args.clone())?;
+            if !["list", "output", "stop"].contains(&a.action.as_str())
+                || (a.action != "list" && a.id.is_none())
+                || !(1..=500).contains(&a.lines.unwrap_or(50))
+            {
+                return Err("Invalid job action, id or lines".into());
+            }
         }
         "browser" => {
             let a: Browser = serde_json::from_value(args.clone())?;
@@ -592,6 +637,19 @@ pub async fn execute(
         }
         "bash" => {
             let a: Bash = serde_json::from_value(args.clone())?;
+            if a.background == Some(true) {
+                let label = a
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty())
+                    .unwrap_or_else(|| a.command.lines().next().unwrap_or("").trim());
+                let id = crate::jobs::start(cwd, &a.command, label)?;
+                return Ok(result(
+                    format!("Started background job {id}. It keeps running; check it with the job tool (output, id {id})."),
+                    json!({ "job": id }),
+                ));
+            }
             // In a WSL-connected folder the command runs in that distro; `wsl`
             // kills its Linux process group when dropped, after the run.
             let wsl = crate::wsl::distro_for(cwd).map(crate::wsl::Run::new);
@@ -707,6 +765,43 @@ pub async fn execute(
                     details,
                 ),
             })
+        }
+
+        "job" => {
+            let a: Job = serde_json::from_value(args.clone())?;
+            let describe = |j: &crate::jobs::Info| {
+                let secs = j.duration_ms / 1000;
+                let state = match (j.running, j.stopped, j.exit_code) {
+                    (true, ..) => format!("running for {secs}s"),
+                    (false, true, _) => format!("stopped after {secs}s"),
+                    (false, false, code) => format!(
+                        "exited {} after {secs}s",
+                        code.map_or("without a code".into(), |c| c.to_string())
+                    ),
+                };
+                format!("Job {} ({}): {state}. `{}`", j.id, j.label, j.command)
+            };
+            let text = match (a.action.as_str(), a.id) {
+                ("output", Some(id)) => match crate::jobs::get(id, a.lines.unwrap_or(50)) {
+                    Some(j) => format!("{}\n{}", describe(&j), j.output.join("\n")),
+                    None => format!("There is no job {id}."),
+                },
+                ("stop", Some(id)) => {
+                    if !tokio::task::spawn_blocking(move || crate::jobs::stop(id)).await? {
+                        return Err(format!("There is no job {id}.").into());
+                    }
+                    format!("Stopped job {id}.")
+                }
+                _ => {
+                    let jobs = crate::jobs::list(Some(cwd), 0);
+                    if jobs.is_empty() {
+                        "No background jobs in this folder.".into()
+                    } else {
+                        jobs.iter().map(describe).collect::<Vec<_>>().join("\n")
+                    }
+                }
+            };
+            Ok(result(text, json!({})))
         }
 
         "dev_server" => {

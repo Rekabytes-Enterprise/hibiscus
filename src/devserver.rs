@@ -16,18 +16,107 @@ const KEEP: usize = 1000;
 
 struct Server {
     command: String,
-    child: Child,
+    process: Process,
+}
+
+/// A command running in the background in a folder, with its output kept.
+/// Dev servers and background jobs (`crate::jobs`) both run as one.
+pub(crate) struct Process {
+    pub(crate) child: Child,
     tree: crate::sys::ProcessTree,
-    /// Set in a WSL-connected folder; dropping it kills the server inside Linux.
+    /// Set in a WSL-connected folder; dropping it kills the command inside Linux.
     wsl: Option<crate::wsl::Run>,
-    output: Arc<Mutex<Output>>,
+    pub(crate) output: Arc<Mutex<Output>>,
 }
 
 #[derive(Default)]
-struct Output {
-    lines: VecDeque<String>,
-    /// The first local URL the server printed.
-    url: Option<String>,
+pub(crate) struct Output {
+    pub(crate) lines: VecDeque<String>,
+    /// The first local URL the command printed.
+    pub(crate) url: Option<String>,
+}
+
+impl Process {
+    /// Runs `command` in `folder` (in its WSL distro when connected), in its
+    /// own process group, keeping the last lines it prints.
+    pub(crate) fn spawn(folder: &Path, command: &str) -> Result<Self> {
+        let wsl = crate::wsl::distro_for(folder).map(crate::wsl::Run::new);
+        let mut child = match &wsl {
+            Some(run) => run.command(folder, command)?,
+            None => crate::sys::shell(command),
+        };
+        // Its own group, so stopping it also stops what the shell started.
+        crate::sys::own_group(&mut child);
+        let mut child = child
+            .current_dir(folder)
+            // Keep tools from opening their own browser or buffering their output.
+            .env("BROWSER", "none")
+            .env("PYTHONUNBUFFERED", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let tree = crate::sys::ProcessTree::new(child.id());
+        let output = Arc::new(Mutex::new(Output::default()));
+        for stream in [
+            child
+                .stdout
+                .take()
+                .map(|s| Box::new(s) as Box<dyn Read + Send>),
+            child
+                .stderr
+                .take()
+                .map(|s| Box::new(s) as Box<dyn Read + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let output = output.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stream).lines().map_while(|l| l.ok()) {
+                    let line = plain(&line);
+                    let mut o = output.lock().unwrap();
+                    if o.url.is_none() {
+                        o.url = local_url(&line);
+                    }
+                    if o.lines.len() == KEEP {
+                        o.lines.pop_front();
+                    }
+                    o.lines.push_back(line.chars().take(2000).collect());
+                }
+            });
+        }
+        Ok(Self {
+            child,
+            tree,
+            wsl,
+            output,
+        })
+    }
+
+    /// The last `count` lines it printed.
+    pub(crate) fn tail(&self, count: usize) -> Vec<String> {
+        tail(&self.output, count)
+    }
+
+    /// Stops it: politely, then by force after 3 seconds.
+    pub(crate) fn end(mut self) {
+        // Inside WSL, stop the Linux side first: wsl.exe exiting can leave it running.
+        drop(self.wsl.take());
+        if self.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        self.tree.terminate();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.child.try_wait().ok().flatten().is_none() {
+            if Instant::now() > deadline {
+                self.tree.kill();
+                let _ = self.child.wait();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 static SERVERS: Mutex<Option<HashMap<PathBuf, Server>>> = Mutex::new(None);
@@ -88,64 +177,8 @@ pub fn start(folder: &Path, command: Option<&str>) -> Result<Status> {
         Some(c) if !c.trim().is_empty() => c.trim().to_string(),
         _ => detect(folder).ok_or("No start command found. Pass the command to run.")?,
     };
-    let wsl = crate::wsl::distro_for(folder).map(crate::wsl::Run::new);
-    let mut child = match &wsl {
-        Some(run) => run.command(folder, &command)?,
-        None => crate::sys::shell(&command),
-    };
-    // Its own group, so stopping it also stops what the shell started.
-    crate::sys::own_group(&mut child);
-    let mut child = child
-        .current_dir(folder)
-        // Keep tools from opening their own browser or buffering their output.
-        .env("BROWSER", "none")
-        .env("PYTHONUNBUFFERED", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let tree = crate::sys::ProcessTree::new(child.id());
-    let output = Arc::new(Mutex::new(Output::default()));
-    for stream in [
-        child
-            .stdout
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-        child
-            .stderr
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let output = output.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stream).lines().map_while(|l| l.ok()) {
-                let line = plain(&line);
-                let mut o = output.lock().unwrap();
-                if o.url.is_none() {
-                    o.url = local_url(&line);
-                }
-                if o.lines.len() == KEEP {
-                    o.lines.pop_front();
-                }
-                o.lines.push_back(line.chars().take(2000).collect());
-            }
-        });
-    }
-    servers(|s| {
-        s.insert(
-            folder.to_path_buf(),
-            Server {
-                command,
-                child,
-                tree,
-                wsl,
-                output,
-            },
-        )
-    });
+    let process = Process::spawn(folder, &command)?;
+    servers(|s| s.insert(folder.to_path_buf(), Server { command, process }));
     Ok(status(folder).expect("just started"))
 }
 
@@ -164,12 +197,12 @@ pub async fn ready(folder: &Path, timeout: Duration) -> Option<Status> {
 pub fn status(folder: &Path) -> Option<Status> {
     servers(|s| {
         let server = s.get_mut(folder)?;
-        let exit = server.child.try_wait().ok().flatten();
+        let exit = server.process.child.try_wait().ok().flatten();
         Some(Status {
             command: server.command.clone(),
             running: exit.is_none(),
             exit_code: exit.and_then(|e| e.code()),
-            url: server.output.lock().unwrap().url.clone(),
+            url: server.process.output.lock().unwrap().url.clone(),
         })
     })
 }
@@ -177,46 +210,32 @@ pub fn status(folder: &Path) -> Option<Status> {
 /// The last `count` lines the server printed.
 pub fn output(folder: &Path, count: usize) -> Vec<String> {
     servers(|s| {
-        s.get(folder).map_or_else(Vec::new, |server| {
-            let o = server.output.lock().unwrap();
-            o.lines
-                .iter()
-                .skip(o.lines.len().saturating_sub(count))
-                .cloned()
-                .collect()
-        })
+        s.get(folder)
+            .map_or_else(Vec::new, |server| server.process.tail(count))
     })
 }
 
 pub fn stop(folder: &Path) {
     if let Some(server) = servers(|s| s.remove(folder)) {
-        end(server);
+        server.process.end();
     }
 }
 
 /// Stops every server, when the app quits.
 pub fn stop_all() {
     for (_, server) in servers(std::mem::take) {
-        end(server);
+        server.process.end();
     }
 }
 
-fn end(mut server: Server) {
-    // Inside WSL, stop the Linux side first: wsl.exe exiting can leave it running.
-    drop(server.wsl.take());
-    if server.child.try_wait().ok().flatten().is_some() {
-        return;
-    }
-    server.tree.terminate();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while server.child.try_wait().ok().flatten().is_none() {
-        if Instant::now() > deadline {
-            server.tree.kill();
-            let _ = server.child.wait();
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+/// The last `count` lines of `output`.
+pub(crate) fn tail(output: &Mutex<Output>, count: usize) -> Vec<String> {
+    let o = output.lock().unwrap();
+    o.lines
+        .iter()
+        .skip(o.lines.len().saturating_sub(count))
+        .cloned()
+        .collect()
 }
 
 /// Removes terminal colour codes, which dev servers print around their URL.
