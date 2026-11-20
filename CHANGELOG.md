@@ -8,6 +8,10 @@ All notable changes to Hibiscus are documented here.
 
 - Hibiscus Desktop: switch sessions while the agent works. A running turn, such as a canvas video build, keeps going in the background, its session shows a spinner in the sidebar, and opening it again shows the live conversation and catches its canvas up. Up to 3 turns run in the background at once, and quitting asks first when any are still working.
 
+### Changed
+
+- Hibiscus Desktop: folders in the sidebar stay where you put them. Chatting in a session moves it to the top of its own folder, not the folder to the top of the list. Drag a folder's header to reorder, or use Move up and Move down in its menu. The app still reopens the folder you used last, and the sidebar no longer drops folders past the eighth.
+
 ## [0.4.3] - 2026-11-19
 
 ### Added
