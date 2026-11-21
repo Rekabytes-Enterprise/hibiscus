@@ -638,11 +638,10 @@ async fn run_turns(
         let user = session.lock().unwrap().messages.last().cloned().unwrap();
         emit(out, Event::MessageStarted(&user).wire()).await?;
         let mut completed = false;
-        for _ in 0..config.max_steps {
+        'steps: for _ in 0..config.max_steps {
             if *cancel.borrow() {
                 break;
             }
-            maybe_compact(&session, &config, out, cancel).await?;
             let steering = {
                 let mut q = queue.lock().unwrap();
                 if q.items.front().is_some_and(|p| p.steer) {
@@ -677,12 +676,21 @@ async fn run_turns(
             let registry = extensions.snapshot();
             let mut definitions = tools::definitions(Some(&snapshot.cwd));
             definitions.extend(registry.definitions().cloned());
-            if p.authentication == config::Authentication::Rooxcode
-                && super::context::pressure(p, m, &snapshot, &instructions, Some(&definitions))?
-            {
-                emit(out, json!({"type":"compaction_start"})).await?;
-                let result = compact(session.clone(), config.clone(), out, None, cancel).await?;
-                emit(out, json!({"type":"compaction_end","result":result})).await?;
+            let rooxcode = p.authentication == config::Authentication::Rooxcode;
+            let exceeds = if rooxcode {
+                super::context::pressure(p, m, &snapshot, &instructions, Some(&definitions))?
+            } else {
+                snapshot.messages.len() > 1
+                    && super::context::known_context_pressure(
+                        p,
+                        m,
+                        &snapshot,
+                        &instructions,
+                        &definitions,
+                    )?
+            };
+            if exceeds {
+                compact_automatically(&session, &config, out, cancel).await?;
             }
             let snapshot = session.lock().unwrap().clone();
             let (p, m) = snapshot.selected(&config)?;
@@ -691,16 +699,35 @@ async fn run_turns(
             {
                 return Err("Rooxcode instructions, tools or recent conversation exceed the request budget after compaction. Reduce their size before continuing.".into());
             }
-            let call = provider::request(
-                p,
-                m,
-                &snapshot,
-                &instructions,
-                &snapshot.thinking,
-                Some(&definitions),
-                out,
-            );
-            let reply = tokio::select! {r=call=>r?,_=cancel.changed()=>break};
+            let mut retry = false;
+            let mut snapshot = snapshot;
+            let reply = loop {
+                let call = provider::request(
+                    p,
+                    m,
+                    &snapshot,
+                    &instructions,
+                    &snapshot.thinking,
+                    Some(&definitions),
+                    out,
+                );
+                let result = tokio::select! { r = call => r, _ = cancel.changed() => break 'steps };
+                match result {
+                    Ok(reply) => break reply,
+                    Err(error)
+                        if !retry
+                            && !rooxcode
+                            && m.context_window.is_some()
+                            && error.is::<provider::ContextOverflow>()
+                            && snapshot.messages.len() > 1 =>
+                    {
+                        retry = true;
+                        compact_automatically(&session, &config, out, cancel).await?;
+                        snapshot = session.lock().unwrap().clone();
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
             let calls = if let Message::Assistant { content, .. } = &reply.message {
                 content
                     .iter()
@@ -732,7 +759,10 @@ async fn run_turns(
                 completed = true;
                 break;
             }
-            for (id, name, args) in calls {
+            let mut output_budget = super::context::tool_output_budget(p, m);
+            let total_calls = calls.len();
+            for (index, (id, name, args)) in calls.into_iter().enumerate() {
+                let output_limit = output_budget.map(|remaining| remaining / (total_calls - index));
                 emit(
                     out,
                     Event::ToolStarted {
@@ -767,6 +797,7 @@ async fn run_turns(
                         },
                         &mut steps,
                         cancel,
+                        output_limit,
                     )
                     .await
                 };
@@ -787,9 +818,26 @@ async fn run_turns(
                         )
                     }
                 };
-                if !super::capped::exempt(&name) {
-                    if let Some(text) = result["content"][0]["text"].as_str() {
-                        result["content"][0]["text"] = json!(super::capped::cap(text));
+                if let Some(text) = result["content"][0]["text"].as_str() {
+                    let capped = match output_limit {
+                        Some(limit) if text.len() > limit => {
+                            let limit = if super::capped::exempt(&name) {
+                                limit
+                            } else {
+                                limit.min(super::capped::INLINE)
+                            };
+                            Some(super::capped::cap_to(text, limit))
+                        }
+                        _ if !super::capped::exempt(&name) => Some(super::capped::cap(text)),
+                        _ => None,
+                    };
+                    if let Some(capped) = capped {
+                        result["content"][0]["text"] = json!(capped);
+                    }
+                    if let Some(budget) = &mut output_budget {
+                        *budget = budget.saturating_sub(
+                            result["content"][0]["text"].as_str().map_or(0, str::len),
+                        );
                     }
                 }
                 let message = Message::ToolResult {
@@ -881,17 +929,10 @@ async fn compact(
         snapshot.save()?;
     }
     let prompt=format!("Summarize this conversation for continuation. Preserve user requirements, decisions, changed files, verified results, unresolved work and tool outcomes. Do not execute tools. {}",instructions.unwrap_or(""));
-    let (reply, tail) = if p.authentication == config::Authentication::Rooxcode {
-        super::context::summarize(p, m, &snapshot, &prompt, out, cancel).await?
-    } else {
-        (
-            tokio::select! {r=provider::request(p,m,&snapshot,&prompt,"off",None,out)=>r?,_=cancel.changed()=>return Err("Cancelled compact".into())},
-            vec![],
-        )
-    };
-    let summary = reply.message.text();
-    if summary.trim().is_empty() {
-        return Err("Empty compaction summary; history unchanged".into());
+    let (reply, summary, tail) =
+        super::context::summarize(p, m, &snapshot, &prompt, out, cancel).await?;
+    if *cancel.borrow() {
+        return Err("Cancelled compact; history unchanged".into());
     }
     // Retain original history in a separate immutable archive before replacing active context.
     let mut s = session.lock().unwrap();
@@ -902,15 +943,17 @@ async fn compact(
     if s.path.exists() {
         config::atomic(&archive, &std::fs::read(&s.path)?)?;
     }
-    s.messages = vec![Message::User {
+    let mut updated = snapshot.clone();
+    updated.messages = vec![Message::User {
         content: vec![Block::Text {
             text: format!("Previous conversation summary:\n{summary}"),
         }],
     }];
-    s.messages.extend(tail);
-    record_usage(&mut s, reply.input, reply.output, reply.cache);
-    s.context = None;
-    s.save()?;
+    updated.messages.extend(tail);
+    record_usage(&mut updated, reply.input, reply.output, reply.cache);
+    updated.context = None;
+    updated.save()?;
+    *s = updated;
     Ok(json!({"summary":summary,"tokensBefore":snapshot.context}))
 }
 
@@ -939,11 +982,20 @@ async fn maybe_compact(
             .is_some_and(|(window, used)| used > window.saturating_mul(4) / 5)
     };
     if needs_compaction {
-        emit(out, json!({"type":"compaction_start"})).await?;
-        let value = compact(session.clone(), config.clone(), out, None, cancel).await?;
-        emit(out, json!({"type":"compaction_end","result":value})).await?;
+        compact_automatically(session, config, out, cancel).await?;
     }
     Ok(())
+}
+
+async fn compact_automatically(
+    session: &Arc<Mutex<Session>>,
+    config: &Arc<Config>,
+    out: &mpsc::Sender<Value>,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<()> {
+    emit(out, json!({"type":"compaction_start"})).await?;
+    let result = compact(session.clone(), config.clone(), out, None, cancel).await?;
+    emit(out, json!({"type":"compaction_end","result":result})).await
 }
 
 fn select_rooxcode(session: &mut Session, config: &Config) {

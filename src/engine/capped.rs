@@ -27,6 +27,29 @@ pub(super) fn cap(text: &str) -> String {
     shorten(&text, saved)
 }
 
+/// Smaller contexts keep the complete output in the same recoverable file.
+pub(super) fn cap_to(text: &str, limit: usize) -> String {
+    let text = clean(text);
+    if text.len() <= limit {
+        return text;
+    }
+    let note = match save(&text) {
+        Ok(path) => format!(
+            "\n[Output shortened for context. Full output saved to {}.]\n",
+            path.display()
+        ),
+        Err(_) => "\n[Output shortened for context. Full output could not be saved.]\n".to_owned(),
+    };
+    if note.len() > limit {
+        let fallback = "[Output shortened for context.]";
+        return fallback[..fallback.floor_char_boundary(limit)].to_owned();
+    }
+    let available = limit - note.len();
+    let head = text.floor_char_boundary(available / 3);
+    let tail = text.ceil_char_boundary(text.len() - (available - head));
+    format!("{}{note}{}", &text[..head], &text[tail..])
+}
+
 /// Removes terminal colour and cursor codes, and keeps only the last state of a
 /// line redrawn with carriage returns, such as a progress bar.
 pub(in crate::engine) fn clean(text: &str) -> String {

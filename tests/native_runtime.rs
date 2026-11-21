@@ -426,7 +426,7 @@ fn manual_compaction_archives_history_and_continues() {
         "responses",
         vec![
             response("ORIGINAL_TURN"),
-            response("COMPACTED_SUMMARY"),
+            response(r#"{"summary":"COMPACTED_SUMMARY"}"#),
             response("AFTER_COMPACT"),
         ],
     );
@@ -443,6 +443,175 @@ fn manual_compaction_archives_history_and_continues() {
         1
     );
 }
+fn local_completion(delta: Value, finish: &str, input: u64) -> (u16, String) {
+    (
+        200,
+        format!(
+            "{}data: [DONE]\n\n",
+            sse(json!({
+                "choices":[{"delta":delta,"finish_reason":finish}],
+                "usage":{"prompt_tokens":input,"completion_tokens":5}
+            }))
+        ),
+    )
+}
+
+fn small_context(f: &Fixture) {
+    let path = f.root.join("app/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["providers"][0]["models"][0]["contextWindow"] = json!(32768);
+    fs::write(path, config.to_string()).unwrap();
+}
+
+#[test]
+fn small_context_pages_parallel_tool_results_and_compacts_before_the_next_request() {
+    let f = Fixture::new(
+        "chat_completions",
+        vec![
+            local_completion(
+                json!({"tool_calls":[
+                    {"index":0,"id":"read-id","function":{"name":"read","arguments":json!({"path":"large.txt"}).to_string()}},
+                    {"index":1,"id":"shell-id","function":{"name":"bash","arguments":json!({"command":"printf 'line%077d\\n' {1..400}"}).to_string()}}
+                ]}),
+                "tool_calls",
+                25000,
+            ),
+            local_completion(
+                json!({"content":"{\"summary\":\"The files and command were read successfully.\"}"}),
+                "stop",
+                1500,
+            ),
+            local_completion(
+                json!({"content":"CONTINUED_AFTER_CONTEXT_CHECK"}),
+                "stop",
+                2000,
+            ),
+        ],
+    );
+    small_context(&f);
+    fs::write(
+        f.root.join("large.txt"),
+        ("local fixture line ".repeat(8) + "\n").repeat(500),
+    )
+    .unwrap();
+    good(&f.run("Read and inspect the workspace\n/quit\n", &["--cli"]));
+    let requests = f.captured();
+    assert_eq!(requests.len(), 3, "{requests:?}");
+    assert!(requests[1].get("tools").is_none());
+    let summary_payload = requests[1]["messages"].to_string();
+    assert!(summary_payload.contains("Read more with offset"));
+    assert!(summary_payload.contains("Full output saved to"));
+    assert!(summary_payload.contains("End of conversation data"));
+    assert!(summary_payload.len() < 22_000);
+    assert!(requests[2]["messages"]
+        .to_string()
+        .contains("read successfully"));
+    let output = fs::read_dir(f.root.join("app/tool-output"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(fs::metadata(output).unwrap().len() > 30_000);
+}
+
+#[test]
+fn context_rejection_compacts_once_without_replaying_completed_tools() {
+    let rejection = json!({"error":{"code":"context_length_exceeded","message":"PRIVATE_BODY"}});
+    let preamble = sse(json!({"choices":[{"delta":{"role":"assistant","content":""}}]}));
+    for rejected in [
+        (400, rejection.to_string()),
+        (
+            200,
+            format!(": loading model\n\n{preamble}{}", sse(rejection.clone())),
+        ),
+    ] {
+        let f = Fixture::new(
+            "chat_completions",
+            vec![
+                local_completion(
+                    json!({"tool_calls":[{"index":0,"id":"side-effect","function":{"name":"bash","arguments":json!({"command":"printf hit >> marker"}).to_string()}}]}),
+                    "tool_calls",
+                    2000,
+                ),
+                rejected,
+                local_completion(
+                    json!({"content":"{\"summary\":\"The marker command completed once.\"}"}),
+                    "stop",
+                    1500,
+                ),
+                local_completion(json!({"content":"RECOVERED_FROM_OVERFLOW"}), "stop", 2000),
+            ],
+        );
+        small_context(&f);
+        let output = f.run("Run once\n/quit\n", &["--cli"]);
+        good(&output);
+        let shown = String::from_utf8_lossy(&output.stdout);
+        assert!(shown.contains("RECOVERED_FROM_OVERFLOW"));
+        assert!(!shown.contains("PRIVATE_BODY"));
+        assert_eq!(fs::read_to_string(f.root.join("marker")).unwrap(), "hit");
+        let requests = f.captured();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[2].get("tools").is_none());
+        assert!(requests[3]["messages"]
+            .to_string()
+            .contains("completed once"));
+    }
+}
+
+#[test]
+fn context_rejection_after_streamed_output_is_not_retried() {
+    let error = sse(json!({"error":{"code":"context_length_exceeded","message":"PRIVATE_BODY"}}));
+    let partial = sse(json!({"choices":[{"delta":{"content":"PARTIAL_REPLY"}}]}));
+    let f = Fixture::new(
+        "chat_completions",
+        vec![
+            local_completion(json!({"content":"ORIGINAL_REPLY"}), "stop", 2000),
+            (200, format!("{partial}{error}")),
+        ],
+    );
+    small_context(&f);
+    let output = f.run("First turn\nSecond turn\n", &["--cli"]);
+    assert!(!output.status.success());
+    assert_eq!(f.captured().len(), 2);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("PRIVATE_BODY"));
+    assert!(!f.root.join("app/archives").exists());
+}
+
+#[test]
+fn invalid_compaction_output_cannot_replace_the_original_history() {
+    for invalid in [
+        response("Let me continue the task."),
+        calls(vec![("bash", json!({"command":"touch must-not-run"}))]),
+    ] {
+        let f = Fixture::new(
+            "responses",
+            vec![
+                response("KEEP_ORIGINAL"),
+                invalid,
+                response("AFTER_FAILED_SUMMARY"),
+            ],
+        );
+        small_context(&f);
+        let output = f.run("Original prompt\n/compact retain decisions\n", &["--cli"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("history unchanged"));
+        good(&f.run("Continue\n/quit\n", &["--cli", "--continue"]));
+        let requests = f.captured();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1]["input"]
+            .to_string()
+            .contains("End of conversation data"));
+        assert!(requests[1]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("retain decisions"));
+        assert!(requests[2]["input"].to_string().contains("KEEP_ORIGINAL"));
+        assert!(!f.root.join("must-not-run").exists());
+        assert!(!f.root.join("app/archives").exists());
+    }
+}
+
 #[test]
 fn provider_errors_do_not_echo_sensitive_bodies() {
     let f = Fixture::new(
@@ -740,19 +909,18 @@ fn escape_kills_a_running_shell_before_resuming_chat() {
 #[test]
 fn automatic_compaction_preserves_the_new_prompt_and_archives_prior_history() {
     let (_, old) = response("ORIGINAL_AUTO");
-    let old = old.replace("\"input_tokens\":20", "\"input_tokens\":90");
+    let old = old.replace("\"input_tokens\":20", "\"input_tokens\":27000");
     let f = Fixture::new(
         "responses",
         vec![
             (200, old),
-            response("AUTO_SUMMARY"),
+            response(r#"{"summary":"AUTO_SUMMARY"}"#),
             response("AUTO_CONTINUED"),
         ],
     );
     let path = f.root.join("app/config.json");
     let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    config["providers"][0]["models"][0]["contextWindow"] = json!(100);
-    config["providers"][0]["models"][0]["maxTokens"] = json!(8);
+    config["providers"][0]["models"][0]["contextWindow"] = json!(32768);
     fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
     good(&f.run("first\nEXACT_NEW_REQUEST\n/quit\n", &[]));
     let r = f.captured();

@@ -102,7 +102,7 @@ const LINE_CHARS: usize = 2000;
 
 /// Lines `start..` of a file, numbered, within the read limits; also returns
 /// the line after the last one shown and whether any line was cut.
-fn numbered(lines: &[&str], start: usize, limit: usize) -> (String, usize, bool) {
+fn numbered(lines: &[&str], start: usize, limit: usize, bytes: usize) -> (String, usize, bool) {
     let mut out = String::new();
     let mut cut_any = false;
     let mut end = start;
@@ -121,7 +121,13 @@ fn numbered(lines: &[&str], start: usize, limit: usize) -> (String, usize, bool)
         } else {
             format!("{:>6}\t{line}\n", i + 1)
         };
-        if i > start && out.len() + entry.len() > READ_BYTES {
+        if out.len() + entry.len() > bytes {
+            if i == start {
+                out.push_str(&entry[..entry.floor_char_boundary(bytes.saturating_sub(4))]);
+                out.push_str("…\n");
+                end = i + 1;
+                cut_any = true;
+            }
             break;
         }
         out.push_str(&entry);
@@ -521,6 +527,7 @@ pub async fn execute(
     context: &mut crate::checkpoints::Context<'_>,
     steps: &mut Vec<Value>,
     cancel: &mut watch::Receiver<bool>,
+    output_limit: Option<usize>,
 ) -> Result<Value> {
     if let Some(tool) = crate::checkpoints::Tool::parse(name) {
         return tool.execute(args, context, cancel).await;
@@ -547,7 +554,8 @@ pub async fn execute(
             if start >= total {
                 return Err(format!("Offset {} is past the end: the file has {total} lines.", start + 1).into());
             }
-            let (shown, end, cut) = numbered(&lines, start, a.limit.unwrap_or(READ_LINES));
+            let bytes = output_limit.map_or(READ_BYTES, |limit| limit.saturating_sub(128).min(READ_BYTES));
+            let (shown, end, cut) = numbered(&lines, start, a.limit.unwrap_or(READ_LINES), bytes);
             let mut note = String::new();
             if start > 0 || end < total {
                 note.push_str(&format!("[Lines {}-{end} of {total}.", start + 1));
@@ -557,7 +565,11 @@ pub async fn execute(
                 note.push(']');
             }
             if cut {
-                note.push_str(&format!("[Lines over {LINE_CHARS} characters were cut.]"));
+                if bytes < READ_BYTES {
+                    note.push_str("[Long lines were shortened to fit the context budget.]");
+                } else {
+                    note.push_str(&format!("[Lines over {LINE_CHARS} characters were cut.]"));
+                }
             }
             Ok(result(format!("{shown}{note}"), json!({"totalLines":total})))
         }
@@ -1171,10 +1183,10 @@ mod tests {
     fn reads_are_numbered_paged_and_cut_on_long_lines() {
         let long = "x".repeat(2500);
         let lines = vec!["one", "two", long.as_str(), "four"];
-        let (text, end, cut) = numbered(&lines, 0, 2);
+        let (text, end, cut) = numbered(&lines, 0, 2, READ_BYTES);
         assert_eq!(text, "     1\tone\n     2\ttwo\n");
         assert_eq!((end, cut), (2, false));
-        let (text, end, cut) = numbered(&lines, 2, 10);
+        let (text, end, cut) = numbered(&lines, 2, 10, READ_BYTES);
         assert!(
             text.starts_with("     3\txxx")
                 && text.contains("… [line cut at 2000 characters]\n     4\tfour")
@@ -1183,7 +1195,7 @@ mod tests {
         // The byte limit ends a read on a whole line.
         let many: Vec<String> = (0..3000).map(|i| format!("{i:>40}")).collect();
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
-        let (text, end, _) = numbered(&many, 0, READ_LINES);
+        let (text, end, _) = numbered(&many, 0, READ_LINES, READ_BYTES);
         assert!(text.len() <= READ_BYTES && text.ends_with('\n') && end < 2000);
     }
 

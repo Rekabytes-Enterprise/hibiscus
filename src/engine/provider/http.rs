@@ -53,14 +53,23 @@ pub(super) async fn exchange(
         let response = req.send().await.map_err(|_| {
             "Provider network request failed. Check connectivity and endpoint configuration."
         })?;
-        if !response.status().is_success() {
-            return Err(format!("Provider returned HTTP {}. Check authentication, model access, quota and endpoint configuration.",response.status().as_u16()).into());
+        let status = response.status();
+        if !status.is_success() {
+            if matches!(status.as_u16(), 400 | 413 | 422)
+                && tokio::time::timeout(Duration::from_secs(2), context_overflow(response))
+                    .await
+                    .unwrap_or(false)
+            {
+                return Err(super::ContextOverflow.into());
+            }
+            return Err(format!("Provider returned HTTP {}. Check authentication, model access, quota and endpoint configuration.",status.as_u16()).into());
         }
         response
     };
     let mut decoder = Decoder::default();
     let mut state = Stream::default();
     let mut capacity = Capacity::Pending;
+    let mut chat_output = false;
     'stream: while let Some(chunk) = response
         .chunk()
         .await
@@ -86,6 +95,23 @@ pub(super) async fn exchange(
             if anonymous && event["error"].is_object() {
                 return Err(crate::engine::rooxcode::stream_error(&event).into());
             }
+            if !anonymous && provider.api == Api::ChatCompletions {
+                // A local server can open the stream with a loading keepalive
+                // and reject the prompt before generating any model output.
+                if !chat_output && context_error(&event["error"]) {
+                    return Err(super::ContextOverflow.into());
+                }
+                chat_output |= event["choices"].as_array().is_some_and(|choices| {
+                    choices.iter().any(|choice| {
+                        let delta = &choice["delta"];
+                        delta.as_object().is_some_and(|fields| {
+                            fields.iter().any(|(key, value)| {
+                                key != "role" && !value.is_null() && value.as_str() != Some("")
+                            })
+                        }) || choice["finish_reason"].is_string()
+                    })
+                });
+            }
             let delta = state.observe(&provider.api, &event)?;
             if anonymous
                 && capacity != Capacity::Started
@@ -110,6 +136,34 @@ pub(super) async fn exchange(
         );
     }
     Ok(state)
+}
+
+/// Classify only explicit pre-stream rejections. Do not reveal the response body.
+async fn context_overflow(mut response: reqwest::Response) -> bool {
+    const LIMIT: usize = 8192;
+    let mut bytes = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if bytes.len() + chunk.len() <= LIMIT => {
+                bytes.extend_from_slice(&chunk)
+            }
+            Ok(None) => break,
+            _ => return false,
+        }
+    }
+    let Ok(body) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    context_error(&body["error"])
+}
+
+fn context_error(error: &Value) -> bool {
+    matches!(
+        error["code"].as_str(),
+        Some("context_length_exceeded" | "context_window_exceeded")
+    ) || error["message"]
+        .as_str()
+        .is_some_and(|message| message.starts_with("context_length_exceeded:"))
 }
 
 #[derive(PartialEq)]
