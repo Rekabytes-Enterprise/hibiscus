@@ -965,18 +965,38 @@ fn project_instructions_and_skill_catalog_enter_native_prompt() {
 
 #[test]
 fn web_research_uses_the_existing_shell_and_requires_source_evidence() {
-    let f = Fixture::new("responses", vec![response("PUBLIC_RESEARCH")]);
-    good(&f.run("", &["Can you search the web?"]));
+    let f = Fixture::new(
+        "responses",
+        vec![
+            calls(vec![(
+                "read",
+                json!({"path":"app/bundled-skills/public-research/SKILL.md"}),
+            )]),
+            response("PUBLIC_RESEARCH"),
+        ],
+    );
+    good(&f.run("", &["Find a public research report."]));
     let requests = f.captured();
     let system = requests[0]["instructions"].as_str().unwrap();
     for guidance in [
         "uses the existing bash tool with curl",
         "when it is installed and the shell has network access",
-        "transient timeout or server error at most once",
         "Open the original sources",
         "Put direct source links beside claims they support",
     ] {
         assert!(system.contains(guidance), "{guidance}");
+    }
+    let skill = f.root.join("app/bundled-skills/public-research/SKILL.md");
+    assert!(system.contains(&skill.display().to_string()));
+    let continuation = requests[1]["input"].to_string();
+    for guidance in [
+        "Split mixed requests into separate lookups",
+        "Explicit zero matches",
+        "Change source type after two unproductive lookups",
+        "stop requests to that source",
+        "Retry a transient timeout or server error at most once",
+    ] {
+        assert!(continuation.contains(guidance), "{guidance}");
     }
     let tools = requests[0]["tools"].as_array().unwrap();
     assert!(tools.iter().any(|tool| tool["name"] == "bash"));
