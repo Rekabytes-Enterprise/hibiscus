@@ -150,6 +150,12 @@ OpenRouter (`openrouter`, `https://openrouter.ai/api/v1`, `OPENROUTER_API_KEY`) 
 
 For Ornith, use provider ID `ornith` (case-insensitive), a local or private-network URL, and the `chat_completions` API. Set `"reasoning": true` on each Ornith model you want to enable. The thinking selector offers **off** and **on**. Off explicitly disables Ornith thinking even when the server starts with `--think`. Set `contextWindow` to the token limit configured on your server.
 
+### Local AI model detection
+
+In Desktop Settings → Providers → Local AI, enter the URL of your own server and choose OpenAI Chat Completions. **Detect models** previews the server's `/models` catalog. A bare server URL uses `/v1`. Enter an API key only if your local server requires one.
+
+Saving the detected list enables discovery at startup and when opening the model picker. Hibiscus keeps the last working list during a discovery error and uses the list saved during setup if the initial refresh fails. Enter model names manually when a server does not provide a catalog. For Ornith's Off/On thinking selector, name the provider `ornith` and use a model that advertises reasoning.
+
 ## Authentication
 
 Welcome tips and TUI slash suggestions hide `/login` when a configured provider has credentials or an available Rooxcode model provides anonymous access. The command remains available to type for another provider. This distinguishes anonymous model access from credential presence; neither guarantees that a generation request will succeed. CLI opens login/logout in the native fullscreen dialogs and returns to inline chat afterward.

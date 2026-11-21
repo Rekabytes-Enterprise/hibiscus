@@ -17,6 +17,10 @@ pub enum Authentication {
     ApiKey,
     Codex,
     Rooxcode,
+    Local,
+}
+fn is_false(value: &bool) -> bool {
+    !value
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +52,8 @@ pub struct Provider {
     pub api: Api,
     #[serde(default)]
     pub authentication: Authentication,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub discover_models: bool,
     #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(default)]
@@ -91,6 +97,7 @@ fn defaults() -> Vec<Provider> {
             base_url: "https://api.openai.com/v1".into(),
             api: Api::Responses,
             authentication: Authentication::ApiKey,
+            discover_models: false,
             api_key_env: Some("OPENAI_API_KEY".into()),
             models: vec![model("gpt-4.1")],
         },
@@ -99,6 +106,7 @@ fn defaults() -> Vec<Provider> {
             base_url: "https://api.anthropic.com/v1".into(),
             api: Api::Anthropic,
             authentication: Authentication::ApiKey,
+            discover_models: false,
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
             models: vec![model("claude-sonnet-4-5")],
         },
@@ -129,6 +137,7 @@ fn parse(raw: serde_json::Value) -> Result<Config> {
             base_url: super::oauth::RESOURCE.into(),
             api: Api::Responses,
             authentication: Authentication::Codex,
+            discover_models: false,
             api_key_env: None,
             // Fallback until the plan's own list is fetched (catalog::refresh).
             models: vec![Model {
@@ -141,7 +150,7 @@ fn parse(raw: serde_json::Value) -> Result<Config> {
     super::rooxcode::install(&mut config);
     super::catalog::install(&mut config);
     let mut ids = std::collections::HashSet::new();
-    for p in &config.providers {
+    for p in &mut config.providers {
         super::rooxcode::validate_provider(p)?;
         if (p.authentication == Authentication::Codex || p.id == "openai-codex")
             && (p.id != "openai-codex"
@@ -166,6 +175,29 @@ fn parse(raw: serde_json::Value) -> Result<Config> {
         {
             return Err("provider baseUrl must use HTTPS, or HTTP on this computer or a private network, without credentials/query/fragment".into());
         }
+        if p.discover_models {
+            p.base_url = local_catalog_base(&p.base_url)?
+                .as_str()
+                .trim_end_matches('/')
+                .to_owned();
+            if p.api != Api::ChatCompletions
+                || !matches!(
+                    p.authentication,
+                    Authentication::ApiKey | Authentication::Local
+                )
+                || super::catalog::key_page(&p.id).is_some()
+            {
+                return Err("Auto-detection requires a local Chat Completions provider.".into());
+            }
+            config.discovered.insert(p.id.clone());
+        }
+        if p.authentication == Authentication::Local
+            && (!p.discover_models || p.api_key_env.is_some())
+        {
+            return Err(
+                "Keyless local authentication requires an auto-detected local provider.".into(),
+            );
+        }
         let mut models = std::collections::HashSet::new();
         if p.models.iter().any(|m| {
             m.id.is_empty()
@@ -173,7 +205,7 @@ fn parse(raw: serde_json::Value) -> Result<Config> {
                 || m.max_request_bytes
                     .is_some_and(|n| !(1024..=104_857_600).contains(&n))
                 || m.max_messages.is_some_and(|n| !(4..=10000).contains(&n))
-                || m.max_tokens == 0
+                || (m.max_tokens == 0 && !p.discover_models)
                 || m.context_window.is_some_and(|n| n <= m.max_tokens)
         }) {
             return Err("invalid or duplicate model configuration".into());
@@ -186,6 +218,24 @@ fn parse(raw: serde_json::Value) -> Result<Config> {
         config.model = Some(id);
     }
     Ok(config)
+}
+
+/// Validate the same URL for preview, saving and catalog refresh.
+pub(crate) fn local_catalog_base(raw: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(raw.trim()).map_err(|_| "Enter a valid local server URL.")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !private(&url)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Use an HTTP or HTTPS URL on this computer or your private network, without credentials, a query or a fragment.".into());
+    }
+    if url.path() == "/" {
+        url.set_path("/v1");
+    }
+    Ok(url)
 }
 
 /// Whether `url` points at this computer or a private network (home LAN,
@@ -298,6 +348,9 @@ pub fn key(provider: &Provider) -> Result<String> {
     if provider.authentication == Authentication::Codex {
         return super::oauth::stored_access_token();
     }
+    if provider.authentication == Authentication::Local {
+        return Err("This local server does not use provider credentials.".into());
+    }
     if let Some(key) = provider
         .api_key_env
         .as_ref()
@@ -313,6 +366,8 @@ pub fn key(provider: &Provider) -> Result<String> {
 pub fn access(provider: &Provider) -> Result<()> {
     if provider.authentication == Authentication::Rooxcode {
         super::rooxcode::validate_provider(provider)
+    } else if provider.authentication == Authentication::Local {
+        Ok(())
     } else {
         key(provider).map(|_| ())
     }
@@ -327,7 +382,7 @@ mod private_tests {
             "http://localhost:8080/v1",
             "http://127.0.0.1:1/v1",
             "http://[::1]:1/v1",
-            "http://192.168.3.3:8080/v1",
+            "http://10.0.0.10:8000/v1",
             "http://10.0.0.5/v1",
             "http://172.20.1.1/v1",
             "http://100.101.2.3/v1",

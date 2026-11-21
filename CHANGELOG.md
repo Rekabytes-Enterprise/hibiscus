@@ -4,6 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-21
+
+### Added
+
+- Detect models and their reported capabilities when adding a local Chat Completions server in Desktop Settings. Refresh detected models in the model picker and keep the last working list if the server is unreachable.
+
+### Changed
+
+- Guide Hibi to research public sources using the existing shell and curl, handle blocked requests, verify claims against original sources, and cite direct links.
+- Guide Hibi to handle expected coding failures, preserve user state, and verify failure paths as well as success.
+
 ## [0.4.5] - 2026-11-21
 
 ### Added

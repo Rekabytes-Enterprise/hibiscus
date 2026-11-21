@@ -7,7 +7,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -32,7 +32,7 @@ fn sse(v: Value) -> String {
 
 /// Answers every model request with a reply; a prompt containing SLOW gets a
 /// stream that never finishes, so it can be aborted.
-fn serve(listener: TcpListener, stop: Arc<AtomicBool>) {
+fn serve(listener: TcpListener, stop: Arc<AtomicBool>, catalog: PathBuf) {
     listener.set_nonblocking(true).unwrap();
     while !stop.load(Ordering::Relaxed) {
         let Ok((socket, _)) = listener.accept() else {
@@ -41,24 +41,50 @@ fn serve(listener: TcpListener, stop: Arc<AtomicBool>) {
         };
         socket.set_nonblocking(false).unwrap();
         let stop = stop.clone();
+        let catalog = catalog.clone();
         thread::spawn(move || {
             let mut reader = BufReader::new(socket.try_clone().unwrap());
             let mut socket = socket;
             let mut route = String::new();
             reader.read_line(&mut route).unwrap();
             let mut length = 0;
+            let mut authorization = None;
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 if line == "\r\n" {
                     break;
                 }
-                if let Some(n) = line.to_lowercase().strip_prefix("content-length:") {
-                    length = n.trim().parse().unwrap();
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap();
+                    } else if name.eq_ignore_ascii_case("authorization") {
+                        authorization = Some(value.trim().to_owned());
+                    }
                 }
             }
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
+            if route.starts_with("GET /local/v1/models ") {
+                assert!(authorization.is_none());
+                let fixture: Value = serde_json::from_slice(&fs::read(catalog).unwrap()).unwrap();
+                let status = fixture["status"].as_u64().unwrap();
+                let body = fixture["body"].to_string();
+                write!(socket, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                return;
+            }
+            if route.starts_with("POST /local/v1/chat/completions ") {
+                assert!(authorization.is_none());
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["model"], "second");
+                assert_eq!(body["reasoning_effort"], "low");
+                assert!(body.get("max_tokens").is_none());
+                let reply = sse(
+                    json!({"choices":[{"delta":{"content":"LOCAL_REPLY"},"finish_reason":"stop"}]}),
+                );
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).unwrap();
+                return;
+            }
             if route.starts_with("GET ") {
                 let body = r#"{"data":[]}"#;
                 let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
@@ -107,6 +133,20 @@ fn prompt(engine: &mut Engine, text: &str) -> String {
     until_settled(engine)
 }
 
+fn ask(engine: &mut Engine, command: Value) -> Value {
+    let id = engine.send(command).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(event) = engine.next_event(Duration::from_millis(100)).unwrap() {
+            if event["type"] == "response" && event["id"] == id.as_str() {
+                assert_eq!(event["success"], true, "{event}");
+                return event["data"].clone();
+            }
+        }
+        assert!(Instant::now() < deadline, "no response for {id}");
+    }
+}
+
 #[test]
 fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     let root = unique_temp_dir("hibiscus-desktop");
@@ -132,9 +172,11 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
         std::env::remove_var(name);
     }
     let stop = Arc::new(AtomicBool::new(false));
+    let catalog = root.join("local-catalog.json");
     let server = thread::spawn({
         let stop = stop.clone();
-        move || serve(listener, stop)
+        let catalog = catalog.clone();
+        move || serve(listener, stop, catalog)
     });
 
     // Two engines in one process, each in its own workspace.
@@ -213,6 +255,90 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     let openrouter = providers.iter().find(|p| p.id == "openrouter").unwrap();
     assert!(openrouter.api_key && !openrouter.signed_in);
     assert!(providers.iter().any(|p| p.id == "rooxcode" && !p.api_key));
+
+    let local_url = base.replace("/v1", "/local/v1");
+    let entry = |id| json!({"id":id,"context_length":32768,"supported_parameters":["tools","reasoning"],"architecture":{"input_modalities":["text"]}});
+    let publish_catalog = |status, entries| {
+        fs::write(
+            &catalog,
+            json!({"status":status,"body":{"data":entries}}).to_string(),
+        )
+        .unwrap();
+    };
+    publish_catalog(200, vec![entry("first")]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let models = desktop::detect_local_models(&local_url, "").await.unwrap();
+        let preview = serde_json::to_value(models).unwrap();
+        assert_eq!(
+            preview[0],
+            json!({"id":"first","contextWindow":32768,"reasoning":true,"images":false})
+        );
+        assert!(desktop::detect_local_models("https://example.org/v1", "")
+            .await
+            .is_err());
+        desktop::add_local_provider(desktop::LocalProvider {
+            id: "ornith".into(),
+            base_url: local_url,
+            api: "chat_completions".into(),
+            models: vec![],
+            context_window: None,
+            discover_models: true,
+            key: String::new(),
+        })
+        .await
+        .unwrap();
+    });
+    let saved: Value =
+        serde_json::from_slice(&fs::read(home.join("config.json")).unwrap()).unwrap();
+    let local = saved["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "ornith")
+        .unwrap();
+    assert_eq!(local["discoverModels"], true);
+    assert_eq!(local["models"][0]["id"], "first");
+    let local = desktop::providers()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.id == "ornith")
+        .unwrap();
+    assert!(local.local && local.signed_in && !local.api_key);
+    let mut detected = Engine::start(Start::New, &a).unwrap();
+    let list = |engine: &mut Engine| ask(engine, json!({"type":"get_available_models"}));
+    publish_catalog(200, vec![entry("first"), entry("second")]);
+    let latest = list(&mut detected);
+    let new = latest["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["provider"] == "ornith" && m["id"] == "second")
+        .unwrap();
+    assert_eq!(new["contextWindow"], 32768);
+    assert_eq!(new["thinkingLevels"], json!(["off", "on"]));
+    publish_catalog(503, vec![]);
+    for _ in 0..2 {
+        let outage = list(&mut detected);
+        assert_eq!(outage["models"], latest["models"]);
+        assert!(outage["catalogError"]
+            .as_str()
+            .unwrap()
+            .contains("ornith: model discovery returned HTTP 503"));
+    }
+    ask(
+        &mut detected,
+        json!({"type":"set_model","provider":"ornith","modelId":"second"}),
+    );
+    ask(
+        &mut detected,
+        json!({"type":"set_thinking_level","level":"on"}),
+    );
+    assert!(prompt(&mut detected, "Use the selected local model.").contains("LOCAL_REPLY"));
+    detected.shutdown();
 
     stop.store(true, Ordering::Relaxed);
     server.join().unwrap();

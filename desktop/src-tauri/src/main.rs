@@ -362,6 +362,8 @@ struct LocalProvider {
     api: String,
     models: Vec<String>,
     context_window: Option<u64>,
+    #[serde(default)]
+    discover_models: bool,
     key: String,
 }
 
@@ -373,9 +375,21 @@ async fn add_local_provider(provider: LocalProvider) -> Result<(), String> {
         api: provider.api,
         models: provider.models,
         context_window: provider.context_window,
+        discover_models: provider.discover_models,
         key: provider.key,
     })
+    .await
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn detect_local_models(
+    base_url: String,
+    key: String,
+) -> Result<Vec<desktop::LocalModel>, String> {
+    desktop::detect_local_models(&base_url, &key)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1296,6 +1310,7 @@ fn main() {
             providers,
             save_api_key,
             add_local_provider,
+            detect_local_models,
             remove_local_provider,
             sign_out,
             training_denied,

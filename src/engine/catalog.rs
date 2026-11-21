@@ -47,6 +47,7 @@ pub(super) fn install(config: &mut Config) {
                 base_url: b.base_url.into(),
                 api: Api::ChatCompletions,
                 authentication: Authentication::ApiKey,
+                discover_models: false,
                 api_key_env: Some(b.key_env.into()),
                 models: vec![],
             });
@@ -81,7 +82,7 @@ fn models_url(provider: &Provider) -> String {
         .unwrap_or_else(|| format!("{}/models", provider.base_url.trim_end_matches('/')))
 }
 
-/// Refreshes every discovered provider that has a key. Returns one message per failure.
+/// Refreshes discovered providers that can connect. Returns one message per failure.
 pub(super) async fn refresh(config: &mut Config) -> Vec<String> {
     let jobs = config
         .providers
@@ -92,6 +93,18 @@ pub(super) async fn refresh(config: &mut Config) -> Vec<String> {
             let job = if p.authentication == Authentication::Codex {
                 super::oauth::stored_access_token().ok()?;
                 tokio::spawn(fetch_codex(config.codex_version.clone()))
+            } else if p.discover_models {
+                let key = if p.authentication == Authentication::Local {
+                    None
+                } else {
+                    Some(super::config::key(p).ok()?)
+                };
+                let base_url = p.base_url.clone();
+                tokio::spawn(async move {
+                    fetch_local(&base_url, key.as_deref())
+                        .await
+                        .map(|models| (models, None))
+                })
             } else {
                 let key = super::config::key(p).ok()?;
                 let fetched = fetch(id.clone(), models_url(p), key);
@@ -118,6 +131,31 @@ pub(super) async fn refresh(config: &mut Config) -> Vec<String> {
         }
     }
     errors
+}
+
+pub(crate) async fn fetch_local(base: &str, key: Option<&str>) -> Result<Vec<Model>> {
+    let base = super::config::local_catalog_base(base)?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let mut request = client.get(format!("{}/models", base.as_str().trim_end_matches('/')));
+    if let Some(key) = key {
+        request = request.bearer_auth(key);
+    }
+    let failed = || {
+        "Could not read the local model catalog. Check the server URL and that the server is running.".to_owned()
+    };
+    let response = request.send().await.map_err(|_| failed())?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("The local server rejected model detection. Check its API key.".into());
+    }
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("This server did not expose a model catalog. Check the URL or enter model names manually.".into());
+    }
+    parse(&body(response, failed).await?)
 }
 
 async fn fetch(id: String, url: String, key: String) -> Result<Vec<Model>> {

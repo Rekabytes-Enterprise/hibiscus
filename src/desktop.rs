@@ -355,8 +355,10 @@ pub fn providers() -> Result<Vec<ProviderInfo>> {
             browser: p.authentication == config::Authentication::Codex,
             signed_in: config::access(p).is_ok(),
             key_page: key_page(&p.id),
-            local: p.authentication == config::Authentication::ApiKey
-                && reqwest::Url::parse(&p.base_url).is_ok_and(|u| config::private(&u)),
+            local: matches!(
+                p.authentication,
+                config::Authentication::ApiKey | config::Authentication::Local
+            ) && reqwest::Url::parse(&p.base_url).is_ok_and(|u| config::private(&u)),
         })
         .collect())
 }
@@ -365,19 +367,56 @@ pub fn providers() -> Result<Vec<ProviderInfo>> {
 pub struct LocalProvider {
     /// Its name in Hibiscus, e.g. `ornith`; models show as `ornith/<model>`.
     pub id: String,
-    /// Where its API starts, e.g. `http://192.168.3.3:8080/v1`.
+    /// Where its API starts, e.g. `http://localhost:8000/v1`.
     pub base_url: String,
     /// `chat_completions`, `responses` or `anthropic`.
     pub api: String,
     pub models: Vec<String>,
     pub context_window: Option<u64>,
+    pub discover_models: bool,
     /// Empty when the server takes no key.
     pub key: String,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModel {
+    id: String,
+    context_window: Option<u64>,
+    reasoning: bool,
+    images: bool,
+}
+
+/// Preview the catalog without storing the server or its key.
+pub async fn detect_local_models(base_url: &str, key: &str) -> Result<Vec<LocalModel>> {
+    Ok(local_models(base_url, key)
+        .await?
+        .into_iter()
+        .map(|model| LocalModel {
+            id: model.id,
+            context_window: model.context_window,
+            reasoning: model.reasoning,
+            images: model.images,
+        })
+        .collect())
+}
+
+async fn local_models(base_url: &str, key: &str) -> Result<Vec<crate::engine::config::Model>> {
+    let key = key.trim();
+    if key.len() > 8192 || key.chars().any(char::is_control) {
+        return Err("The optional API key contains invalid characters or is too long.".into());
+    }
+    let models =
+        crate::engine::catalog::fetch_local(base_url, (!key.is_empty()).then_some(key)).await?;
+    if models.is_empty() {
+        return Err("The local catalog returned no usable models.".into());
+    }
+    Ok(models)
+}
+
 /// Adds a local model server to `config.json` and stores its key.
 /// Start a new engine afterwards, as after saving an API key.
-pub fn add_local_provider(local: LocalProvider) -> Result<()> {
+pub async fn add_local_provider(local: LocalProvider) -> Result<()> {
     use crate::engine::config;
     let api = serde_json::from_value(serde_json::Value::String(local.api.clone()))
         .map_err(|_| format!("Unknown API {}", local.api))?;
@@ -387,29 +426,49 @@ pub fn add_local_provider(local: LocalProvider) -> Result<()> {
         .map(|m| m.trim().to_owned())
         .filter(|m| !m.is_empty())
         .collect();
-    if models.is_empty() {
+    if !local.discover_models && models.is_empty() {
         return Err("Add at least one model name".into());
     }
-    let provider = config::Provider {
-        id: local.id.trim().to_owned(),
-        base_url: local.base_url.trim().trim_end_matches('/').to_owned(),
-        api,
-        authentication: config::Authentication::ApiKey,
-        api_key_env: None,
-        models: models
+    let (base_url, authentication, models) = if local.discover_models {
+        if api != config::Api::ChatCompletions {
+            return Err("Auto-detection uses the OpenAI Chat Completions API.".into());
+        }
+        let base_url = config::local_catalog_base(&local.base_url)?.to_string();
+        let models = local_models(&base_url, &local.key).await?;
+        let authentication = if local.key.trim().is_empty() {
+            config::Authentication::Local
+        } else {
+            config::Authentication::ApiKey
+        };
+        (base_url, authentication, models)
+    } else {
+        let models = models
             .into_iter()
             .map(|id| {
                 serde_json::from_value(
                     serde_json::json!({"id": id, "contextWindow": local.context_window}),
                 )
             })
-            .collect::<std::result::Result<_, _>>()?,
+            .collect::<std::result::Result<_, _>>()?;
+        (local.base_url, config::Authentication::ApiKey, models)
+    };
+    let provider = config::Provider {
+        id: local.id.trim().to_owned(),
+        base_url: base_url.trim().trim_end_matches('/').to_owned(),
+        api,
+        authentication,
+        discover_models: local.discover_models,
+        api_key_env: None,
+        models,
     };
     if !reqwest::Url::parse(&provider.base_url).is_ok_and(|u| config::private(&u)) {
         return Err("A local AI server must be on this computer or your private network. Add other servers in config.json.".into());
     }
     config::add_provider(&provider)?;
-    // Hibiscus sends every API-key provider a key; servers without one ignore it.
+    if provider.authentication == config::Authentication::Local {
+        return Ok(());
+    }
+    // Keep the existing manual provider behavior for older keyless setups.
     let key = if local.key.trim().is_empty() {
         "local"
     } else {

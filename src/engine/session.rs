@@ -304,7 +304,15 @@ impl Session {
             .models
             .iter()
             .find(|v| &v.id == m)
-            .ok_or(if p == super::rooxcode::ID { "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly." } else if super::catalog::discovered(config, p) { "The selected model is not in the provider's model list. Use /login to add its API key, or open /models to choose another." } else { "Session model is no longer configured" })?;
+            .ok_or(if p == super::rooxcode::ID {
+                "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly."
+            } else if provider.discover_models {
+                "The selected local model is unavailable. Check the local server or open /models to choose another model."
+            } else if super::catalog::discovered(config, p) {
+                "The selected model is not in the provider's model list. Use /login to add its API key, or open /models to choose another."
+            } else {
+                "Session model is no longer configured"
+            })?;
         Ok((provider, model))
     }
     pub fn state(&self, config: &Config) -> Value {

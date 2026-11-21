@@ -67,6 +67,7 @@ pub(super) fn install(config: &mut Config) {
             base_url: URL.into(),
             api: Api::ChatCompletions,
             authentication: Authentication::Rooxcode,
+            discover_models: false,
             api_key_env: None,
             models: vec![],
         });

@@ -54,7 +54,10 @@ impl<'a> Policy<'a> {
             })
         } else if model.reasoning
             && provider.api == Api::ChatCompletions
-            && provider.authentication == Authentication::ApiKey
+            && matches!(
+                provider.authentication,
+                Authentication::ApiKey | Authentication::Local
+            )
             && provider.id.eq_ignore_ascii_case("ornith")
             && reqwest::Url::parse(&provider.base_url).is_ok_and(|url| config::private(&url))
         {
