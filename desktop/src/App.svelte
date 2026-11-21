@@ -710,8 +710,27 @@
   }
 
   async function send(text: string, images: { mimeType: string; data: string }[], steer: boolean) {
-    const command: any = { type: "prompt", message: text, images };
-    if (chat.running) command.streamingBehavior = steer ? "steer" : "followUp";
+    const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text);
+    if (compact) {
+      if (chat.running || opening || images.length) {
+        notice(images.length ? "Remove attachments before compacting." : "Wait for the current run to finish, or stop it, then compact.");
+        composer?.add(text, images);
+        return;
+      }
+      opening = true;
+      notice("Compacting the conversation…", false);
+      try {
+        await request({ type: "compact", customInstructions: compact[1]?.trim() || undefined });
+        notice("Conversation compacted.", false);
+        await refresh(false);
+      } catch (e) {
+        notice(message(e));
+      } finally {
+        opening = false;
+      }
+      return;
+    }
+    const command = { type: "prompt", message: text, images, ...(chat.running ? { streamingBehavior: steer ? "steer" : "followUp" } : {}) };
     try {
       await post(command);
     } catch (e) {

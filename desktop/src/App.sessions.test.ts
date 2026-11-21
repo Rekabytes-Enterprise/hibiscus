@@ -91,3 +91,68 @@ it("replaces the open session before deleting it and can then resume another", a
     localStorage.clear();
   }
 });
+
+it("runs /compact for the current session and refuses to queue it in an active turn", async () => {
+  localStorage.setItem("hibiscus.ownProvider", "1");
+  const originalScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+  let sequence = 0;
+  const commands: { type: string; customInstructions?: string }[] = [];
+  let compactId: string | undefined;
+  tauri.invoke.mockImplementation(async (name: string, args?: { command?: { type: string; customInstructions?: string } }) => {
+    if (name === "open_project") return false;
+    if (name === "sessions" || name === "wsl_distros" || name === "canvas_styles") return [];
+    if (name === "send" && args?.command) {
+      commands.push(args.command);
+      const id = `desktop-compact-test-${++sequence}`;
+      if (args.command.type === "compact") {
+        compactId = id;
+      } else {
+        tauri.events.get("engine")?.({ payload: { type: "response", id, success: true,
+          data: { hasAccess: true, messages: [], models: [], levels: [] },
+        } });
+      }
+      return id;
+    }
+    return null;
+  });
+  const target = document.createElement("div");
+  document.body.append(target);
+  const app = mount(App, { target });
+  async function draft(text: string) {
+    const input = target.querySelector("textarea");
+    if (!input) throw new Error("Composer unavailable");
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await Promise.resolve();
+    return input;
+  }
+  const submit = (input: HTMLTextAreaElement) =>
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  const event = (payload: unknown) => tauri.events.get("engine")?.({ payload });
+
+  try {
+    await vi.waitFor(() => expect(target.querySelector("textarea")?.disabled).toBe(false));
+    await draft("/comp");
+    await vi.waitFor(() => expect(target.textContent).toContain("[instructions]"));
+    submit(await draft("/compact retain decisions"));
+    await vi.waitFor(() => expect(commands).toContainEqual({ type: "compact", customInstructions: "retain decisions" }));
+    expect(target.textContent).toContain("Compacting the conversation…");
+    event({ type: "response", id: compactId, success: true, data: { summary: "Kept decisions" } });
+    await vi.waitFor(() => expect(target.textContent).toContain("Conversation compacted."));
+    await vi.waitFor(() => expect(target.querySelector("textarea")?.disabled).toBe(false));
+
+    event({ type: "agent_start" });
+    await vi.waitFor(() => expect(target.querySelector('[aria-label="Stop"]')).not.toBeNull());
+    submit(await draft("/compact"));
+    await vi.waitFor(() => expect(target.textContent).toContain("then compact"));
+    expect(commands.filter((item) => item.type === "compact")).toHaveLength(1);
+    expect(commands.some((item) => item.type === "prompt")).toBe(false);
+  } finally {
+    await unmount(app);
+    target.remove();
+    localStorage.clear();
+    if (originalScrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScrollTo);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
