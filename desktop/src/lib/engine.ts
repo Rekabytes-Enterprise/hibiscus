@@ -23,9 +23,11 @@ export type LocalProvider = {
   api: "chat_completions" | "responses" | "anthropic";
   models: string[];
   contextWindow: number | null;
+  discoverModels: boolean;
   /** Empty when the server takes no key. */
   key: string;
 };
+export type LocalModel = Pick<ModelInfo, "id" | "contextWindow" | "reasoning" | "images">;
 export type ModelInfo = {
   provider: string;
   id: string;
@@ -127,6 +129,8 @@ export const saveApiKey = (provider: string, key: string) =>
   invoke<void>("save_api_key", { provider, key });
 export const signOut = (provider: string) => invoke<void>("sign_out", { provider });
 export const addLocalProvider = (provider: LocalProvider) => invoke<void>("add_local_provider", { provider });
+export const detectLocalModels = (baseUrl: string, key: string) =>
+  invoke<LocalModel[]>("detect_local_models", { baseUrl, key });
 export const removeLocalProvider = (id: string) => invoke<void>("remove_local_provider", { id });
 /** Whether OpenRouter requests ask for providers that don't store or train on prompts. */
 export const trainingDenied = () => invoke<boolean>("training_denied");

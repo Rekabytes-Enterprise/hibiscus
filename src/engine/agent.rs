@@ -479,7 +479,12 @@ async fn serve_async(
                     let fresh = super::catalog::refresh(Arc::make_mut(&mut config)).await;
                     errors = fresh
                         .iter()
-                        .filter(|e| !provider_errors.contains(e))
+                        .filter(|e| {
+                            !provider_errors.contains(e)
+                                || config.providers.iter().any(|p| {
+                                    p.discover_models && e.starts_with(&format!("{}: ", p.id))
+                                })
+                        })
                         .cloned()
                         .collect();
                     provider_errors = fresh;

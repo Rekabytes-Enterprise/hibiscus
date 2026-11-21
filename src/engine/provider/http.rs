@@ -27,17 +27,24 @@ pub(super) async fn exchange(
     let mut response = if anonymous {
         crate::engine::rooxcode::send_chat(provider, body, &conversation.rooxcode_session).await?
     } else {
-        let client = reqwest::Client::builder()
+        let mut client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(600))
-            .build()?;
-        let key = if let Some(token) = codex {
-            token.access.clone()
+            .timeout(Duration::from_secs(600));
+        if provider.discover_models {
+            client = client.no_proxy();
+        }
+        let client = client.build()?;
+        let req = if provider.authentication == crate::engine::config::Authentication::Local {
+            client.post(url).json(body)
         } else {
-            crate::engine::config::key(provider)?
+            let key = if let Some(token) = codex {
+                token.access.clone()
+            } else {
+                crate::engine::config::key(provider)?
+            };
+            authenticated_request(&client, url, body.clone(), &key, codex)?
         };
-        let req = authenticated_request(&client, url, body.clone(), &key, codex)?;
         let req = if provider.api == Api::Anthropic {
             req.header("anthropic-version", "2023-06-01")
         } else {

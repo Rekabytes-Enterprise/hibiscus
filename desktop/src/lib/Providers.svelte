@@ -3,6 +3,7 @@
   import { onDestroy, onMount } from "svelte";
   import {
     addLocalProvider,
+    detectLocalModels,
     removeLocalProvider,
     codexCancel,
     codexPaste,
@@ -13,6 +14,7 @@
     saveApiKey,
     signOut,
     type LocalProvider,
+    type LocalModel,
     type ProviderInfo,
     type RekaAccount,
   } from "./engine";
@@ -37,7 +39,7 @@
   async function load() {
     try {
       // rooxcode is built in: nothing to set up.
-      providers = (await listProviders()).filter((p) => p.apiKey || p.browser);
+      providers = (await listProviders()).filter((p) => p.local || p.apiKey || p.browser);
       reka = await rekaAccount();
     } catch (e) {
       error = message(e);
@@ -127,24 +129,53 @@
 
   /** The Add local AI form, while it is open. */
   let local = $state<{ id: string; baseUrl: string; api: LocalProvider["api"]; models: string; contextWindow: number | null; key: string } | null>(null);
+  let detected = $state<LocalModel[] | null>(null);
+  let detecting = $state(false);
+  let localError = $state<string | null>(null);
+  let detectionId = 0;
+
+  function clearDetection() {
+    ++detectionId;
+    detected = null;
+    detecting = false;
+    localError = null;
+  }
+
+  async function detect() {
+    if (!local || detecting) return;
+    const id = ++detectionId;
+    detecting = true;
+    localError = null;
+    try {
+      const models = await detectLocalModels(local.baseUrl.trim(), local.key);
+      if (id === detectionId) detected = models;
+    } catch (e) {
+      if (id === detectionId) localError = message(e);
+    } finally {
+      if (id === detectionId) detecting = false;
+    }
+  }
 
   async function addLocal() {
-    if (!local) return;
+    if (!local || saving || detecting) return;
     saving = true;
-    error = null;
+    localError = null;
     try {
       await addLocalProvider({
         id: local.id.trim(),
         baseUrl: local.baseUrl.trim(),
         api: local.api,
-        models: local.models.split(/[\s,]+/).filter(Boolean),
-        contextWindow: local.contextWindow || null,
+        models: detected ? [] : local.models.split(/[\s,]+/).filter(Boolean),
+        contextWindow: detected ? null : local.contextWindow || null,
+        discoverModels: detected !== null,
         key: local.key,
       });
       local = null;
+      clearDetection();
       await changed();
     } catch (e) {
-      error = message(e);
+      if (local) localError = message(e);
+      else error = message(e);
     } finally {
       saving = false;
     }
@@ -234,39 +265,57 @@
       <Icon name="server" />
       <span class="grow">Local AI<span class="muted small"> · Ollama, LM Studio, vLLM or your own server</span></span>
       {#if !local}
-        <button onclick={() => { local = { id: "", baseUrl: "http://", api: "chat_completions", models: "", contextWindow: null, key: "" }; error = null; }}><Icon name="plus" size={14} /> Add local AI</button>
+        <button onclick={() => { local = { id: "", baseUrl: "", api: "chat_completions", models: "", contextWindow: null, key: "" }; clearDetection(); error = null; }}><Icon name="plus" size={14} /> Add local AI</button>
       {/if}
     </div>
     {#if local}
       <form class="local" onsubmit={(e) => { e.preventDefault(); addLocal(); }}>
         <label><span class="small">Name</span>
           <!-- svelte-ignore a11y_autofocus -->
-          <input type="text" autocomplete="off" spellcheck="false" placeholder="ornith" bind:value={local.id} autofocus />
+          <input type="text" autocomplete="off" spellcheck="false" placeholder="ornith" bind:value={local.id} disabled={saving} autofocus />
         </label>
         <label><span class="small">Server URL</span>
-          <input type="text" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.20:8080/v1" bind:value={local.baseUrl} />
+          <input type="text" autocomplete="off" spellcheck="false" placeholder="http://localhost:8000/v1" bind:value={local.baseUrl} oninput={clearDetection} disabled={saving} />
         </label>
         <label><span class="small">API</span>
-          <select bind:value={local.api}>
+          <select bind:value={local.api} onchange={clearDetection} disabled={saving}>
             <option value="chat_completions">OpenAI Chat Completions (/chat/completions)</option>
             <option value="responses">OpenAI Responses (/responses)</option>
             <option value="anthropic">Anthropic Messages (/messages)</option>
           </select>
         </label>
-        <label><span class="small">Models, separated by commas</span>
-          <input type="text" autocomplete="off" spellcheck="false" placeholder="qwen3-coder-30b" bind:value={local.models} />
-        </label>
-        <label><span class="small">Context window in tokens (optional)</span>
-          <input type="number" min="8192" placeholder="32768" bind:value={local.contextWindow} />
-        </label>
         <label><span class="small">API key (optional)</span>
-          <input type="password" autocomplete="off" spellcheck="false" placeholder="Leave empty if the server takes no key" bind:value={local.key} />
+          <input type="password" autocomplete="off" spellcheck="false" placeholder="Leave empty if the server takes no key" bind:value={local.key} oninput={clearDetection} disabled={saving} />
         </label>
+        {#if detected}
+          <div class="actions">
+            <strong>Detected models</strong>
+            <span class="grow"></span>
+            <button type="button" disabled={saving} onclick={clearDetection}>Enter manually</button>
+          </div>
+          <ul class="detected small">
+            {#each detected as model (model.id)}
+              <li><strong>{model.id}</strong>{#if model.contextWindow} · {model.contextWindow.toLocaleString()} tokens{/if}{#if model.reasoning} · Reasoning reported{/if}{#if model.images} · Image input{/if}</li>
+            {/each}
+          </ul>
+          <p class="small muted">Hibiscus refreshes this list when you open the model picker.</p>
+        {:else}
+          {#if local.api === "chat_completions"}
+            <button class="detect" type="button" onclick={detect} disabled={saving || detecting || !local.baseUrl.trim()}>{detecting ? "Detecting…" : "Detect models"}</button>
+          {/if}
+          <label><span class="small">Models, separated by commas</span>
+            <input type="text" autocomplete="off" spellcheck="false" placeholder="qwen3-coder-30b" bind:value={local.models} disabled={saving} />
+          </label>
+          <label><span class="small">Context window in tokens (optional)</span>
+            <input type="number" min="8192" placeholder="32768" bind:value={local.contextWindow} disabled={saving} />
+          </label>
+        {/if}
+        {#if localError}<p class="small error" role="status">{localError}</p>{/if}
         <p class="small muted">HTTP works for this computer and your private network: 192.168.x, 10.x, Tailscale, .local names. Anything else needs HTTPS.</p>
         <div class="actions">
           <span class="grow"></span>
-          <button type="button" onclick={() => (local = null)}>Cancel</button>
-          <button class="primary" disabled={saving || !local.id.trim() || !local.baseUrl.trim() || !local.models.trim()}>Add</button>
+          <button type="button" disabled={saving} onclick={() => { local = null; clearDetection(); }}>Cancel</button>
+          <button class="primary" disabled={saving || detecting || !local.id.trim() || !local.baseUrl.trim() || (!detected && !local.models.trim())}>{saving ? "Adding…" : "Add"}</button>
         </div>
       </form>
     {/if}
@@ -281,4 +330,6 @@
     gap: 4px;
     margin-bottom: 8px;
   }
+  .detected { max-height: 10rem; overflow: auto; }
+  .detect { margin-bottom: 8px; }
 </style>

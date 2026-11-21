@@ -264,6 +264,7 @@ mod tests {
             base_url: String::new(),
             api,
             authentication: Authentication::default(),
+            discover_models: false,
             api_key_env: None,
             models: vec![],
         };
