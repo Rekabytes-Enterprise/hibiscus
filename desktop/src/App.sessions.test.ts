@@ -146,6 +146,7 @@ it("runs /compact for the current session and refuses to queue it in an active t
     await vi.waitFor(() => expect(target.querySelector('[aria-label="Stop"]')).not.toBeNull());
     submit(await draft("/compact"));
     await vi.waitFor(() => expect(target.textContent).toContain("then compact"));
+    expect(target.querySelector("textarea")?.value).toBe("/compact");
     expect(commands.filter((item) => item.type === "compact")).toHaveLength(1);
     expect(commands.some((item) => item.type === "prompt")).toBe(false);
   } finally {

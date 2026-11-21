@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Chat } from "./chat";
   import Icon from "./Icon.svelte";
+  import Menu from "./Menu.svelte";
 
   type Image = { mimeType: string; data: string };
   let {
@@ -20,8 +21,18 @@
 
   let text = $state("");
   let images = $state<Image[]>([]);
-  // While a run is active: steer = delivered before its next step, else after it finishes.
-  let steer = $state(false);
+  const sendModes = [
+    { value: "queue", label: "Queue for next turn", hint: "Send when the current run finishes" },
+    { value: "steer", label: "Steer current run", hint: "Send at the next safe point" },
+  ] as const;
+  type SendMode = (typeof sendModes)[number]["value"];
+  let sendMode = $state<SendMode>("queue");
+  const sendLabel = $derived(sendMode === "steer" ? "Steer" : "Queue");
+  const canSend = $derived(!disabled && (!!text.trim() || images.length > 0));
+
+  $effect(() => {
+    if (!running || disabled) sendMode = "queue";
+  });
 
   let input: HTMLTextAreaElement;
   const suggestCompact = $derived(text.startsWith("/") && "/compact".startsWith(text));
@@ -39,12 +50,13 @@
   }
 
   function submit() {
+    if (!canSend) return;
     const message = text.trim();
-    if (disabled) return;
-    if (!message && !images.length) return;
     const attachments = images;
+    const steer = running && sendMode === "steer";
     text = "";
     images = [];
+    sendMode = "queue";
     onsend(message, attachments, steer);
   }
 
@@ -116,12 +128,45 @@
       {onpaste}
       rows="1"
       {disabled}
-      placeholder={running ? "Queue a message for when this step finishes…" : "Describe a task or ask a question"}
+      placeholder={running ? "Message Hibi…" : "Describe a task or ask a question"}
     ></textarea>
-    {#if running}<button class="send" onclick={onabort} title="Stop (Esc)" aria-label="Stop"><Icon name="square" size={14} /></button>{/if}
-    <button class="primary send" onclick={submit} disabled={disabled || (!text.trim() && !images.length)} title={running ? "Queue" : "Send (Enter)"} aria-label={running ? "Queue" : "Send"}><Icon name="arrow-up" /></button>
+    {#if running}
+      <button class="send" onclick={onabort} title="Stop (Esc)" aria-label="Stop"><Icon name="square" size={14} /></button>
+      {#key disabled}
+        <div class="send-split">
+          <button class="primary send" onclick={submit} disabled={!canSend} title={sendMode === "steer" ? "Steer current run (Enter)" : "Queue for next turn (Enter)"}>{sendLabel}</button>
+          <Menu
+            options={[...sendModes]}
+            value={sendMode}
+            label="Send mode"
+            onpick={(mode) => { sendMode = mode; input.focus(); }}
+            {disabled}
+          >
+            {#snippet trigger()}{/snippet}
+          </Menu>
+        </div>
+      {/key}
+    {:else}
+      <button class="primary send" onclick={submit} disabled={!canSend} title="Send (Enter)" aria-label="Send"><Icon name="arrow-up" /></button>
+    {/if}
   </div>
-  {#if running}
-    <label class="small muted"><input type="checkbox" bind:checked={steer} /> Steer the current run instead of waiting for it</label>
-  {/if}
 </div>
+
+<style>
+  textarea { min-width: 0; }
+  .send-split { display: flex; flex: none; }
+  .send-split .send { width: auto; min-width: 56px; padding: 0 9px; border-radius: 8px 0 0 8px; font-size: 12px; font-weight: 600; }
+  .send-split :global(.picker) {
+    height: 32px; width: 26px; justify-content: center; padding: 0;
+    color: var(--accent-text); background: var(--accent); border-radius: 0 8px 8px 0;
+    border-left: 1px solid color-mix(in srgb, var(--accent-text) 22%, transparent);
+  }
+  .send-split .send:hover:not(:disabled),
+  .send-split .send:focus-visible,
+  .send-split :global(.picker:hover:not(:disabled)),
+  .send-split :global(.picker:focus-visible),
+  .send-split :global(.picker[aria-expanded="true"]) {
+    background: color-mix(in srgb, var(--accent) 86%, var(--accent-text));
+  }
+  .send-split :global(.popover) { right: 0; left: auto; }
+</style>
