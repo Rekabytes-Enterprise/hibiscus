@@ -198,6 +198,11 @@ pub mod elevenlabs {
 pub mod dev_server {
     pub use crate::devserver::{detect, output, ready, start, status, stop, stop_all, Status};
 }
+
+/// Commands the agent runs in the background, for the Background tasks pane.
+pub mod jobs {
+    pub use crate::jobs::{clear, list, stop, stop_all, Info};
+}
 use crate::Result;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;

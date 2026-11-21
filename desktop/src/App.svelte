@@ -10,11 +10,12 @@
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
+  import TasksPane from "./lib/TasksPane.svelte";
   import { parseDiff } from "./lib/diff";
   import Composer from "./lib/Composer.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
-  import { added, opened, removed } from "./lib/folders";
+  import { added, moved, opened, removed } from "./lib/folders";
   import { name, wslDistro } from "./lib/paths";
   import Models from "./lib/Models.svelte";
   import NewSession from "./lib/NewSession.svelte";
@@ -28,6 +29,8 @@
   import { Background, type Run } from "./lib/background.svelte";
 
   const RECENT = "hibiscus.recentFolders";
+  // The folder to reopen at launch; the list's order is the user's own.
+  const LAST_FOLDER = "hibiscus.lastFolder";
   // Set by "Continue with my own provider": no sign-in screen at launch (#185).
   const OWN_PROVIDER = "hibiscus.ownProvider";
 
@@ -91,7 +94,7 @@
   let stats = $state<any>(null);
   let changes = $state<Changes | null>(null);
   // The right side shows session details, or the branch diff in their place.
-  let side = $state<"details" | "diff">("details");
+  let side = $state<"details" | "diff" | "tasks">("details");
   // The browser opens as its own pane at the far right, beside them.
   let browserOpen = $state(false);
   // The element the browser tool acts on, and a counter bumped after each
@@ -260,7 +263,9 @@
     await Promise.all(Object.entries(wsl).map(([f, d]) => wslConnect(f, d).catch(() => {})));
     void wslDistros().then((d) => (distros = d)).catch(() => {});
     home = await homeDir();
-    if (recent[0]) await open(recent[0]);
+    const last = localStorage.getItem(LAST_FOLDER);
+    const start = last && recent.includes(last) ? last : recent[0];
+    if (start) await open(start);
     if (!folder) await open(home);
     for (const path of recent) if (!saved[path]) void loadSessions(path);
   });
@@ -561,6 +566,7 @@
       }
       folder = path;
       saveRecent(opened(recent, path));
+      localStorage.setItem(LAST_FOLDER, path);
       if (resumed) {
         // Still running: the window's copy has the streamed reply the file doesn't have yet.
         sessionFile = session!;
@@ -670,6 +676,7 @@
       case "text_to_speech": return "Sending the script";
       case "analyze_video": return "Analyzing the video";
       case "video_preview": return "Opening the preview";
+      case "job": return "Checking a background job";
       case "ask_user": return "Asking you a question";
       default: return `Using ${tool}`;
     }
@@ -978,6 +985,7 @@
     ondelete={remove}
     onaddfolder={addFolder}
     onremovefolder={removeFolder}
+    onmovefolder={(from, to) => saveRecent(moved(recent, from, to))}
     oncollapse={toggleSidebar}
     oncanvas={() => (page = "canvas")}
     canvas={page === "canvas"}
@@ -1105,6 +1113,15 @@
       onwide={() => (wide = !wide)}
       onclose={() => { side = "details"; wide = false; }}
     />
+  {:else if active && panelOpen && side === "tasks"}
+    <TasksPane
+      folder={folder!}
+      {chat}
+      {wide}
+      onwide={() => (wide = !wide)}
+      onclose={() => { side = "details"; wide = false; }}
+      onabort={() => post({ type: "abort" }).catch(() => {})}
+    />
   {:else if active && panelOpen}
     <Details
       folder={folder!}
@@ -1118,6 +1135,7 @@
       {chat}
       onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
       onshowdiff={() => { side = "diff"; void refresh(); }}
+      onshowtasks={() => (side = "tasks")}
       onabort={() => post({ type: "abort" }).catch(() => {})}
     />
   {/if}
