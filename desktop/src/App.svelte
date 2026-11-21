@@ -4,7 +4,7 @@
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { onMount, tick, untrack } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, outage, type Chat } from "./lib/chat";
-  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, onBackground, onConfirmQuit, parkProject, quit, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type ModelInfo, type SavedSession } from "./lib/engine";
+  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, onBackground, onConfirmQuit, parkProject, quit, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, switchProjectSession, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type ModelInfo, type SavedSession } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -551,6 +551,7 @@
    * the running engine switches sessions; `restart` forces a new engine instead.
    */
   async function open(path: string, session?: string, restart = false) {
+    if (opening) return;
     opening = true;
     side = "details";
     wide = false;
@@ -580,7 +581,6 @@
     const back = session ? bg.take(session) : undefined;
     if (back) replaying = { session: session!, events: back.events, run: back.run };
     const inPlace = path === folder && !!session && !restart && !parked && !back;
-    if (from && path !== from && !bg.runningIn(from)) stopServer(from);
     const before = { chat, sessionFile };
     remember();
     // A session opened before shows at once; the engine's copy replaces it below if the file changed.
@@ -602,14 +602,16 @@
     }
     try {
       let resumed = false;
+      let reused = false;
       if (inPlace) {
         // No restart, so no model-list downloads either.
-        await request({ type: "switch_session", sessionPath: session });
+        reused = await switchProjectSession(path, session);
         t("switch_session");
       } else {
         resumed = await openProject(path, false, session);
         t("engine start");
       }
+      if (from && path !== from && !bg.runningIn(from)) stopServer(from);
       folder = path;
       saveRecent(opened(recent, path));
       localStorage.setItem(LAST_FOLDER, path);
@@ -625,16 +627,17 @@
       settle();
       t("conversation loaded");
       painted(t, "conversation painted");
-      opening = false;
       // Details fill in after the conversation is on screen.
-      await refresh(!inPlace);
+      await refresh(!reused);
       t("details loaded");
       painted(t, "details painted");
     } catch (e) {
       error = message(e);
       ({ chat, sessionFile } = before);
       // A folder deleted since it was listed: say so, and take it off the sidebar.
-      if (path !== folder && !(await loadSessions(path))) error = `${name(path)} no longer exists, so it was removed from the sidebar.`;
+      if ((session || path !== folder) && !(await loadSessions(path))) {
+        error = `${name(path)} no longer exists, so it was removed from the sidebar.`;
+      }
       // The turn sent to the background comes back to the window.
       if (parked && from) {
         const p = bg.take(parked);
@@ -676,22 +679,33 @@
     if (typeof path === "string") await open(path);
   }
 
+  /** Commit the new view only after the engine has left the previous session. */
+  async function startNewSession(path: string) {
+    await switchProjectSession(path);
+    remember();
+    sessionFile = null;
+    chat = empty();
+    stats = null;
+    saveRecent(opened(recent, path));
+    await refresh();
+  }
+
   async function newSession() {
+    if (opening) return;
     page = "chat";
     side = "details";
     wide = false;
     if (!folder) return open(home);
     // A running turn goes to the background, so the new session needs its own engine.
     if (chat.running) return open(folder);
-    // A folder removed from the list comes back once a new session starts in it.
-    saveRecent(opened(recent, folder));
-    remember();
+    opening = true;
+    error = null;
     try {
-      await request({ type: "new_session" });
-      chat = empty();
-      await refresh();
+      await startNewSession(folder);
     } catch (e) {
-      notice(message(e));
+      error = message(e);
+    } finally {
+      opening = false;
     }
   }
 
@@ -998,18 +1012,23 @@
 
   async function remove(path: string, session: string) {
     if (!(await ask("Delete this session? This can't be undone.", { title: "Delete session", kind: "warning", okLabel: "Delete" }))) return;
+    if (opening || bg.working.includes(session)) return;
+    opening = true;
+    error = null;
     try {
-      // The open session is replaced first, so the engine never saves it again.
       if (path === folder && session === sessionFile) {
-        await newSession();
-        if (sessionFile === session) return;
+        if (chat.running) throw new Error("Stop this session before deleting it.");
+        // A failed switch leaves the file in place.
+        await startNewSession(path);
       }
       await deleteSession(session);
       chats.drop(session);
     } catch (e) {
-      notice(message(e));
+      error = message(e);
+    } finally {
+      await loadSessions(path);
+      opening = false;
     }
-    await loadSessions(path);
   }
 
   /** Keys are read when an engine starts, as the TUI reconnects after /login. */

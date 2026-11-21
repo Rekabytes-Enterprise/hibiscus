@@ -206,10 +206,13 @@ pub(in crate::engine) fn request_body(
     if thinking != "off" && model.reasoning && provider.api == Api::Responses {
         body["reasoning"] = json!({"effort":thinking});
     }
+    let policy = crate::engine::thinking::Policy::for_model(provider, model);
+    if matches!(policy, crate::engine::thinking::Policy::Ornith) {
+        // Ornith treats any effort other than "none" as enabling thinking.
+        body["reasoning_effort"] = json!(if thinking == "on" { "low" } else { "none" });
+    }
     if anonymous {
-        if let Some(effort) =
-            crate::engine::thinking::Policy::for_model(provider, model).rooxcode_effort(thinking)
-        {
+        if let Some(effort) = policy.rooxcode_effort(thinking) {
             body["reasoning_effort"] = json!(effort);
         }
         // Let the gateway apply its advertised default output limit.

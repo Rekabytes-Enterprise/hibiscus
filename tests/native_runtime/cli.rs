@@ -334,3 +334,49 @@ fn thinking_confirmation_uses_native_wording_without_provider_requests() {
     assert!(!shown.contains("(Pi)"));
     assert!(f.captured().is_empty());
 }
+
+#[test]
+fn local_ornith_thinking_sends_explicit_off_and_on_and_survives_resume() {
+    let reply = |text| {
+        (
+            200,
+            format!(
+                "{}data: [DONE]\n\n",
+                sse(json!({"choices":[{"delta":{"content":text},"finish_reason":"stop"}]}))
+            ),
+        )
+    };
+    let f = Fixture::new(
+        "chat_completions",
+        vec![reply("FIRST"), reply("SECOND"), reply("RESUMED")],
+    );
+    let path = f.root.join("app/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["model"] = json!("Ornith/model");
+    config["providers"][0]["id"] = json!("Ornith");
+    config["providers"][0]["models"][0]["reasoning"] = json!(true);
+    fs::write(path, config.to_string()).unwrap();
+
+    let mut tty = Pty::spawn_with_size(&mut f.command(), true, 120, 32);
+    tty.wait_text("Enter send");
+    tty.send(b"first\r");
+    tty.wait_text("FIRST");
+    tty.wait_text("Enter send");
+    tty.send(b"/thinking\r");
+    tty.wait_text("Thinking · Runtime model");
+    tty.send(b"\x1b[B\r");
+    tty.wait_text("Thinking   on");
+    tty.wait_text("Enter send");
+    tty.send(b"second\r");
+    tty.wait_text("SECOND");
+    tty.wait_text("Enter send");
+    tty.send(b"/quit\r");
+    tty.finish();
+
+    good(&f.run("continued\n/quit\n", &["--cli", "--continue"]));
+    let requests = f.captured();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0]["reasoning_effort"], "none");
+    assert_eq!(requests[1]["reasoning_effort"], "low");
+    assert_eq!(requests[2]["reasoning_effort"], "low");
+}

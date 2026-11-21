@@ -159,7 +159,6 @@ async fn open_project(
     latest: bool,
     session: Option<PathBuf>,
 ) -> Result<bool, String> {
-    state.stop();
     let mut engines = state.0.lock().unwrap();
     engines.parked.retain(|(_, r)| !r.thread.is_finished());
     if let Some(i) = session
@@ -172,7 +171,11 @@ async fn open_project(
         if flags.busy {
             flags.visible = true;
             drop(flags);
-            engines.current = Some(running);
+            let previous = engines.current.replace(running);
+            drop(engines);
+            if let Some(previous) = previous {
+                previous.stop();
+            }
             return Ok(true);
         }
     }
@@ -182,7 +185,9 @@ async fn open_project(
         None if latest => Start::Latest,
         None => Start::New,
     };
+    // If a saved session or folder disappeared, leave the shown engine usable.
     let engine = Engine::start(start, &folder).map_err(|e| e.to_string())?;
+    state.stop();
     let (commands, receiver) = mpsc::channel();
     let flags = Arc::new(Mutex::new(Flags {
         visible: true,
