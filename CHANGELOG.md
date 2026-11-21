@@ -4,6 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-21
+
+### Added
+
+- Add the optional Brave Search connector and native public web search and source-reading tools in CLI, TUI, and Desktop. Research replies can cite the sources they read and explain blocked pages or snippet-only evidence.
+- Keep HTTP(S) Markdown citations clickable in terminals that support hyperlinks.
+
+### Changed
+
+- Guide Hibi to handle expected coding failures, preserve user state, and verify failure paths as well as success.
+
 ## [0.4.5] - 2026-11-21
 
 ### Added
