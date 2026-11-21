@@ -2,6 +2,23 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn citations_keep_safe_clickable_targets_after_wrapping() {
+    let screen = Screen::new(false).unwrap();
+    let rows = markdown::format(
+        "hibi › [Official source](https://example.org/news) [Bad](file:///tmp/private)",
+        10,
+    );
+    let styled: Vec<_> = rows.iter().map(|row| screen.styled_line(row, 10)).collect();
+    let linked: Vec<_> = styled
+        .iter()
+        .filter(|line| line.contains("https://example.org/news"))
+        .collect();
+    assert!(linked.len() >= 2);
+    assert!(linked.iter().all(|line| line.contains("\x1b]8;;\x1b\\")));
+    assert!(styled.iter().all(|line| !line.contains("file:")));
+}
+
+#[test]
 fn saved_tool_only_replies_hide_empty_labels_and_status_badges_do_not_tint_details() {
     let mut screen = Screen::new(false).unwrap();
     screen.color = true;

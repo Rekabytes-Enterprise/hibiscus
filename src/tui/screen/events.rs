@@ -208,7 +208,9 @@ impl ScrollDisplay for Screen {
         call: &tool::Call,
         result: &tool::Outcome<'_>,
     ) -> io::Result<bool> {
-        let path = if call.name == "bash" {
+        let path = if result.failed && tool::web_activity(&call.name, false).is_some() {
+            result.output
+        } else if call.name == "bash" {
             ""
         } else {
             &call.target

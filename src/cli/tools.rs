@@ -32,7 +32,7 @@ impl Tools {
             let label = if long_command(call, width) {
                 "Run".into()
             } else {
-                label(call)
+                tool::web_activity(&call.name, true).map_or_else(|| label(call), str::to_owned)
             };
             let row = clip(&format!("  … {label}"), width.saturating_sub(1));
             out.push_str(&format!("\x1b[38;2;155;155;155m{row}{}", inline::BASE));
@@ -127,6 +127,9 @@ impl Tools {
 }
 
 fn label(call: &tool::Call) -> String {
+    if let Some(label) = tool::web_activity(&call.name, false) {
+        return label.into();
+    }
     let name = match call.name.as_str() {
         "read" => "Read",
         "write" => "Write",

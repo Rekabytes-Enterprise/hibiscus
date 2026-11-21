@@ -189,6 +189,7 @@ impl Fixture {
             .env("HIBISCUS_TEST_NATIVE_KEY", "SYNTHETIC-KEY")
             .env("HIBISCUS_NO_UPDATE_CHECK", "1")
             .env_remove("HIBISCUS_MODEL")
+            .env_remove("BRAVE_SEARCH_API_KEY")
             .env("HIBISCUS_PI", "/not-installed/pi")
             .env("HIBISCUS_NODE", "/not-installed/node");
         c

@@ -2,7 +2,11 @@
 use super::*;
 
 pub(super) fn push(cells: &mut Vec<Cell>, text: &str, tone: Tone) {
-    cells.extend(text.chars().map(|ch| Cell { ch, tone }));
+    cells.extend(text.chars().map(|ch| Cell {
+        ch,
+        tone,
+        link: None,
+    }));
 }
 
 pub(super) fn inline(text: &str, default: Tone) -> Vec<Cell> {
@@ -27,7 +31,11 @@ pub(super) fn inline(text: &str, default: Tone) -> Vec<Cell> {
             let escaped = &rest[1..];
             if let Some(ch) = escaped.chars().next() {
                 if "\\*`_[]".contains(ch) {
-                    cells.push(Cell { ch, tone });
+                    cells.push(Cell {
+                        ch,
+                        tone,
+                        link: None,
+                    });
                     rest = &escaped[ch.len_utf8()..];
                     continue;
                 }
@@ -71,7 +79,13 @@ pub(super) fn inline(text: &str, default: Tone) -> Vec<Cell> {
             if !links_exhausted && rest.starts_with('[') {
                 if let Some(end) = rest.find("](") {
                     if let Some(close) = rest[end + 2..].find(')') {
-                        push(&mut cells, &rest[1..end], Tone::Link);
+                        let address = &rest[end + 2..end + close + 2];
+                        let link = http_link(address);
+                        cells.extend(rest[1..end].chars().map(|ch| Cell {
+                            ch,
+                            tone: Tone::Link,
+                            link: link.clone(),
+                        }));
                         rest = &rest[end + close + 3..];
                         continue;
                     }
@@ -80,10 +94,37 @@ pub(super) fn inline(text: &str, default: Tone) -> Vec<Cell> {
             }
         }
         let ch = rest.chars().next().expect("nonempty text");
-        cells.push(Cell { ch, tone });
+        cells.push(Cell {
+            ch,
+            tone,
+            link: None,
+        });
         rest = &rest[ch.len_utf8()..];
     }
     cells
+}
+
+fn http_link(address: &str) -> Option<Rc<str>> {
+    let address = address
+        .strip_prefix('<')
+        .and_then(|address| address.strip_suffix('>'))
+        .unwrap_or(address);
+    if address.len() > 2048
+        || address
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return None;
+    }
+    let url = reqwest::Url::parse(address).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    Some(Rc::from(url.as_str()))
 }
 
 pub(super) fn ordered_item(text: &str) -> Option<(&str, &str)> {

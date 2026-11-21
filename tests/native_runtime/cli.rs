@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn native_web_tools_report_unconfigured_search_and_reject_a_local_url() {
+    let f = Fixture::new(
+        "responses",
+        vec![
+            calls(vec![
+                ("web_search", json!({"query":"latest news"})),
+                ("web_fetch", json!({"url":"http://127.0.0.1/source"})),
+            ]),
+            response("Web access limits explained."),
+        ],
+    );
+    let output = f.run(
+        "Find recent news and check the source.\n/quit\n",
+        &["--cli"],
+    );
+    good(&output);
+    let requests = f.captured();
+    assert_eq!(requests.len(), 2);
+    let tools = requests[0]["tools"].as_array().unwrap();
+    for name in ["web_search", "web_fetch"] {
+        assert!(tools.iter().any(|tool| tool["name"] == name));
+    }
+    let instructions = requests[0]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("Never substitute shell scraping"));
+    assert!(instructions.contains("handle expected I/O, network, and partial-operation failures"));
+    let messages = requests[1]["input"].as_array().unwrap();
+    let results: Vec<_> = messages
+        .iter()
+        .filter(|message| message["type"] == "function_call_output")
+        .map(|message| message["output"].as_str().unwrap())
+        .collect();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].contains("Web search is unavailable"));
+    assert!(results[1].contains("can only reach public addresses"));
+}
+
+#[test]
 fn explicit_cli_starts_inline_with_tui_hint_and_no_alternate_screen() {
     let f = Fixture::new("responses", vec![]);
     let mut command = f.command();

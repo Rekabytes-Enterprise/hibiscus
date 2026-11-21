@@ -188,6 +188,12 @@ export type Voice = { id: string; name: string; category: string | null; preview
  * The ElevenLabs connector. "Sign in with ElevenLabs" (OAuth, like Claude's
  * connector) or a pasted API key; credentials stay in the app's private files.
  */
+export const webSearch = {
+  status: () => invoke<"key" | "environment" | null>("web_search_status"),
+  connect: (key: string) => invoke<void>("web_search_connect", { key }),
+  disconnect: () => invoke<void>("web_search_disconnect"),
+};
+
 export const elevenlabs = {
   /** How it is connected: "oauth", "key", or null. */
   status: () => invoke<"oauth" | "key" | null>("elevenlabs_status"),

@@ -1,27 +1,29 @@
 //! Tool activity lines and Mermaid blocks inside transcripts.
 use super::*;
 
+fn badge_parts(content: &str) -> Option<(&str, &str)> {
+    let status = content.trim_start().strip_prefix("· ")?;
+    status.split_once(" · ").or_else(|| {
+        matches!(
+            status,
+            "◌ Searching the web…" | "◌ Reading a web source…" | "✓ Web search" | "✓ Web source"
+        )
+        .then_some((status, ""))
+    })
+}
+
 pub(super) fn is_tool_activity(content: &str) -> bool {
-    content
-        .trim_start()
-        .strip_prefix("· ")
-        .and_then(|status| status.split_once(" · "))
-        .is_some_and(|(badge, _)| {
-            badge.starts_with(['✓', '✗', '◌'])
-                || matches!(
-                    badge,
-                    "◐ Exploring"
-                        | "◓ Exploring"
-                        | "◑ Exploring"
-                        | "◒ Exploring"
-                        | "Explore stopped"
-                )
-        })
+    badge_parts(content).is_some_and(|(badge, _)| {
+        badge.starts_with(['✓', '✗', '◌'])
+            || matches!(
+                badge,
+                "◐ Exploring" | "◓ Exploring" | "◑ Exploring" | "◒ Exploring" | "Explore stopped"
+            )
+    })
 }
 
 pub(super) fn tool_status(content: &str) -> Option<Vec<Cell>> {
-    let status = content.trim_start().strip_prefix("· ")?;
-    let (badge, detail) = status.split_once(" · ")?;
+    let (badge, detail) = badge_parts(content)?;
     let tone = if badge.starts_with("✓ ") {
         Tone::ToolSuccess
     } else if badge.starts_with("✗ ") {
@@ -41,7 +43,9 @@ pub(super) fn tool_status(content: &str) -> Option<Vec<Cell>> {
         })
         .unwrap_or_else(|| badge.to_owned());
     push(&mut cells, &format!(" {badge} "), tone);
-    push(&mut cells, &format!("  {detail}"), Tone::Muted);
+    if !detail.is_empty() {
+        push(&mut cells, &format!("  {detail}"), Tone::Muted);
+    }
     Some(cells)
 }
 

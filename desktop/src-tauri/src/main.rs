@@ -994,6 +994,23 @@ async fn elevenlabs_disconnect() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn web_search_status() -> Result<Option<&'static str>, String> {
+    desktop::web_search::status().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn web_search_connect(key: String) -> Result<(), String> {
+    desktop::web_search::connect(&key)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn web_search_disconnect() -> Result<(), String> {
+    desktop::web_search::disconnect().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn elevenlabs_models() -> Result<Vec<desktop::elevenlabs::Model>, String> {
     desktop::elevenlabs::models()
         .await
@@ -1285,6 +1302,9 @@ fn main() {
             elevenlabs_models,
             elevenlabs_voices,
             elevenlabs_speak,
+            web_search_status,
+            web_search_connect,
+            web_search_disconnect,
             dev_server_start,
             dev_server_status,
             dev_server_output,

@@ -281,6 +281,8 @@ const VERBS: { [tool: string]: [string, string, string] } = {
   bash: ["Running", "Ran", "terminal"],
   goal: ["Updating", "Updated", "check"],
   browser: ["Browsing", "Browsed", "globe"],
+  web_search: ["Searching the web…", "Web search", "globe"],
+  web_fetch: ["Reading a web source…", "Web source", "globe"],
 };
 
 /** `path` relative to the session folder when it is inside it. */
@@ -303,13 +305,16 @@ export function toolView(tool: Tool, folder: string | null) {
   const a = tool.args ?? {};
   const command = tool.name === "bash" || tool.name === "browser";
   const line = tool.name === "browser" ? (Array.isArray(a.args) ? a.args.join(" ") : "") : String(a.command ?? "").split("\n")[0];
-  const raw = command ? shorten(line, folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
+  const web = tool.name === "web_search" || tool.name === "web_fetch";
+  const raw = web ? "" : command ? shorten(line, folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
   const target = raw.length > 120 ? raw.slice(0, 119) + "…" : raw;
   return { verb: tool.running ? running : done, target, icon, command };
 }
 
 /** "Read 3 files, ran 2 commands" for a group of tool calls. */
 export function summary(tools: Tool[]): string {
+  const active = tools.find((tool) => tool.running && (tool.name === "web_search" || tool.name === "web_fetch"));
+  if (active) return toolView(active, null).verb;
   const count = (names: string[]) => tools.filter((t) => names.includes(t.name)).length;
   const n = (k: number, one: string, many = one + "s") => `${k} ${k === 1 ? one : many}`;
   const parts: string[] = [];
@@ -318,12 +323,16 @@ export function summary(tools: Tool[]): string {
   const edits = count(["edit"]);
   const runs = count(["bash"]);
   const goals = count(["goal"]);
-  const other = tools.length - reads - writes - edits - runs - goals;
+  const searches = count(["web_search"]);
+  const sources = count(["web_fetch"]);
+  const other = tools.length - reads - writes - edits - runs - goals - searches - sources;
   if (reads) parts.push(`read ${n(reads, "file")}`);
   if (edits) parts.push(`made ${n(edits, "edit")}`);
   if (writes) parts.push(`wrote ${n(writes, "file")}`);
   if (runs) parts.push(`ran ${n(runs, "command")}`);
   if (goals) parts.push("updated goals");
+  if (searches) parts.push(`ran ${n(searches, "web search", "web searches")}`);
+  if (sources) parts.push(`checked ${n(sources, "web source")}`);
   if (other) parts.push(`used ${n(other, "tool")}`);
   const text = parts.join(", ");
   return text.charAt(0).toUpperCase() + text.slice(1);

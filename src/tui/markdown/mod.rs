@@ -5,7 +5,7 @@ use activity::*;
 use inline::*;
 use table::*;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 /// Lightweight terminal Markdown for chat transcripts. This is a display
 /// transform only: Runtime and saved messages keep the original Markdown text.
@@ -41,6 +41,7 @@ pub(crate) enum Role {
 pub(crate) struct Cell {
     pub(crate) ch: char,
     pub(crate) tone: Tone,
+    pub(crate) link: Option<Rc<str>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

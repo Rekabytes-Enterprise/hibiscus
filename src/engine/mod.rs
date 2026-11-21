@@ -22,6 +22,7 @@ mod session_search;
 mod thinking;
 pub(crate) mod tool_output;
 mod tools;
+pub(crate) mod web;
 
 pub use oauth::CodexSignIn;
 pub use reka::RekaSignIn;

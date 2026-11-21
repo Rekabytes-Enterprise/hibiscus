@@ -194,6 +194,11 @@ pub mod elevenlabs {
     pub use crate::engine::elevenlabs_auth::ElevenLabsSignIn;
 }
 
+/// The optional Brave Search connector, shared with the engine.
+pub mod web_search {
+    pub use crate::engine::web::{connect, disconnect, status};
+}
+
 /// Dev servers the app runs per folder, shared with the engine's `dev_server` tool.
 pub mod dev_server {
     pub use crate::devserver::{detect, output, ready, start, status, stop, stop_all, Status};

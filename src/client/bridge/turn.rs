@@ -313,7 +313,9 @@ pub(super) fn exchange<F: BufRead, W: ScrollDisplay>(
                 if let Some(call_id) = event["toolCallId"].as_str() {
                     active_tools.insert(call_id.to_owned(), (label.clone(), call.clone()));
                 }
-                display.set_work(&format!("Running {label}…"))?;
+                let activity = crate::ui::tool::web_activity(name, true)
+                    .map_or_else(|| format!("Running {label}…"), str::to_owned);
+                display.set_work(&activity)?;
                 if interactive {
                     if printed_text || pending_newline {
                         writeln!(display)?;

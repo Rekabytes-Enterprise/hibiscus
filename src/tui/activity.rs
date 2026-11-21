@@ -140,6 +140,7 @@ impl Timeline {
             }
             Call::Entry(index) => {
                 if let Entry::Tool {
+                    path: label_detail,
                     running,
                     failed: error,
                     diff: lines,
@@ -149,6 +150,9 @@ impl Timeline {
                 {
                     *running = false;
                     *error = failed;
+                    if failed && crate::ui::tool::web_activity(name, false).is_some() {
+                        *label_detail = safe(path);
+                    }
                     if !failed {
                         if let Some(diff) = diff {
                             for (index, line) in diff.lines().enumerate() {
@@ -243,10 +247,19 @@ impl Timeline {
                     } else {
                         "✓"
                     };
-                    lines.push(format!(
-                        "  · {symbol} {name} · {path}{}",
-                        if *running { " …" } else { "" }
-                    ));
+                    if let Some(activity) = crate::ui::tool::web_activity(name, *running) {
+                        let detail = if path.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {path}")
+                        };
+                        lines.push(format!("  · {symbol} {activity}{detail}"));
+                    } else {
+                        lines.push(format!(
+                            "  · {symbol} {name} · {path}{}",
+                            if *running { " …" } else { "" }
+                        ));
+                    }
                     if !diff.is_empty() {
                         lines.push(format!("  · diff · {path}"));
                         lines.extend(diff.iter().map(|line| format!("    {line}")));
