@@ -282,6 +282,24 @@ async fn delete_session(path: PathBuf) -> Result<(), String> {
     desktop::delete_session(&path).map_err(|e| e.to_string())
 }
 
+/// The folder's background jobs, newest first, with their last lines of output.
+#[tauri::command]
+async fn jobs(folder: PathBuf) -> Vec<desktop::jobs::Info> {
+    desktop::jobs::list(Some(&folder), 200)
+}
+
+/// Stops a background job; it waits up to 3 seconds for it to exit.
+#[tauri::command]
+async fn job_stop(id: u64) {
+    let _ = tauri::async_runtime::spawn_blocking(move || desktop::jobs::stop(id)).await;
+}
+
+/// Forgets the folder's finished background jobs.
+#[tauri::command]
+async fn jobs_clear(folder: PathBuf) {
+    desktop::jobs::clear(&folder);
+}
+
 #[tauri::command]
 async fn sessions(folder: PathBuf) -> Result<Vec<Saved>, String> {
     // Saved sessions outlive their folder; a deleted folder must not stay listed.
@@ -1205,6 +1223,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_project,
             park_project,
+            jobs,
+            job_stop,
+            jobs_clear,
             quit,
             send,
             dev_server_detect,
@@ -1275,6 +1296,7 @@ fn main() {
                 app.state::<App>().stop_all();
                 close_browser();
                 dev_server::stop_all();
+                desktop::jobs::stop_all();
             }
         });
 }

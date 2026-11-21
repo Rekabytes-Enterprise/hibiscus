@@ -10,6 +10,7 @@
   import ChatView from "./lib/ChatView.svelte";
   import Details from "./lib/Details.svelte";
   import DiffPane from "./lib/DiffPane.svelte";
+  import TasksPane from "./lib/TasksPane.svelte";
   import { parseDiff } from "./lib/diff";
   import Composer from "./lib/Composer.svelte";
   import Icon from "./lib/Icon.svelte";
@@ -93,7 +94,7 @@
   let stats = $state<any>(null);
   let changes = $state<Changes | null>(null);
   // The right side shows session details, or the branch diff in their place.
-  let side = $state<"details" | "diff">("details");
+  let side = $state<"details" | "diff" | "tasks">("details");
   // The browser opens as its own pane at the far right, beside them.
   let browserOpen = $state(false);
   // The element the browser tool acts on, and a counter bumped after each
@@ -681,6 +682,7 @@
       case "text_to_speech": return "Sending the script";
       case "analyze_video": return "Analyzing the video";
       case "video_preview": return "Opening the preview";
+      case "job": return "Checking a background job";
       case "ask_user": return "Asking you a question";
       default: return `Using ${tool}`;
     }
@@ -1118,6 +1120,15 @@
       onwide={() => (wide = !wide)}
       onclose={() => { side = "details"; wide = false; }}
     />
+  {:else if active && panelOpen && side === "tasks"}
+    <TasksPane
+      folder={folder!}
+      {chat}
+      {wide}
+      onwide={() => (wide = !wide)}
+      onclose={() => { side = "details"; wide = false; }}
+      onabort={() => post({ type: "abort" }).catch(() => {})}
+    />
   {:else if active && panelOpen}
     <Details
       folder={folder!}
@@ -1131,6 +1142,7 @@
       {chat}
       onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
       onshowdiff={() => { side = "diff"; void refresh(); }}
+      onshowtasks={() => (side = "tasks")}
       onabort={() => post({ type: "abort" }).catch(() => {})}
     />
   {/if}
