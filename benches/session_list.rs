@@ -1,17 +1,5 @@
 //! Synthetic files only; compare a first scan with cached repeat listings.
-// Source modules include #[cfg(test)] imports under Clippy's bench build,
-// which has no test harness. They remain checked normally in the binary tests.
-#![allow(dead_code, unused_imports)]
-#[path = "../src/ui/messages.rs"]
-pub(crate) mod messages;
-#[path = "../src/paths.rs"]
-mod paths;
-#[path = "../src/chat/saved_sessions.rs"]
-mod sessions;
-mod ui {
-    pub(crate) use crate::messages;
-}
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use hibiscus::desktop::sessions;
 use std::{
     fs,
     hint::black_box,
@@ -35,22 +23,26 @@ fn main() {
     ));
     fs::create_dir(&root).unwrap();
     let fixture = Fixture(root.canonicalize().unwrap());
-    std::env::set_var("PI_CODING_AGENT_SESSION_DIR", &fixture.0);
+    std::env::set_var("HIBISCUS_HOME", &fixture.0);
+    let stored = fixture.0.join("sessions");
+    fs::create_dir(&stored).unwrap();
     let header =
-        serde_json::json!({"type":"session","id":"synthetic","cwd":fixture.0}).to_string() + "\n";
+        serde_json::json!({"type":"session","id":"synthetic","kind":"chat","cwd":fixture.0})
+            .to_string()
+            + "\n";
     let message = serde_json::json!({"type":"message","message":{"role":"user","content":"Synthetic test message ".repeat(5)}}).to_string() + "\n";
     let data = header + &message.repeat(1000);
     for count in [50, 200] {
         for i in 0..count {
-            fs::write(fixture.0.join(format!("{i}.jsonl")), &data).unwrap();
+            fs::write(stored.join(format!("{i}.jsonl")), &data).unwrap();
         }
         let start = Instant::now();
-        assert_eq!(sessions::list(&fixture.0).unwrap().len(), count);
+        assert_eq!(sessions(&fixture.0).unwrap().len(), count);
         let first = start.elapsed().as_secs_f64() * 1000.0;
         let mut times = Vec::new();
         for _ in 0..15 {
             let start = Instant::now();
-            black_box(sessions::list(&fixture.0).unwrap());
+            black_box(sessions(&fixture.0).unwrap());
             times.push(start.elapsed().as_secs_f64() * 1000.0);
         }
         times.sort_by(f64::total_cmp);

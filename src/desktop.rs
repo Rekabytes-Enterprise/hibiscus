@@ -3,6 +3,7 @@
 pub use crate::client::embed::{Engine, Start};
 /// The error a Rooxcode prompt gets without a Reka Bytes session.
 pub use crate::engine::reka::SIGN_IN as REKA_SIGN_IN;
+pub use crate::engine::session::SessionKind;
 pub use crate::engine::{CodexSignIn, RekaSignIn};
 
 /// The agent-browser session the engine's browser tool uses, for the browser pane.
@@ -15,7 +16,7 @@ pub mod wsl {
 }
 
 /// Where a session's canvas is kept: one JSON file per session, named by a hash of its path.
-fn canvas_board(session: &std::path::Path) -> Result<std::path::PathBuf> {
+pub(crate) fn canvas_board(session: &std::path::Path) -> Result<std::path::PathBuf> {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(session.as_os_str().as_encoded_bytes());
     let name: String = hash[..12].iter().map(|b| format!("{b:02x}")).collect();
@@ -300,6 +301,7 @@ pub fn key_page(provider: &str) -> Option<&'static str> {
 
 /// A saved session for a workspace.
 pub struct SavedSession {
+    pub kind: SessionKind,
     pub path: PathBuf,
     pub title: String,
     pub modified: SystemTime,
@@ -311,6 +313,7 @@ pub fn sessions(workspace: &Path) -> Result<Vec<SavedSession>> {
         crate::chat::saved_sessions::list(&workspace.canonicalize()?)?
             .into_iter()
             .map(|s| SavedSession {
+                kind: s.kind,
                 path: s.path,
                 title: s.title,
                 modified: s.modified,

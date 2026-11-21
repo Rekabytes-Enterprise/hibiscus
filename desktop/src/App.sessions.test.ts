@@ -156,3 +156,116 @@ it("runs /compact for the current session and refuses to queue it in an active t
     else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
   }
 });
+
+it("keeps Chat questions and video analysis in Chat and resumes Canvas on its board", async () => {
+  localStorage.setItem("hibiscus.ownProvider", "1");
+  const originalScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+
+  const chatSession = { path: "/sessions/chat.jsonl", title: "Chat example", kind: "chat" };
+  const canvasSession = { path: "/sessions/canvas.jsonl", title: "Canvas example", kind: "canvas" };
+  const sessions = [chatSession, canvasSession];
+  const questions = [
+    { question: "Which output?", options: ["JSON", "Plain text"] },
+    { question: "Which language?", options: ["English", "Bahasa Melayu"] },
+  ];
+  const savedQuestion = [
+    { role: "user", content: [{ type: "text", text: "Generate a report" }] },
+    { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: { questions } }] },
+    { role: "toolResult", toolCallId: "ask-1", content: [], details: { questions } },
+  ];
+  const emit = (payload: unknown) => tauri.events.get("engine")?.({ payload });
+  type Command = { type: string; message?: string; sessionPath?: string; kind?: string };
+  const commands: Command[] = [];
+  let current: (typeof sessions)[number] | undefined;
+  let sequence = 0;
+
+  tauri.invoke.mockImplementation(async (name: string, args?: { command?: Command; session?: string; kind?: string }) => {
+    if (name === "open_project") {
+      current = sessions.find((s) => s.path === args?.session);
+      return false;
+    }
+    if (name === "sessions") return [...sessions];
+    if (name === "wsl_distros" || name === "canvas_styles") return [];
+    if (name === "video_engine_installed") return true;
+    if (name === "send" && args?.command) {
+      const command = args.command;
+      commands.push(command);
+      if (command.type === "switch_session") current = sessions.find((s) => s.path === command.sessionPath);
+      if (command.type === "new_session") {
+        current = { path: "/sessions/new.jsonl", title: "Untitled Canvas", kind: command.kind ?? "chat" };
+        if (command.kind === "canvas") sessions.push(current);
+      }
+      const id = `desktop-session-kind-${++sequence}`;
+      emit({
+        type: "response", id, success: true,
+        data: {
+          hasAccess: true, levels: [], models: [],
+          sessionFile: current?.path ?? null, sessionKind: current?.kind ?? "chat",
+          messages: current?.kind === "chat" ? savedQuestion : [],
+        },
+      });
+      if (command.type === "prompt") {
+        emit({ type: "agent_start" });
+        emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: command.message }] } });
+      }
+      return id;
+    }
+    return null;
+  });
+
+  const target = document.body.appendChild(document.createElement("div"));
+  const app = mount(App, { target });
+  const canvas = () => target.querySelector('.canvas[aria-label="Canvas"]');
+  const form = () => target.querySelector('form[aria-label="Questions from Hibi"]');
+  const button = (name: string) => Array.from(target.querySelectorAll("button")).find((el) => el.textContent?.trim() === name);
+
+  try {
+    await vi.waitFor(() => expect(button("Chat example")?.disabled).toBe(false));
+    expect(target.querySelector('[aria-label="Chat sessions"]')?.textContent).toContain("Chat example");
+    expect(target.querySelector('[aria-label="Canvas sessions"]')?.textContent).toContain("Canvas example");
+    button("Chat example")?.click();
+    await vi.waitFor(() => expect(button("Send answers")).toBeDefined());
+    await vi.waitFor(() => expect(target.querySelector("textarea")?.disabled).toBe(false));
+
+    emit({ type: "tool_execution_start", toolName: "analyze_video", toolCallId: "video-1", args: { path: "clip.mp4" } });
+    emit({ type: "tool_execution_end", toolName: "analyze_video", toolCallId: "video-1", result: { details: { frames: [0] } } });
+    await vi.waitFor(() => expect(button("Used 2 tools")).toBeDefined());
+    button("Used 2 tools")?.click();
+    await vi.waitFor(() => expect(target.textContent).toContain("clip.mp4"));
+    expect(canvas()).toBeNull();
+    expect(tauri.invoke.mock.calls.some(([name, args]) => name === "canvas_load" && args.session === chatSession.path)).toBe(false);
+    expect(button("Send answers")?.disabled).toBe(true);
+    button("Plain text")?.click();
+    const language = target.querySelector<HTMLInputElement>('input[aria-label="Which language?"]')!;
+    language.value = "French";
+    language.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(button("Send answers")?.disabled).toBe(false));
+    form()?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(commands).toContainEqual({
+      type: "prompt", message: "My answers:\n- Which output?\n  Plain text\n- Which language?\n  French\n\nCarry on from here.",
+    }));
+    emit({ type: "agent_settled" });
+    await vi.waitFor(() => expect(form()).toBeNull());
+
+    button("Canvas example")?.click();
+    await vi.waitFor(() => expect(canvas()).not.toBeNull());
+    expect(tauri.invoke).toHaveBeenCalledWith("canvas_load", { session: canvasSession.path });
+    emit({ type: "agent_start" });
+    emit({ type: "tool_execution_start", toolName: "ask_user", toolCallId: "ask-2", args: { questions } });
+    emit({ type: "tool_execution_end", toolName: "ask_user", toolCallId: "ask-2", result: { details: { questions } } });
+    emit({ type: "agent_settled" });
+    await vi.waitFor(() => expect(canvas()?.textContent).toContain("Which output?"));
+    expect(form()).toBeNull();
+    button("New Canvas session")?.click();
+    await vi.waitFor(() => expect(commands).toContainEqual({ type: "new_session", kind: "canvas" }));
+    await vi.waitFor(() => expect(target.querySelector("li.active")?.textContent).toContain("Untitled Canvas"));
+    expect(canvas()?.textContent).not.toContain("Which output?");
+  } finally {
+    await unmount(app);
+    target.remove();
+    localStorage.clear();
+    if (originalScrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScrollTo);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});

@@ -12,8 +12,30 @@ use std::{
 #[derive(Clone)]
 pub(crate) enum SessionStart {
     New,
+    Canvas,
     Latest,
     Selected(PathBuf),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionKind {
+    #[default]
+    Chat,
+    Canvas,
+}
+
+pub(crate) fn kind_from_header(header: &Value, path: &Path) -> Result<SessionKind> {
+    if let Some(kind) = header.get("kind") {
+        return serde_json::from_value(kind.clone()).map_err(|_| "Invalid session type".into());
+    }
+    Ok(
+        if crate::desktop::canvas_board(path).is_ok_and(|board| board.is_file()) {
+            SessionKind::Canvas
+        } else {
+            SessionKind::Chat
+        },
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,6 +96,7 @@ impl Message {
 }
 #[derive(Clone)]
 pub struct Session {
+    pub kind: SessionKind,
     pub id: String,
     pub(super) rooxcode_session: super::rooxcode::SessionId,
     pub path: PathBuf,
@@ -171,7 +194,7 @@ impl Session {
             SessionStart::Latest => crate::chat::saved_sessions::list(&cwd)?
                 .first()
                 .map(|s| s.path.clone()),
-            SessionStart::New => None,
+            SessionStart::New | SessionStart::Canvas => None,
         };
         if let Some(path) = path {
             return Self::load(path, &cwd, config);
@@ -186,6 +209,11 @@ impl Session {
             })
             .transpose()?;
         let session = Self {
+            kind: if matches!(start, SessionStart::Canvas) {
+                SessionKind::Canvas
+            } else {
+                SessionKind::Chat
+            },
             id: id.clone(),
             rooxcode_session: super::rooxcode::SessionId::new()?,
             path: crate::paths::home()?
@@ -210,6 +238,9 @@ impl Session {
         {
             session.selected(config)?;
         }
+        if session.kind == SessionKind::Canvas {
+            session.save()?;
+        }
         Ok(session)
     }
     fn load(path: PathBuf, cwd: &std::path::Path, config: &Config) -> Result<Self> {
@@ -226,6 +257,7 @@ impl Session {
             return Err("Not a supported Hibiscus session for this workspace. Original sessions are never modified.".into());
         }
         let mut session = Self::open(&SessionStart::New, cwd, config)?;
+        session.kind = kind_from_header(&head, &path)?;
         session.path = path;
         session.id = head["id"].as_str().ok_or("Invalid session ID")?.into();
         if let Some(value) = head.get("rooxcodeSession") {
@@ -278,7 +310,7 @@ impl Session {
         Ok(session)
     }
     pub fn save(&self) -> Result<()> {
-        let mut head = json!({"type":"session","format":"hibiscus","version":1,"id":self.id,"rooxcodeSession":self.rooxcode_session,"cwd":self.cwd,"model":self.model,"thinking":self.thinking,"steps":self.steps,"usage":self.usage,"context":self.context});
+        let mut head = json!({"type":"session","format":"hibiscus","version":1,"kind":self.kind,"id":self.id,"rooxcodeSession":self.rooxcode_session,"cwd":self.cwd,"model":self.model,"thinking":self.thinking,"steps":self.steps,"usage":self.usage,"context":self.context});
         if let Some(name) = &self.name {
             head["name"] = name.as_str().into();
         }
@@ -338,7 +370,7 @@ impl Session {
         } else {
             &self.thinking
         };
-        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"model":model,"thinkingLevel":thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
+        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"sessionKind":self.kind,"model":model,"thinkingLevel":thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
     }
     /// Call only after authoritative discovery or an explicit model change.
     pub fn reconcile_rooxcode_thinking(&mut self, config: &Config) -> bool {

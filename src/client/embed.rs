@@ -15,6 +15,7 @@ use std::time::Duration;
 /// Which session the engine opens.
 pub enum Start {
     New,
+    Canvas,
     /// The most recent session for the workspace, or a new one.
     Latest,
     Selected(PathBuf),
@@ -34,12 +35,13 @@ impl Engine {
     pub fn start(start: Start, workspace: &Path) -> Result<Self> {
         let start = match start {
             Start::New => SessionStart::New,
+            Start::Canvas => SessionStart::Canvas,
             Start::Latest => SessionStart::Latest,
             Start::Selected(path) => SessionStart::Selected(path),
         };
         let failure = Arc::new(Mutex::new(None));
         let record = failure.clone();
-        let (worker, client) = spawn_engine(&start, workspace, move |error| {
+        let (worker, client) = spawn_engine(&start, workspace, true, move |error| {
             *record.lock().unwrap() = Some(error);
         })?;
         let control = client.try_clone()?;

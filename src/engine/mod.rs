@@ -29,7 +29,7 @@ pub(crate) use session::SessionStart;
 
 /// Quota derives from the actual native catalog, including extension authoring tools.
 pub(crate) fn native_tool_count() -> usize {
-    tools::definitions(None).len()
+    tools::definitions(None, tools::Surface::Canvas).len()
 }
 
 pub(crate) use tools::edit_diff;

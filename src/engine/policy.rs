@@ -1,3 +1,4 @@
+use super::tools::Surface;
 use std::path::Path;
 
 const WEB_RESEARCH: &str = "
@@ -11,7 +12,7 @@ Web research uses the existing bash tool with curl. If asked whether you can sea
 
 /// How the agent works for the app's canvas. One rule per line.
 const CANVAS: &str = "
-Canvas and videos. Messages that start with [Canvas … card] come from a card on the app's canvas and list its references by path. For those:
+Canvas and videos. This is a Canvas session. Card requests list their references by path.
 - Prefer sensible defaults to questions. When an answer is truly needed first, ask with ask_user, with short suggested answers for each question, then end your turn. Don't ask in your reply.
 - When the user asks about a video file, analyze it with analyze_video first.
 - Send every script, voiceover or narration you write to text_to_speech, one call per script, so the user can review it on the canvas and make the audio. Don't only write it in your reply.
@@ -21,12 +22,15 @@ Canvas and videos. Messages that start with [Canvas … card] come from a card o
 - A video from a script takes two steps. First split the script into beats, call storyboard with one SVG per beat in the reference frames' style, and stop. When the user confirms, build a HyperFrames project from the confirmed SVGs and the voiceover, timing each beat to its line.
 - Call video_preview with the project folder; the app starts the preview server and shows it, so don't start one yourself. Render only when the user asks, then call video_preview again with the rendered file.
 ";
-pub fn compose(cwd: &Path) -> String {
+pub fn compose(cwd: &Path, surface: Surface) -> String {
     let mut prompt=format!("You are Hibiscus, a standalone coding agent. Workspace: {}. Inspect before editing. Use the native tools to complete the user's task. Tool execution changes the real workspace. Ask for clarification when a material requirement is ambiguous. Report actual outcomes and verification limits. Never claim tests passed unless run. Do not expose private reasoning. Use goal only for an explicit checklist.\n\nWriting guidance: use concrete plain prose, preserve requested tone and exact code/quotations, avoid hype and boilerplate, and keep uncertainty honest.\n",cwd.display());
     prompt.push_str("\nNative write/edit tools checkpoint covered workspace files by user request. To undo native changes, inspect checkpoint_history and checkpoint_diff, then use checkpoint_restore for the requested files. Preserve later user edits and report conflicts. Shell/extension side effects and outside-workspace/Git metadata/Hibiscus data writes are not covered; never claim they were checkpointed or replace selective restore with a destructive Git reset.\n");
     prompt.push_str("\nCoding: validate external input at the boundary and handle expected I/O, network, and partial-operation failures where you can recover. Preserve user data and existing state on failure. Keep retries bounded and use them only when repetition is safe. Propagate failures with enough context to act, without exposing secrets. Verify relevant failure paths as well as success. If a command or test fails, diagnose it and report anything you could not verify.\n");
     prompt.push_str(WEB_RESEARCH);
-    if crate::engine::tools::canvas() {
+    if surface == Surface::Chat {
+        prompt.push_str("\nWhen you need an answer before proceeding, use ask_user with short suggested answers. The user can choose a suggestion or type their own answer.\n");
+    }
+    if surface == Surface::Canvas {
         prompt.push_str(CANVAS);
         prompt.push_str(if crate::video_engine::installed() {
             "\nVideo engine: installed. Run HyperFrames as `hyperframes …` (already on PATH with Node.js and ffmpeg; don't use npx) and leave its telemetry off.\n"
@@ -54,12 +58,17 @@ pub fn compose(cwd: &Path) -> String {
             }
         }
     }
-    // The app's bundled skills, personal skills in ~/.hibiscus/skills, and the
-    // video engine's HyperFrames skills once installed, join the project's own.
-    let engine = crate::video_engine::skills_dir();
+    // Canvas also advertises its bundled video skills and the installed video engine's skills.
+    let bundled = (surface == Surface::Canvas)
+        .then(crate::desktop::bundled_skills)
+        .flatten();
+    let engine = (surface == Surface::Canvas)
+        .then(crate::video_engine::skills_dir)
+        .flatten();
     for dir in [cwd.join(".agents/skills"), cwd.join(".hibiscus/skills")]
         .into_iter()
-        .chain(crate::desktop::skill_dirs())
+        .chain(bundled)
+        .chain(crate::paths::home().ok().map(|home| home.join("skills")))
         .chain(engine)
     {
         if let Ok(entries) = std::fs::read_dir(dir) {

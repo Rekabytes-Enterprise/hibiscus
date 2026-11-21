@@ -5,7 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 
 export type Record = { type: string; [field: string]: any };
 
-export type SavedSession = { path: string; title: string; modified: number };
+export type SessionKind = "chat" | "canvas";
+export type SavedSession = { path: string; title: string; modified: number; kind: SessionKind };
 export type ProviderInfo = {
   id: string;
   apiKey: boolean;
@@ -103,9 +104,9 @@ export async function post(command: Record): Promise<void> {
 }
 
 /** True when `session` was still running in the background and came back as it is. */
-export const openProject = async (folder: string, latest: boolean, session?: string) => {
+export const openProject = async (folder: string, latest: boolean, session?: string, kind: SessionKind = "chat") => {
   await ready;
-  return invoke<boolean>("open_project", { folder, latest, session: session ?? null });
+  return invoke<boolean>("open_project", { folder, latest, session: session ?? null, ...(kind === "canvas" && { kind }) });
 };
 /**
  * Keeps the open engine running in the background while its turn finishes, so
@@ -256,13 +257,13 @@ export const stopJob = (id: number) => invoke<void>("job_stop", { id });
 export const clearJobs = (folder: string) => invoke<void>("jobs_clear", { folder });
 
 /** Keep same-folder switches fast, but reopen the project if its worker is gone. */
-export async function switchProjectSession(folder: string, session?: string): Promise<boolean> {
+export async function switchProjectSession(folder: string, session?: string, kind: SessionKind = "chat"): Promise<boolean> {
   try {
-    await request(session ? { type: "switch_session", sessionPath: session } : { type: "new_session" });
+    await request(session ? { type: "switch_session", sessionPath: session } : { type: "new_session", ...(kind === "canvas" && { kind }) });
     return true;
   } catch (error) {
     if (!(error instanceof ProjectUnavailable)) throw error;
-    await openProject(folder, false, session);
+    await openProject(folder, false, session, kind);
     return false;
   }
 }

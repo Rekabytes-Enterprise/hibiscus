@@ -148,7 +148,7 @@
   </div>
   <button class="nav strong" onclick={onnew} disabled={busy}><Icon name="plus" /> New session</button>
   <button class="nav" onclick={onaddfolder}><Icon name="folder-plus" /> Add folder…</button>
-  <button class="nav" class:active={canvas} onclick={oncanvas} aria-pressed={canvas}><Icon name="layout" /> Canvas</button>
+  <button class="nav" class:active={canvas} onclick={oncanvas} disabled={busy}><Icon name="layout" /> {canvas ? "New Canvas session" : "Canvas"}</button>
   <div class="groups">
     {#each groups as g, i (g.folder)}
       {@const target = !!dragging && over === g.folder && dragging !== g.folder}
@@ -168,32 +168,37 @@
         </Menu>
       </div>
       {#if !closed[g.folder]}
-        <ul class="list">
-          {#each g.sessions as s (s.path)}
-            <li class:active={s.path === current}>
-              {#if editing === s.path}
-                <input class="rename" value={s.title} aria-label="Session name" onkeydown={(e) => rename(e, g.folder, s.path)} onblur={() => (editing = null)} {@attach focus} />
-              {:else}
-                <button class="row" class:active={s.path === current} onclick={() => onresume(g.folder, s.path)} disabled={busy || s.path === current} title={s.title}>
-                  <span class="title">{s.title || "Untitled"}</span>
-                  {#if working.includes(s.path)}<span class="spinner" role="status" aria-label="Working"></span>{/if}
-                </button>
-                <Menu
-                  actions
-                  label="Session actions"
-                  title={working.includes(s.path) ? "Wait for this session to finish" : "Session actions"}
-                  disabled={busy || working.includes(s.path)}
-                  options={[{ value: "rename", label: "Rename" }, { value: "delete", label: "Delete" }]}
-                  onpick={(action) => (action === "rename" ? (editing = s.path) : ondelete(g.folder, s.path))}
-                >
-                  {#snippet trigger()}<Icon name="more-horizontal" size={16} />{/snippet}
-                </Menu>
-              {/if}
-            </li>
-          {:else}
-            <li class="muted small empty">No sessions yet</li>
-          {/each}
-        </ul>
+        {#each (["chat", "canvas"] as const) as kind}
+          {@const sessions = g.sessions.filter((s) => (s.kind ?? "chat") === kind)}
+          {#if sessions.length}
+            <div class="session-kind muted small">{kind === "canvas" ? "Canvas" : "Chat"}</div>
+            <ul class="list" aria-label={kind === "canvas" ? "Canvas sessions" : "Chat sessions"}>
+              {#each sessions as s (s.path)}
+                <li class:active={s.path === current}>
+                  {#if editing === s.path}
+                    <input class="rename" value={s.title} aria-label="Session name" onkeydown={(e) => rename(e, g.folder, s.path)} onblur={() => (editing = null)} {@attach focus} />
+                  {:else}
+                    <button class="row" class:active={s.path === current} onclick={() => onresume(g.folder, s.path)} disabled={busy || s.path === current} title={s.title}>
+                      <span class="title">{s.title || "Untitled"}</span>
+                      {#if working.includes(s.path)}<span class="spinner" role="status" aria-label="Working"></span>{/if}
+                    </button>
+                    <Menu
+                      actions
+                      label="Session actions"
+                      title={working.includes(s.path) ? "Wait for this session to finish" : "Session actions"}
+                      disabled={busy || working.includes(s.path)}
+                      options={[{ value: "rename", label: "Rename" }, { value: "delete", label: "Delete" }]}
+                      onpick={(action) => (action === "rename" ? (editing = s.path) : ondelete(g.folder, s.path))}
+                    >
+                      {#snippet trigger()}<Icon name="more-horizontal" size={16} />{/snippet}
+                    </Menu>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        {/each}
+        {#if !g.sessions.length}<div class="session-kind muted small">No sessions yet</div>{/if}
       {/if}
       </div>
     {/each}
@@ -234,3 +239,7 @@
     <button class="iconbtn" onclick={onsettings} title="Settings" aria-label="Settings"><Icon name="settings" /></button>
   </footer>
 </aside>
+
+<style>
+  .session-kind { padding: 5px 10px 2px; }
+</style>

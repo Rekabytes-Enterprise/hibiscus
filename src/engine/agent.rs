@@ -2,7 +2,7 @@ use super::event::Event;
 use super::{
     config::{self, Config},
     provider::{self, emit},
-    session::{Block, Message, Session},
+    session::{Block, Message, Session, SessionKind, SessionStart},
     tools,
 };
 use crate::Result;
@@ -66,7 +66,10 @@ enum Command {
     SetThinkingLevel {
         level: String,
     },
-    NewSession,
+    NewSession {
+        #[serde(default)]
+        kind: SessionKind,
+    },
     SwitchSession {
         #[serde(rename = "sessionPath")]
         session_path: std::path::PathBuf,
@@ -110,16 +113,18 @@ pub fn serve(
     socket: crate::client::socket::Socket,
     config: Config,
     session: Session,
+    desktop: bool,
 ) -> Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(serve_async(socket, config, session))
+        .block_on(serve_async(socket, config, session, desktop))
 }
 async fn serve_async(
     socket: crate::client::socket::Socket,
     mut config: Config,
     session: Session,
+    desktop: bool,
 ) -> Result<()> {
     socket.set_nonblocking(true)?;
     let (reader, mut writer) = crate::client::socket::AsyncSocket::from_std(socket)?.into_split();
@@ -327,6 +332,7 @@ async fn serve_async(
                         &o,
                         &q,
                         &mut stop,
+                        desktop,
                     )
                     .await;
                     if let Err(e) = result {
@@ -418,7 +424,19 @@ async fn serve_async(
                     q.lock().unwrap().running = false;
                 }));
             }
-            Command::NewSession if !busy => {
+            Command::NewSession { kind } if !busy => {
+                let start = match kind {
+                    SessionKind::Chat => SessionStart::New,
+                    SessionKind::Canvas if desktop => SessionStart::Canvas,
+                    SessionKind::Canvas => {
+                        emit(
+                            &out,
+                            failure(&id, "Open Canvas sessions in Hibiscus Desktop."),
+                        )
+                        .await?;
+                        continue;
+                    }
+                };
                 if config
                     .model
                     .as_deref()
@@ -431,7 +449,7 @@ async fn serve_async(
                     };
                 }
                 let cwd = session.lock().unwrap().cwd.clone();
-                match Session::open(&super::session::SessionStart::New, &cwd, &config) {
+                match Session::open(&start, &cwd, &config) {
                     Ok(mut next) => {
                         select_rooxcode(&mut next, &config);
                         *session.lock().unwrap() = next;
@@ -610,6 +628,7 @@ async fn serve_async(
     writing.abort();
     Ok(())
 }
+#[allow(clippy::too_many_arguments)]
 async fn run_turns(
     mut prompt: Prompt,
     session: Arc<Mutex<Session>>,
@@ -618,6 +637,7 @@ async fn run_turns(
     out: &mpsc::Sender<Value>,
     queue: &Arc<Mutex<Queue>>,
     cancel: &mut watch::Receiver<bool>,
+    desktop: bool,
 ) -> Result<()> {
     emit(out, Event::Started.wire()).await?;
     loop {
@@ -638,6 +658,7 @@ async fn run_turns(
         let user = session.lock().unwrap().messages.last().cloned().unwrap();
         emit(out, Event::MessageStarted(&user).wire()).await?;
         let mut completed = false;
+        let mut awaiting_answer = false;
         'steps: for _ in 0..config.max_steps {
             if *cancel.borrow() {
                 break;
@@ -672,9 +693,14 @@ async fn run_turns(
             }
             let snapshot = session.lock().unwrap().clone();
             let (p, m) = snapshot.selected(&config)?;
-            let instructions = super::policy::compose(&snapshot.cwd);
+            let surface = match (desktop, snapshot.kind) {
+                (false, _) => tools::Surface::Terminal,
+                (true, SessionKind::Chat) => tools::Surface::Chat,
+                (true, SessionKind::Canvas) => tools::Surface::Canvas,
+            };
+            let instructions = super::policy::compose(&snapshot.cwd, surface);
             let registry = extensions.snapshot();
-            let mut definitions = tools::definitions(Some(&snapshot.cwd));
+            let mut definitions = tools::definitions(Some(&snapshot.cwd), surface);
             definitions.extend(registry.definitions().cloned());
             let rooxcode = p.authentication == config::Authentication::Rooxcode;
             let exceeds = if rooxcode {
@@ -798,6 +824,7 @@ async fn run_turns(
                         &mut steps,
                         cancel,
                         output_limit,
+                        surface,
                     )
                     .await
                 };
@@ -877,6 +904,7 @@ async fn run_turns(
                     .wire(),
                 )
                 .await?;
+                awaiting_answer |= !is_error && name == "ask_user";
                 if !is_error && matches!(name.as_str(), "write" | "edit") {
                     if let Ok(scope) = serde_json::from_value(
                         result["details"]["checkpoint"]["memoryScope"].clone(),
@@ -885,6 +913,22 @@ async fn run_turns(
                     }
                 }
             }
+            if awaiting_answer {
+                break 'steps;
+            }
+        }
+        if awaiting_answer {
+            let pending = {
+                let mut q = queue.lock().unwrap();
+                q.running = false;
+                std::mem::take(&mut q.items)
+            };
+            for item in pending {
+                emit(out, json!({"type":"queue_rejected","message":item.text,"images":item.images,"steer":item.steer,"error":"The agent is waiting for an answer. Review this message before sending it again."})).await?;
+            }
+            let update = queued(&queue.lock().unwrap());
+            emit(out, update).await?;
+            break;
         }
         if !completed && !*cancel.borrow() {
             return Err(

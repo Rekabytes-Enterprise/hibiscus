@@ -302,6 +302,7 @@ mod tests {
         let p = &config.providers[0];
         let m = &p.models[0];
         let mut session = Session {
+            kind: Default::default(),
             id: "fixture".into(),
             rooxcode_session: super::super::rooxcode::SessionId::new().unwrap(),
             path: "unused".into(),

@@ -158,6 +158,7 @@ async fn open_project(
     folder: PathBuf,
     latest: bool,
     session: Option<PathBuf>,
+    kind: Option<desktop::SessionKind>,
 ) -> Result<bool, String> {
     let mut engines = state.0.lock().unwrap();
     engines.parked.retain(|(_, r)| !r.thread.is_finished());
@@ -183,6 +184,7 @@ async fn open_project(
     let start = match session {
         Some(path) => Start::Selected(path),
         None if latest => Start::Latest,
+        None if kind == Some(desktop::SessionKind::Canvas) => Start::Canvas,
         None => Start::New,
     };
     // If a saved session or folder disappeared, leave the shown engine usable.
@@ -271,6 +273,7 @@ async fn close_project(state: State<'_, App>) -> Result<(), String> {
 
 #[derive(Serialize)]
 struct Saved {
+    kind: desktop::SessionKind,
     path: PathBuf,
     title: String,
     /// Milliseconds since the Unix epoch.
@@ -317,6 +320,7 @@ async fn sessions(folder: PathBuf) -> Result<Vec<Saved>, String> {
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|s| Saved {
+            kind: s.kind,
             modified: s
                 .modified
                 .duration_since(UNIX_EPOCH)
@@ -1234,7 +1238,6 @@ fn main() {
         import_login_environment();
     }
     // Gives the engine its text_to_speech tool, which opens cards on the canvas.
-    std::env::set_var("HIBISCUS_CANVAS", "1");
     // Gives the engine its analyze_video tool with the bundled ffmpeg.
     if let Some(path) = bundled("ffmpeg") {
         std::env::set_var("HIBISCUS_FFMPEG", path);

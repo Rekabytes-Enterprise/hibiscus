@@ -1,7 +1,7 @@
 //! The library API used by the desktop app. One test per binary: it sets
 //! process-wide environment variables, which the in-process engine reads.
 //! Runs on Windows too, so it doesn't use the Unix PTY harness in `support`.
-use hibiscus::desktop::{self, Engine, Start};
+use hibiscus::desktop::{self, Engine, SessionKind, Start};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -89,6 +89,34 @@ fn serve(listener: TcpListener, stop: Arc<AtomicBool>, catalog: PathBuf) {
                 let body = r#"{"data":[]}"#;
                 let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                 return;
+            }
+            let request: Value = serde_json::from_slice(&body).unwrap();
+            if let Some(input) = request["input"].as_array() {
+                let latest = input.last().unwrap().to_string();
+                let canvas = latest.contains("ASK_IN_CANVAS");
+                if canvas || latest.contains("ASK_IN_CHAT") {
+                    let tools = request["tools"].as_array().unwrap();
+                    let has = |name: &str| tools.iter().any(|tool| tool["name"] == name);
+                    assert!(has("ask_user"));
+                    for name in ["storyboard", "video_preview", "text_to_speech"] {
+                        assert_eq!(has(name), canvas, "unexpected visibility for {name}");
+                    }
+                    let instructions = request["instructions"].as_str().unwrap();
+                    assert_eq!(instructions.contains("This is a Canvas session"), canvas);
+                    let arguments = json!({"questions":[{"question":"Which output?","options":["JSON","Text"]}]});
+                    let reply = sse(json!({
+                        "type":"response.completed",
+                        "response":{"status":"completed","output":[
+                            {"type":"function_call","call_id":"clarify","name":"ask_user","arguments":arguments.to_string()}
+                        ]}
+                    }));
+                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).unwrap();
+                    return;
+                }
+                // A completed question should wait for the user before the next generation.
+                assert!(!input
+                    .last()
+                    .is_some_and(|last| last["call_id"] == "clarify"));
             }
             let delta = sse(json!({"type":"response.output_text.delta","delta":"DESKTOP_"}));
             if String::from_utf8_lossy(&body).contains("SLOW") {
@@ -226,6 +254,91 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     assert!(resumed.send(json!({"message":"no type"})).is_err());
     resumed.shutdown();
     second.shutdown();
+
+    let mut kinds = Engine::start(Start::Canvas, &a).unwrap();
+    let state = ask(&mut kinds, json!({"type":"get_state"}));
+    assert_eq!(state["sessionKind"], "canvas");
+    let canvas = PathBuf::from(state["sessionFile"].as_str().unwrap());
+    assert!(
+        canvas.is_file(),
+        "Canvas drafts can save a board before the first prompt"
+    );
+    assert!(desktop::sessions(&a)
+        .unwrap()
+        .iter()
+        .any(|s| s.path == canvas && s.kind == SessionKind::Canvas));
+    let events = prompt(&mut kinds, "ASK_IN_CANVAS");
+    assert!(events.contains("Which output?"), "{events}");
+    assert!(!events.contains("DESKTOP_REPLY"), "{events}");
+    desktop::save_canvas(&canvas, r#"{"version":1,"cards":[{}]}"#).unwrap();
+
+    let legacy = |path: &Path| {
+        let stored = fs::read_to_string(path).unwrap();
+        let (header, rest) = stored.split_once('\n').unwrap();
+        let mut header: Value = serde_json::from_str(header).unwrap();
+        header.as_object_mut().unwrap().remove("kind");
+        fs::write(path, format!("{header}\n{rest}")).unwrap();
+    };
+
+    ask(&mut kinds, json!({"type":"new_session"}));
+    assert_eq!(
+        ask(&mut kinds, json!({"type":"get_state"}))["sessionKind"],
+        "chat"
+    );
+    let events = prompt(&mut kinds, "ASK_IN_CHAT");
+    assert!(events.contains("Which output?"), "{events}");
+    assert!(!events.contains("DESKTOP_REPLY"), "{events}");
+    let pending = ask(&mut kinds, json!({"type":"get_messages"}));
+    assert!(pending["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["role"] == "toolResult"
+            && item["details"]["questions"][0]["question"] == "Which output?"));
+    let chat = PathBuf::from(
+        ask(&mut kinds, json!({"type":"get_state"}))["sessionFile"]
+            .as_str()
+            .unwrap(),
+    );
+    assert!(desktop::load_canvas(&chat).unwrap().is_none());
+    assert!(prompt(&mut kinds, "Text, please").contains("DESKTOP_REPLY"));
+    legacy(&canvas);
+    legacy(&chat);
+    ask(
+        &mut kinds,
+        json!({"type":"switch_session","sessionPath":canvas}),
+    );
+    assert_eq!(
+        ask(&mut kinds, json!({"type":"get_state"}))["sessionKind"],
+        "canvas"
+    );
+    assert!(desktop::load_canvas(&canvas).unwrap().is_some());
+    ask(
+        &mut kinds,
+        json!({"type":"set_session_name","name":"Continued Canvas"}),
+    );
+    desktop::save_canvas(&canvas, "").unwrap();
+    ask(
+        &mut kinds,
+        json!({"type":"switch_session","sessionPath":chat}),
+    );
+    assert_eq!(
+        ask(&mut kinds, json!({"type":"get_state"}))["sessionKind"],
+        "chat"
+    );
+    ask(
+        &mut kinds,
+        json!({"type":"switch_session","sessionPath":canvas}),
+    );
+    assert_eq!(
+        ask(&mut kinds, json!({"type":"get_state"}))["sessionKind"],
+        "canvas"
+    );
+    ask(&mut kinds, json!({"type":"new_session","kind":"canvas"}));
+    let state = ask(&mut kinds, json!({"type":"get_state"}));
+    assert_eq!(state["sessionKind"], "canvas");
+    assert_ne!(state["sessionFile"], canvas.to_str().unwrap());
+    kinds.shutdown();
 
     // API keys: validated, stored privately, unknown providers refused.
     assert!(desktop::save_api_key("test", "").is_err());
