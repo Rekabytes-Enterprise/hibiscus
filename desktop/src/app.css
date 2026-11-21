@@ -88,6 +88,10 @@ aside.left { width: var(--sidebar-width, 260px); flex: none; background: var(--s
 .list button:disabled { opacity: 1; cursor: default; }
 .list button.active { background: var(--selected); opacity: 1; }
 .list .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A session running a turn, shown or in the background, has a spinner after its title. */
+.list .row { display: flex; align-items: center; gap: 8px; }
+.list .row .title { flex: 1; min-width: 0; }
+.list .row .spinner { flex: none; }
 /* The ... menu sits over the row's right edge; it shows on hover, on the open session and while open. */
 .list li { position: relative; }
 .list li .menu { position: absolute; right: 4px; top: 4px; opacity: 0; }
@@ -102,8 +106,6 @@ aside.left { width: var(--sidebar-width, 260px); flex: none; background: var(--s
 
 .titlebar { height: 46px; display: flex; align-items: center; padding: 0 20px; border-bottom: 1px solid var(--line); font-weight: 500; user-select: none; -webkit-user-select: none; cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
 .banner { background: var(--user); padding: 6px 20px; font-size: 13px; }
-.banner.update { display: flex; align-items: center; gap: 12px; }
-.banner.update button.primary { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; }
 
 .start { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; }
 .brandmark { color: var(--accent); font-weight: 600; font-size: 18px; }
@@ -115,6 +117,11 @@ aside.left { width: var(--sidebar-width, 260px); flex: none; background: var(--s
 .card .folderrow .remove { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); opacity: 0; }
 .card .folderrow:hover .remove, .card .folderrow .remove:focus-visible { opacity: 1; }
 .grouphead { position: relative; }
+/* Dragging a folder header: the dragged one fades, a line marks where it lands. */
+.folder.dragging { opacity: 0.5; }
+.folder.above { box-shadow: inset 0 2px 0 var(--accent); }
+.folder.below { box-shadow: inset 0 -2px 0 var(--accent); }
+body:has(.folder.dragging) { cursor: grabbing; user-select: none; }
 .grouphead .group { padding-right: 30px; }
 .grouphead .menu { position: absolute; right: 2px; top: 0; opacity: 0; }
 .grouphead:hover .menu, .grouphead .menu:focus-within { opacity: 1; }
@@ -135,6 +142,14 @@ aside.left { width: var(--sidebar-width, 260px); flex: none; background: var(--s
 .icon { flex: none; vertical-align: -3px; }
 .nav, .group, .picker, .card .label { display: inline-flex; align-items: center; gap: 8px; }
 .nav { width: 100%; }
+/* The update row above the profile: one quiet row, the arrow says it acts. */
+.updaterow { display: flex; align-items: center; gap: 2px; margin: 6px 0 0; padding: 0 4px 0 0; min-height: 36px; border-radius: 10px; background: var(--selected); font-size: 13px; }
+.updaterow > span { padding: 0 12px; }
+.updaterow > button.grow { display: flex; align-items: center; gap: 8px; min-width: 0; height: 36px; padding: 0 8px 0 12px; border: none; background: none; color: var(--text); text-align: left; }
+.updaterow > button.grow:disabled { opacity: 0.6; cursor: default; }
+.updaterow.failed > button.grow { color: var(--error); }
+.updaterow .iconbtn { width: 24px; height: 24px; opacity: 0; }
+.updaterow:hover .iconbtn, .updaterow .iconbtn:focus-visible { opacity: 1; }
 aside.left footer { display: flex; align-items: center; gap: 8px; padding: 8px 6px 0; border-top: 1px solid var(--line); margin-top: 6px; }
 .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--hover); display: grid; place-items: center; font-size: 11px; flex: none; }
 .username { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
@@ -379,6 +394,17 @@ aside.diff .files { overflow: auto; flex: 1; }
 .filehead { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .filehead .name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: none; background: none; padding: 4px 0; text-align: left; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 aside.diff .note { padding: 8px 16px; color: var(--muted); font-size: 12px; }
+/* Background tasks: cards like the screenshot, command over a rule, then its output. */
+aside.tasks header .grow { font-size: 13px; }
+aside.tasks .files { padding: 8px 12px 16px; }
+aside.tasks .groupname { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 4px; border: none; background: none; text-align: left; }
+aside.tasks .task { margin: 0 0 8px; border-radius: 10px; background: var(--user); overflow: hidden; }
+aside.tasks .taskhead { display: flex; align-items: center; padding-right: 8px; }
+aside.tasks .taskhead .name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 10px 12px; border: none; background: none; text-align: left; font-size: 13px; color: var(--text); }
+aside.tasks .task.failed .taskhead .muted { color: var(--error); }
+aside.tasks pre { margin: 0 12px; padding: 8px 20px; font: 12px ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+aside.tasks pre.command { color: var(--muted); }
+aside.tasks pre.output { border-top: 1px solid var(--line); margin-bottom: 10px; }
 /* Browser pane: the browser tool's live page, at the far right beside the session panel. */
 aside.browser { flex: 1.4 1 0; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg); }
 aside.browser.wide { flex: 1; }

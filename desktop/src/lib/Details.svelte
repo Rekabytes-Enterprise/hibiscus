@@ -19,6 +19,7 @@
     chat,
     onopenfile,
     onshowdiff,
+    onshowtasks,
     onabort,
   }: {
     folder: string;
@@ -32,6 +33,8 @@
     chat: Chat;
     onopenfile: (path: string) => void;
     onshowdiff: () => void;
+    /** Opens the Background tasks pane: every command and background job. */
+    onshowtasks: () => void;
     onabort: () => void;
   } = $props();
 
@@ -135,7 +138,7 @@
           <button class="iconbtn" onclick={onabort} title="Stop the run (Esc)" aria-label="Stop the run"><Icon name="square" size={12} /></button>
         </div>
       {/each}
-      <div class="item muted small"><Icon name="check" /> {tools.length - running.length} finished</div>
+      <button class="item muted small" onclick={onshowtasks} title="Show every command, with its output"><Icon name="check" /> <span class="grow">{tools.length - running.length} finished</span> <Icon name="chevron-right" size={12} /></button>
     </section>
   {/if}
 </aside>

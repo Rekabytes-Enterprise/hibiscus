@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import type { RekaAccount, SavedSession } from "./engine";
   import Icon from "./Icon.svelte";
   import Menu from "./Menu.svelte";
@@ -10,6 +11,7 @@
     groups,
     current,
     busy,
+    working,
     onnew,
     onresume,
     onrename,
@@ -19,16 +21,21 @@
     oncollapse,
     canvas,
     onremovefolder,
+    onmovefolder,
     onsettings,
     onaccount,
     account,
     onsignin,
     onsignout,
+    update,
   }: {
     home: string;
     groups: { folder: string; sessions: SavedSession[] }[];
     current: string | null;
+    /** A session is opening; nothing else can open until it has. */
     busy: boolean;
+    /** Sessions running a turn, shown or in the background. */
+    working: string[];
     onnew: () => void;
     onresume: (folder: string, session: string) => void;
     /** An empty name restores the automatic title. */
@@ -42,6 +49,8 @@
     canvas: boolean;
     /** Takes the folder out of the list; nothing on disk changes. */
     onremovefolder: (folder: string) => void;
+    /** Moves `from` into `to`'s place in the list. */
+    onmovefolder: (from: string, to: string) => void;
     onsettings: () => void;
     /** Opens the Account page in Settings. */
     onaccount: () => void;
@@ -49,6 +58,8 @@
     account: RekaAccount | null;
     onsignin: () => void;
     onsignout: () => void;
+    /** The update row, shown above the profile when a new version is out. */
+    update?: Snippet;
   } = $props();
 
   // Signed out, the footer shows the computer's user.
@@ -81,6 +92,51 @@
     input.select();
   };
 
+  // Dragging a folder header reorders the folders. Pointer events, not HTML drag
+  // and drop, which the window's file drop takes over on Windows.
+  let dragging = $state<string | null>(null);
+  // Where the dragged folder is in the list: it lands above folders before it, below ones after.
+  const from = $derived(groups.findIndex((g) => g.folder === dragging));
+  let over = $state<string | null>(null);
+  // The click that ends a drag doesn't fold the group.
+  let dragged = false;
+  function grab(e: PointerEvent, folder: string) {
+    if (e.button !== 0) return;
+    const y = e.clientY;
+    const move = (m: PointerEvent) => {
+      if (!dragging && Math.abs(m.clientY - y) < 4) return;
+      dragging = folder;
+      const head = document.elementFromPoint(m.clientX, m.clientY)?.closest<HTMLElement>("[data-folder]");
+      over = head?.dataset.folder ?? null;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (dragging && over && over !== folder) onmovefolder(folder, over);
+      dragged = !!dragging;
+      setTimeout(() => (dragged = false));
+      dragging = over = null;
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  /** The folder actions; Move up and Move down do what dragging does, from the keyboard. */
+  function folderActions(i: number) {
+    return [
+      ...(i > 0 ? [{ value: "up", label: "Move up" }] : []),
+      ...(i < groups.length - 1 ? [{ value: "down", label: "Move down" }] : []),
+      { value: "remove", label: "Remove from sidebar", hint: "Keeps the folder and its sessions on disk" },
+    ];
+  }
+
+  function folderAction(action: string, i: number) {
+    const folder = groups[i].folder;
+    if (action === "up") onmovefolder(folder, groups[i - 1].folder);
+    else if (action === "down") onmovefolder(folder, groups[i + 1].folder);
+    else onremovefolder(folder);
+  }
+
   const label = (path: string) => `${name(path)} · ${where(path, home)}`;
 </script>
 
@@ -94,17 +150,19 @@
   <button class="nav" onclick={onaddfolder}><Icon name="folder-plus" /> Add folder…</button>
   <button class="nav" class:active={canvas} onclick={oncanvas} aria-pressed={canvas}><Icon name="layout" /> Canvas</button>
   <div class="groups">
-    {#each groups as g (g.folder)}
+    {#each groups as g, i (g.folder)}
+      {@const target = !!dragging && over === g.folder && dragging !== g.folder}
+      <div class="folder" data-folder={g.folder} class:dragging={dragging === g.folder} class:above={target && from > i} class:below={target && from < i}>
       <div class="grouphead">
-        <button class="group muted small" onclick={() => (closed[g.folder] = !closed[g.folder])} title={g.folder} aria-expanded={!closed[g.folder]}>
+        <button class="group muted small" onpointerdown={(e) => grab(e, g.folder)} onclick={() => { if (!dragged) closed[g.folder] = !closed[g.folder]; }} title={`${g.folder}\nDrag to reorder`} aria-expanded={!closed[g.folder]}>
           {label(g.folder)} <Icon name={closed[g.folder] ? "chevron-right" : "chevron-down"} size={12} />
         </button>
         <Menu
           actions
           label="Folder actions"
           title="Folder actions"
-          options={[{ value: "remove", label: "Remove from sidebar", hint: "Keeps the folder and its sessions on disk" }]}
-          onpick={() => onremovefolder(g.folder)}
+          options={folderActions(i)}
+          onpick={(action) => folderAction(action, i)}
         >
           {#snippet trigger()}<Icon name="more-horizontal" size={14} />{/snippet}
         </Menu>
@@ -118,12 +176,13 @@
               {:else}
                 <button class="row" class:active={s.path === current} onclick={() => onresume(g.folder, s.path)} disabled={busy || s.path === current} title={s.title}>
                   <span class="title">{s.title || "Untitled"}</span>
+                  {#if working.includes(s.path)}<span class="spinner" role="status" aria-label="Working"></span>{/if}
                 </button>
                 <Menu
                   actions
                   label="Session actions"
-                  title="Session actions"
-                  disabled={busy}
+                  title={working.includes(s.path) ? "Wait for this session to finish" : "Session actions"}
+                  disabled={busy || working.includes(s.path)}
                   options={[{ value: "rename", label: "Rename" }, { value: "delete", label: "Delete" }]}
                   onpick={(action) => (action === "rename" ? (editing = s.path) : ondelete(g.folder, s.path))}
                 >
@@ -136,8 +195,10 @@
           {/each}
         </ul>
       {/if}
+      </div>
     {/each}
   </div>
+  {@render update?.()}
   <footer>
     <div class="menu profile grow" bind:this={profile}>
       <button class="profilebtn" aria-haspopup="menu" aria-expanded={profileOpen} onclick={() => (profileOpen = !profileOpen)}>

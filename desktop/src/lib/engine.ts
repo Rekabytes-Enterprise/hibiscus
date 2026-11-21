@@ -13,6 +13,18 @@ export type ProviderInfo = {
   browser: boolean;
   signedIn: boolean;
   keyPage: string | null;
+  /** A local AI server added in Settings, which Settings can remove. */
+  local: boolean;
+};
+/** A model server on this computer or the home network, such as Ollama or LM Studio. */
+export type LocalProvider = {
+  id: string;
+  baseUrl: string;
+  api: "chat_completions" | "responses" | "anthropic";
+  models: string[];
+  contextWindow: number | null;
+  /** Empty when the server takes no key. */
+  key: string;
 };
 export type ModelInfo = {
   provider: string;
@@ -81,10 +93,23 @@ export async function post(command: Record): Promise<void> {
   await request(command);
 }
 
+/** True when `session` was still running in the background and came back as it is. */
 export const openProject = async (folder: string, latest: boolean, session?: string) => {
   await ready;
-  await invoke<void>("open_project", { folder, latest, session: session ?? null });
+  return invoke<boolean>("open_project", { folder, latest, session: session ?? null });
 };
+/**
+ * Keeps the open engine running in the background while its turn finishes, so
+ * another session can open. Returns the id its `onBackground` events carry, or
+ * null when no turn is running.
+ */
+export const parkProject = (session: string) => invoke<number | null>("park_project", { session });
+/** Events from engines running in the background, with the id `parkProject` returned. */
+export const onBackground = (listener: (id: number, event: Record) => void) =>
+  listen<{ id: number; event: Record }>("engine-background", (e) => listener(e.payload.id, e.payload.event));
+/** Quitting would stop `count` running turns; the window asks, then calls `quit`. */
+export const onConfirmQuit = (listener: (count: number) => void) => listen<number>("confirm-quit", (e) => listener(e.payload));
+export const quit = () => invoke<void>("quit");
 export const closeProject = () => invoke<void>("close_project");
 export const listSessions = (folder: string) => invoke<SavedSession[]>("sessions", { folder });
 /** Names a session no engine has open; use `set_session_name` for the open one. */
@@ -94,6 +119,8 @@ export const listProviders = () => invoke<ProviderInfo[]>("providers");
 export const saveApiKey = (provider: string, key: string) =>
   invoke<void>("save_api_key", { provider, key });
 export const signOut = (provider: string) => invoke<void>("sign_out", { provider });
+export const addLocalProvider = (provider: LocalProvider) => invoke<void>("add_local_provider", { provider });
+export const removeLocalProvider = (id: string) => invoke<void>("remove_local_provider", { id });
 /** Whether OpenRouter requests ask for providers that don't store or train on prompts. */
 export const trainingDenied = () => invoke<boolean>("training_denied");
 export const setTrainingDenied = (deny: boolean) => invoke<void>("set_training_denied", { deny });
@@ -196,3 +223,23 @@ export const videoEngine = {
 /** A video style: a skill in ~/.hibiscus/skills marked `hibiscus-style: true`. */
 export type Style = { name: string; description: string; path: string };
 export const canvasStyles = () => invoke<Style[]>("canvas_styles");
+
+/** A command the agent runs in the background (`bash` with `background: true`). */
+export type Job = {
+  id: number;
+  label: string;
+  command: string;
+  /** Milliseconds since the Unix epoch. */
+  started: number;
+  running: boolean;
+  exitCode: number | null;
+  /** Stopped by the user or the agent, not by itself. */
+  stopped: boolean;
+  durationMs: number;
+  output: string[];
+};
+/** The folder's background jobs, newest first. */
+export const listJobs = (folder: string) => invoke<Job[]>("jobs", { folder });
+export const stopJob = (id: number) => invoke<void>("job_stop", { id });
+/** Forgets the folder's finished jobs. */
+export const clearJobs = (folder: string) => invoke<void>("jobs_clear", { folder });

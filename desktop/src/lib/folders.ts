@@ -1,22 +1,21 @@
-// The folders the app remembers, newest first, as the sidebar and the
-// new-session screen show them (#147). Pure, so they are unit-tested.
+// The folders the sidebar and the new-session screen list, in the order the
+// user keeps them (#147). Using a folder doesn't move it; dragging does.
+// Pure, so they are unit-tested.
 
-/** How many folders the app remembers. */
-export const LIMIT = 8;
+/** After opening `path`: a new folder goes last, a known one stays where it is. */
+export const opened = (recent: string[], path: string): string[] => (recent.includes(path) ? recent : [...recent, path]);
 
-/** After opening `path`: it moves to the front. */
-export const opened = (recent: string[], path: string): string[] =>
-  [path, ...recent.filter((p) => p !== path)].slice(0, LIMIT);
-
-/**
- * After adding `path` without opening it. It goes second, behind the folder
- * that is open, because the app reopens the first folder on its next start.
- * A folder already in the list stays where it is.
- */
-export function added(recent: string[], path: string): string[] {
-  if (recent.includes(path)) return recent;
-  return [...recent.slice(0, 1), path, ...recent.slice(1)].slice(0, LIMIT);
-}
+/** After adding `path` without opening it: the same as opening, it goes last. */
+export const added = opened;
 
 /** After removing `path` from the list. Its files and sessions are untouched. */
 export const removed = (recent: string[], path: string): string[] => recent.filter((p) => p !== path);
+
+/** After dragging `from` onto `to`: it takes `to`'s place, so dragging down lands below it and up above it. */
+export function moved(recent: string[], from: string, to: string): string[] {
+  const start = recent.indexOf(from);
+  const end = recent.indexOf(to);
+  if (start < 0 || end < 0 || start === end) return recent;
+  const rest = recent.filter((p) => p !== from);
+  return [...rest.slice(0, end), from, ...rest.slice(end)];
+}

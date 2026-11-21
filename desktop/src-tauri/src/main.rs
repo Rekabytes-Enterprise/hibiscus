@@ -5,37 +5,104 @@
 
 use hibiscus::desktop::{self, CodexSignIn, Engine, RekaSignIn, Start};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 type Reply = Sender<Result<String, String>>;
 
-/// The running engine. Its thread owns the `Engine`, so sends never wait
+/// Turns that may keep running in the background at once, so a slip can't
+/// start many paid runs.
+const MAX_PARKED: usize = 3;
+
+/// Whether the window shows an engine, and whether a turn is running. One lock,
+/// so a turn can't settle unseen between parking's check and the switch.
+#[derive(Default)]
+struct Flags {
+    visible: bool,
+    busy: bool,
+}
+
+/// A running engine. Its thread owns the `Engine`, so sends never wait
 /// behind a blocking event read for longer than one short poll.
 struct Running {
+    id: u64,
     commands: Sender<(Value, Reply)>,
     thread: JoinHandle<()>,
+    flags: Arc<Mutex<Flags>>,
+}
+
+impl Running {
+    /// Stops the engine and waits for its tools to stop.
+    fn stop(self) {
+        drop(self.commands);
+        let _ = self.thread.join();
+    }
 }
 
 #[derive(Default)]
-struct App(Mutex<Option<Running>>);
+struct Engines {
+    /// The engine the window shows.
+    current: Option<Running>,
+    /// Engines finishing a turn for a session the window left, by session file.
+    /// Each stops itself once its turn settles.
+    parked: Vec<(PathBuf, Running)>,
+    next: u64,
+}
+
+#[derive(Default)]
+struct App(Mutex<Engines>);
 
 impl App {
-    /// Stops the engine (if any) and waits for its tools to stop.
+    /// Stops the shown engine (if any) and waits for its tools to stop.
     fn stop(&self) {
-        if let Some(running) = self.0.lock().unwrap().take() {
-            drop(running.commands);
-            let _ = running.thread.join();
+        let current = self.0.lock().unwrap().current.take();
+        if let Some(running) = current {
+            running.stop();
+        }
+    }
+
+    /// How many engines are running a turn, shown or in the background.
+    fn working(&self) -> usize {
+        let engines = self.0.lock().unwrap();
+        let parked = engines.parked.iter().map(|(_, r)| r);
+        engines
+            .current
+            .iter()
+            .chain(parked)
+            .filter(|r| !r.thread.is_finished() && r.flags.lock().unwrap().busy)
+            .count()
+    }
+
+    /// Stops every engine, background turns too.
+    fn stop_all(&self) {
+        let (current, parked) = {
+            let mut engines = self.0.lock().unwrap();
+            (engines.current.take(), std::mem::take(&mut engines.parked))
+        };
+        for running in current
+            .into_iter()
+            .chain(parked.into_iter().map(|(_, r)| r))
+        {
+            running.stop();
         }
     }
 }
 
-fn pump(mut engine: Engine, commands: Receiver<(Value, Reply)>, app: AppHandle) {
+/// Moves engine events to the window: the shown engine's as `engine`, a
+/// background one's as `engine-background` with its id. A background engine
+/// stops once its turn settles.
+fn pump(
+    mut engine: Engine,
+    commands: Receiver<(Value, Reply)>,
+    app: AppHandle,
+    id: u64,
+    flags: Arc<Mutex<Flags>>,
+) {
     loop {
         loop {
             match commands.try_recv() {
@@ -48,11 +115,33 @@ fn pump(mut engine: Engine, commands: Receiver<(Value, Reply)>, app: AppHandle) 
         }
         match engine.next_event(Duration::from_millis(25)) {
             Ok(Some(event)) => {
-                let _ = app.emit("engine", event);
+                let kind = event.get("type").and_then(Value::as_str);
+                let settled = kind == Some("agent_settled");
+                let mut flags = flags.lock().unwrap();
+                if kind == Some("agent_start") {
+                    flags.busy = true;
+                }
+                if settled {
+                    flags.busy = false;
+                }
+                if flags.visible {
+                    let _ = app.emit("engine", event);
+                } else {
+                    let _ = app.emit("engine-background", json!({ "id": id, "event": event }));
+                    if settled {
+                        drop(flags);
+                        return engine.shutdown();
+                    }
+                }
             }
             Ok(None) => {}
             Err(error) => {
-                let _ = app.emit("engine-stopped", error.to_string());
+                if flags.lock().unwrap().visible {
+                    let _ = app.emit("engine-stopped", error.to_string());
+                } else {
+                    let event = json!({ "type": "engine_stopped", "error": error.to_string() });
+                    let _ = app.emit("engine-background", json!({ "id": id, "event": event }));
+                }
                 return;
             }
         }
@@ -60,6 +149,8 @@ fn pump(mut engine: Engine, commands: Receiver<(Value, Reply)>, app: AppHandle) 
 }
 
 /// Starts an engine for `folder`: a new session, the latest one, or `session`.
+/// A `session` still running in the background comes back instead; returns
+/// true then, as its conversation is the window's live copy, not the file.
 #[tauri::command]
 async fn open_project(
     app: AppHandle,
@@ -67,8 +158,25 @@ async fn open_project(
     folder: PathBuf,
     latest: bool,
     session: Option<PathBuf>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     state.stop();
+    let mut engines = state.0.lock().unwrap();
+    engines.parked.retain(|(_, r)| !r.thread.is_finished());
+    if let Some(i) = session
+        .as_ref()
+        .and_then(|path| engines.parked.iter().position(|(s, _)| s == path))
+    {
+        let (_, running) = engines.parked.remove(i);
+        let mut flags = running.flags.lock().unwrap();
+        // Settled already: that engine is stopping, so a new one opens the session.
+        if flags.busy {
+            flags.visible = true;
+            drop(flags);
+            engines.current = Some(running);
+            return Ok(true);
+        }
+    }
+    drop(engines);
     let start = match session {
         Some(path) => Start::Selected(path),
         None if latest => Start::Latest,
@@ -76,9 +184,61 @@ async fn open_project(
     };
     let engine = Engine::start(start, &folder).map_err(|e| e.to_string())?;
     let (commands, receiver) = mpsc::channel();
-    let thread = std::thread::spawn(move || pump(engine, receiver, app));
-    *state.0.lock().unwrap() = Some(Running { commands, thread });
-    Ok(())
+    let flags = Arc::new(Mutex::new(Flags {
+        visible: true,
+        busy: false,
+    }));
+    let mut engines = state.0.lock().unwrap();
+    engines.next += 1;
+    let id = engines.next;
+    let pumped = flags.clone();
+    let thread = std::thread::spawn(move || pump(engine, receiver, app, id, pumped));
+    engines.current = Some(Running {
+        id,
+        commands,
+        thread,
+        flags,
+    });
+    Ok(false)
+}
+
+/// Keeps the shown engine running in the background while its turn finishes,
+/// so the window can open another session. Returns the id its events carry, or
+/// null when no turn is running; that engine stays and the next open stops it.
+#[tauri::command]
+async fn park_project(state: State<'_, App>, session: PathBuf) -> Result<Option<u64>, String> {
+    let mut engines = state.0.lock().unwrap();
+    engines.parked.retain(|(_, r)| !r.thread.is_finished());
+    let Some(running) = engines.current.take() else {
+        return Ok(None);
+    };
+    let (park, busy) = {
+        let mut flags = running.flags.lock().unwrap();
+        let park = flags.busy && engines.parked.len() < MAX_PARKED;
+        if park {
+            flags.visible = false;
+        }
+        (park, flags.busy)
+    };
+    if !park {
+        engines.current = Some(running);
+        return if busy {
+            Err(format!(
+                "{MAX_PARKED} sessions are already working in the background. Wait for one to finish, or stop this one first."
+            ))
+        } else {
+            Ok(None)
+        };
+    }
+    let id = running.id;
+    engines.parked.push((session, running));
+    Ok(Some(id))
+}
+
+/// Quits after the window confirmed stopping the running turns.
+#[tauri::command]
+fn quit(app: AppHandle) {
+    app.exit(0);
 }
 
 /// Sends a command; returns its id. The answer arrives as a `response` event.
@@ -89,6 +249,7 @@ async fn send(state: State<'_, App>, command: Value) -> Result<String, String> {
         .0
         .lock()
         .unwrap()
+        .current
         .as_ref()
         .ok_or("No project is open.")?
         .commands
@@ -121,8 +282,32 @@ async fn delete_session(path: PathBuf) -> Result<(), String> {
     desktop::delete_session(&path).map_err(|e| e.to_string())
 }
 
+/// The folder's background jobs, newest first, with their last lines of output.
+#[tauri::command]
+async fn jobs(folder: PathBuf) -> Vec<desktop::jobs::Info> {
+    desktop::jobs::list(Some(&folder), 200)
+}
+
+/// Stops a background job; it waits up to 3 seconds for it to exit.
+#[tauri::command]
+async fn job_stop(id: u64) {
+    let _ = tauri::async_runtime::spawn_blocking(move || desktop::jobs::stop(id)).await;
+}
+
+/// Forgets the folder's finished background jobs.
+#[tauri::command]
+async fn jobs_clear(folder: PathBuf) {
+    desktop::jobs::clear(&folder);
+}
+
 #[tauri::command]
 async fn sessions(folder: PathBuf) -> Result<Vec<Saved>, String> {
+    // Saved sessions outlive their folder; a deleted folder must not stay listed.
+    if let Err(e) = std::fs::metadata(&folder) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return Err(format!("{} no longer exists.", folder.display()));
+        }
+    }
     Ok(desktop::sessions(&folder)
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -145,6 +330,7 @@ struct Provider {
     browser: bool,
     signed_in: bool,
     key_page: Option<&'static str>,
+    local: bool,
 }
 
 #[tauri::command]
@@ -158,8 +344,38 @@ async fn providers() -> Result<Vec<Provider>, String> {
             browser: p.browser,
             signed_in: p.signed_in,
             key_page: p.key_page,
+            local: p.local,
         })
         .collect())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalProvider {
+    id: String,
+    base_url: String,
+    api: String,
+    models: Vec<String>,
+    context_window: Option<u64>,
+    key: String,
+}
+
+#[tauri::command]
+async fn add_local_provider(provider: LocalProvider) -> Result<(), String> {
+    desktop::add_local_provider(desktop::LocalProvider {
+        id: provider.id,
+        base_url: provider.base_url,
+        api: provider.api,
+        models: provider.models,
+        context_window: provider.context_window,
+        key: provider.key,
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_local_provider(id: String) -> Result<(), String> {
+    desktop::remove_local_provider(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1018,6 +1234,16 @@ fn main() {
         .manage(Codex::default())
         .manage(Reka::default())
         .manage(ElevenLabsLogin::default())
+        .on_window_event(|window, event| {
+            // Running turns stop on quit, so the window asks first (`confirm-quit`).
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let working = window.state::<App>().working();
+                if working > 0 {
+                    api.prevent_close();
+                    let _ = window.emit("confirm-quit", working);
+                }
+            }
+        })
         .setup(|app| {
             // Skills shipped with the app, such as the tech-explainer-short video style.
             if let Ok(dir) = app.path().resource_dir() {
@@ -1027,6 +1253,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             open_project,
+            park_project,
+            jobs,
+            job_stop,
+            jobs_clear,
+            quit,
             send,
             dev_server_detect,
             wsl_distros,
@@ -1059,6 +1290,8 @@ fn main() {
             delete_session,
             providers,
             save_api_key,
+            add_local_provider,
+            remove_local_provider,
             sign_out,
             training_denied,
             set_training_denied,
@@ -1080,11 +1313,23 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to start Hibiscus")
         .run(|app, event| {
+            // Cmd+Q and the app menu; `quit` exits with a code, which passes.
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = &event
+            {
+                let working = app.state::<App>().working();
+                if working > 0 {
+                    api.prevent_exit();
+                    let _ = app.emit("confirm-quit", working);
+                }
+            }
             if let tauri::RunEvent::Exit = event {
                 // Quit like the TUI: stop the run and wait for tools to stop.
-                app.state::<App>().stop();
+                app.state::<App>().stop_all();
                 close_browser();
                 dev_server::stop_all();
+                desktop::jobs::stop_all();
             }
         });
 }

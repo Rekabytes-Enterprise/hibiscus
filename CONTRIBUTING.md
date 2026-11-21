@@ -33,8 +33,9 @@ Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, se
 ## Making a change
 
 1. Keep the change focused and follow the [module map](docs/architecture.md). Shared workflows belong in `src/chat/`, the agent in `src/engine/`, its terminal client in `src/client/`, extensions in `src/extensions/`, file recovery in `src/checkpoints/`, and presentation in `src/cli/`, `src/tui/` or `src/ui/`. Update docs when usage, layout, or behavior changes.
-2. Add automated tests for every major new feature. For other behavior changes and bug fixes, add a unit or integration regression test when feasible and explain any testing gap in the PR. Local HTTP fixtures are suitable for provider behavior; use a controlling PTY for input/rendering/authentication behavior. Drain PTY output concurrently.
-3. Run:
+2. Add release notes for anything a user would notice as a new file in [`changes/`](changes/README.md), such as `changes/your-feature.md`. Don't edit `CHANGELOG.md`: every PR writing to its top conflicts with every other, and the version bump moves the notes there.
+3. Add automated tests for every major new feature. For other behavior changes and bug fixes, add a unit or integration regression test when feasible and explain any testing gap in the PR. Local HTTP fixtures are suitable for provider behavior; use a controlling PTY for input/rendering/authentication behavior. Drain PTY output concurrently.
+4. Run:
 
    ```sh
    cargo fmt --all -- --check
@@ -42,7 +43,7 @@ Hibiscus owns the Rust agent loop, provider protocols, tools, authentication, se
    cargo clippy --locked --all-targets -- -D warnings
    ```
 
-4. Pushes and pull requests to `dev` must pass `.github/workflows/ci.yml`: formatting, Clippy with warnings denied, installer checks, and Rust tests on Ubuntu and macOS. If behavior depends on a provider or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.
+5. Pushes and pull requests to `dev` must pass `.github/workflows/ci.yml`: formatting, Clippy with warnings denied, installer checks, and Rust tests on Ubuntu and macOS. If behavior depends on a provider or a real terminal, perform and describe a manual smoke test as well. Clearly label anything tested only against mocks. Include reproduction steps and expected versus actual results in a pull request.
 
 ## Safety and privacy
 
