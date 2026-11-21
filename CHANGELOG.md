@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-21
+
+### Added
+
+- Add an Off/On thinking selector for opted-in local Ornith models.
+
+### Fixed
+
+- Hibiscus Desktop keeps session switching usable after deleting the open conversation or trying to open a saved session that has disappeared.
+
 ## [0.4.4] - 2026-11-21
 
 ### Added

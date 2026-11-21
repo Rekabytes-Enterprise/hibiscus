@@ -36,6 +36,8 @@ export type ModelInfo = {
   thinkingLevels?: string[];
 };
 
+class ProjectUnavailable extends Error {}
+
 const pending = new Map<string, { resolve: (data: any) => void; reject: (e: Error) => void }>();
 // Responses that arrived before `request` learned their id.
 const early = new Map<string, Record>();
@@ -55,7 +57,7 @@ listen<Record>("engine", ({ payload }) => {
 }),
 
 listen<string>("engine-stopped", ({ payload }) => {
-  for (const waiter of pending.values()) waiter.reject(new Error(payload));
+  for (const waiter of pending.values()) waiter.reject(new ProjectUnavailable(payload));
   pending.clear();
   early.clear();
   for (const listener of listeners) listener({ type: "engine_stopped", error: payload });
@@ -71,7 +73,12 @@ export function onEvent(listener: (event: Record) => void): () => void {
 /** Sends a command and waits for its response data. */
 export async function request(command: Record): Promise<any> {
   await ready;
-  const id = await invoke<string>("send", { command });
+  const id = await invoke<string>("send", { command }).catch((error: unknown) => {
+    if (error === "No project is open." || error === "The engine has stopped.") {
+      throw new ProjectUnavailable(error);
+    }
+    throw error;
+  });
   return new Promise((resolve, reject) => {
     const response = early.get(id);
     early.delete(id);
@@ -243,3 +250,15 @@ export const listJobs = (folder: string) => invoke<Job[]>("jobs", { folder });
 export const stopJob = (id: number) => invoke<void>("job_stop", { id });
 /** Forgets the folder's finished jobs. */
 export const clearJobs = (folder: string) => invoke<void>("jobs_clear", { folder });
+
+/** Keep same-folder switches fast, but reopen the project if its worker is gone. */
+export async function switchProjectSession(folder: string, session?: string): Promise<boolean> {
+  try {
+    await request(session ? { type: "switch_session", sessionPath: session } : { type: "new_session" });
+    return true;
+  } catch (error) {
+    if (!(error instanceof ProjectUnavailable)) throw error;
+    await openProject(folder, false, session);
+    return false;
+  }
+}

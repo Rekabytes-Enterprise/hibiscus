@@ -1,6 +1,6 @@
 //! Model-specific choices. Session-v1 stores omission as "off"; Rooxcode presents
 //! that as Default, distinct from the explicit advertised effort "none".
-use super::config::{Api, Authentication, Model, Provider};
+use super::config::{self, Api, Authentication, Model, Provider};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -33,6 +33,7 @@ pub(super) enum Policy<'a> {
     Rooxcode(&'a [ReasoningEffort]),
     /// Efforts Codex lists for the model; empty means low, medium and high.
     Responses(&'a [ReasoningEffort]),
+    Ornith,
     Disabled,
 }
 
@@ -51,6 +52,13 @@ impl<'a> Policy<'a> {
             } else {
                 &[]
             })
+        } else if model.reasoning
+            && provider.api == Api::ChatCompletions
+            && provider.authentication == Authentication::ApiKey
+            && provider.id.eq_ignore_ascii_case("ornith")
+            && reqwest::Url::parse(&provider.base_url).is_ok_and(|url| config::private(&url))
+        {
+            Self::Ornith
         } else {
             Self::Disabled
         }
@@ -65,6 +73,7 @@ impl<'a> Policy<'a> {
             Self::Responses(efforts) => std::iter::once("off")
                 .chain(efforts.iter().map(|effort| effort.as_str()))
                 .collect(),
+            Self::Ornith => vec!["off", "on"],
             Self::Disabled => vec!["off"],
         }
     }
@@ -74,6 +83,7 @@ impl<'a> Policy<'a> {
             || match self {
                 Self::Rooxcode(efforts) => efforts.iter().any(|effort| effort.as_str() == level),
                 Self::Responses(_) => self.levels().contains(&level),
+                Self::Ornith => level == "on",
                 Self::Disabled => false,
             }
     }
@@ -95,6 +105,28 @@ impl<'a> Policy<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ornith_thinking_requires_local_chat_completions_and_model_opt_in() {
+        let mut provider: Provider = serde_json::from_value(serde_json::json!({
+            "id":"Ornith", "baseUrl":"http://localhost:8080/v1", "api":"chat_completions"
+        }))
+        .unwrap();
+        let mut model: Model =
+            serde_json::from_value(serde_json::json!({"id":"model","reasoning":true})).unwrap();
+        let policy = Policy::for_model(&provider, &model);
+        assert_eq!(policy.levels(), ["off", "on"]);
+        assert!(policy.supports_stored("on"));
+        assert!(!policy.supports_stored("low"));
+        model.reasoning = false;
+        assert_eq!(Policy::for_model(&provider, &model).levels(), ["off"]);
+        model.reasoning = true;
+        provider.id = "another-local-provider".into();
+        assert_eq!(Policy::for_model(&provider, &model).levels(), ["off"]);
+        provider.id = "ornith".into();
+        provider.base_url = "https://example.org/v1".into();
+        assert_eq!(Policy::for_model(&provider, &model).levels(), ["off"]);
+    }
 
     #[test]
     fn default_and_none_remain_distinct_and_existing_providers_keep_their_levels() {
