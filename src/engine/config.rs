@@ -104,19 +104,24 @@ fn defaults() -> Vec<Provider> {
         },
     ]
 }
+/// `config.json` as written, or `{}` when there is none.
+fn raw() -> Result<serde_json::Value> {
+    match fs::read(crate::paths::home()?.join("config.json")) {
+        Ok(b) => Ok(serde_json::from_slice(&b)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub fn load() -> Result<Config> {
-    let path = crate::paths::home()?.join("config.json");
-    let mut config: Config = match fs::read(path) {
-        Ok(b) => {
-            let raw: serde_json::Value = serde_json::from_slice(&b)?;
-            // Older installers wrote codexContextWindow. It no longer applies;
-            // ignore it like other unknown fields and use native defaults for
-            // missing settings, without rewriting the user's configuration.
-            serde_json::from_value(raw)?
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::from_str("{}")?,
-        Err(e) => return Err(e.into()),
-    };
+    parse(raw()?)
+}
+
+fn parse(raw: serde_json::Value) -> Result<Config> {
+    // Older installers wrote codexContextWindow. It no longer applies;
+    // ignore it like other unknown fields and use native defaults for
+    // missing settings, without rewriting the user's configuration.
+    let mut config: Config = serde_json::from_value(raw)?;
     // Subscription tokens must never be routed to a configurable third-party host.
     if !config.providers.iter().any(|p| p.id == "openai-codex") {
         config.providers.push(Provider {
@@ -153,17 +158,13 @@ pub fn load() -> Result<Config> {
             );
         }
         let url = reqwest::Url::parse(&p.base_url)?;
-        let local = matches!(
-            url.host_str(),
-            Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
-        );
-        if (url.scheme() != "https" && !(local && url.scheme() == "http"))
+        if (url.scheme() != "https" && !(private(&url) && url.scheme() == "http"))
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
         {
-            return Err("provider baseUrl must use HTTPS, or HTTP on loopback, without credentials/query/fragment".into());
+            return Err("provider baseUrl must use HTTPS, or HTTP on this computer or a private network, without credentials/query/fragment".into());
         }
         let mut models = std::collections::HashSet::new();
         if p.models.iter().any(|m| {
@@ -186,6 +187,78 @@ pub fn load() -> Result<Config> {
     }
     Ok(config)
 }
+
+/// Whether `url` points at this computer or a private network (home LAN,
+/// Tailscale, `.local` names), where a local model server may run over HTTP.
+pub fn private(url: &reqwest::Url) -> bool {
+    use std::net::IpAddr;
+    let host = url.host_str().unwrap_or_default();
+    let Ok(ip) = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+    else {
+        return host == "localhost" || host.ends_with(".local");
+    };
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, ..] = ip.octets();
+            // 100.64.0.0/10 is carrier-grade NAT, which Tailscale uses.
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || (a == 100 && (64..128).contains(&b))
+        }
+        // fc00::/7 unique local and fe80::/10 link-local.
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || (ip.segments()[0] & 0xfe00) == 0xfc00
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Adds `provider` to `config.json`, keeping everything else in the file.
+/// Fails, writing nothing, if the result would not load.
+pub fn add_provider(provider: &Provider) -> Result<()> {
+    let mut raw = raw()?;
+    let object = raw
+        .as_object_mut()
+        .ok_or("config.json must hold an object")?;
+    // Without a providers list the built-in defaults apply; keep them when starting one.
+    let list = object
+        .entry("providers")
+        .or_insert_with(|| serde_json::to_value(defaults()).unwrap_or_default())
+        .as_array_mut()
+        .ok_or("config.json providers must be a list")?;
+    if list.iter().any(|p| p["id"] == provider.id.as_str()) {
+        return Err(format!("A provider named {} already exists", provider.id).into());
+    }
+    list.push(serde_json::to_value(provider)?);
+    parse(raw.clone())?;
+    write(&raw)
+}
+
+/// Takes the provider `id` out of `config.json`. Nothing happens when it isn't there.
+pub fn remove_provider(id: &str) -> Result<()> {
+    let mut raw = raw()?;
+    let Some(list) = raw.get_mut("providers").and_then(|p| p.as_array_mut()) else {
+        return Ok(());
+    };
+    let before = list.len();
+    list.retain(|p| p["id"] != id);
+    if list.len() == before {
+        return Ok(());
+    }
+    write(&raw)
+}
+
+fn write(raw: &serde_json::Value) -> Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(raw)?;
+    bytes.push(b'\n');
+    atomic(&crate::paths::home()?.join("config.json"), &bytes)
+}
+
 pub fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or("file has no parent")?;
     fs::DirBuilder::new()
@@ -242,5 +315,35 @@ pub fn access(provider: &Provider) -> Result<()> {
         super::rooxcode::validate_provider(provider)
     } else {
         key(provider).map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod private_tests {
+    #[test]
+    fn http_is_allowed_only_on_this_computer_or_a_private_network() {
+        let private = |u: &str| super::private(&reqwest::Url::parse(u).unwrap());
+        for u in [
+            "http://localhost:8080/v1",
+            "http://127.0.0.1:1/v1",
+            "http://[::1]:1/v1",
+            "http://192.168.3.3:8080/v1",
+            "http://10.0.0.5/v1",
+            "http://172.20.1.1/v1",
+            "http://100.101.2.3/v1",
+            "http://rkb.local:8080/v1",
+            "http://[fd00::1]/v1",
+        ] {
+            assert!(private(u), "{u}");
+        }
+        for u in [
+            "http://example.com/v1",
+            "http://8.8.8.8/v1",
+            "http://172.32.0.1/v1",
+            "http://100.128.0.1/v1",
+            "http://localhost.example.com/v1",
+        ] {
+            assert!(!private(u), "{u}");
+        }
     }
 }

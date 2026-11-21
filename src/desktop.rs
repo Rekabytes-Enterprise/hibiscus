@@ -334,6 +334,8 @@ pub struct ProviderInfo {
     pub browser: bool,
     pub signed_in: bool,
     pub key_page: Option<&'static str>,
+    /// Added from Settings as a local AI server; Settings can remove it.
+    pub local: bool,
 }
 
 /// Every configured provider, including signed-out ones.
@@ -348,8 +350,77 @@ pub fn providers() -> Result<Vec<ProviderInfo>> {
             browser: p.authentication == config::Authentication::Codex,
             signed_in: config::access(p).is_ok(),
             key_page: key_page(&p.id),
+            local: p.authentication == config::Authentication::ApiKey
+                && reqwest::Url::parse(&p.base_url).is_ok_and(|u| config::private(&u)),
         })
         .collect())
+}
+
+/// A model server on this computer or the home network, such as Ollama, LM Studio or vLLM.
+pub struct LocalProvider {
+    /// Its name in Hibiscus, e.g. `ornith`; models show as `ornith/<model>`.
+    pub id: String,
+    /// Where its API starts, e.g. `http://192.168.3.3:8080/v1`.
+    pub base_url: String,
+    /// `chat_completions`, `responses` or `anthropic`.
+    pub api: String,
+    pub models: Vec<String>,
+    pub context_window: Option<u64>,
+    /// Empty when the server takes no key.
+    pub key: String,
+}
+
+/// Adds a local model server to `config.json` and stores its key.
+/// Start a new engine afterwards, as after saving an API key.
+pub fn add_local_provider(local: LocalProvider) -> Result<()> {
+    use crate::engine::config;
+    let api = serde_json::from_value(serde_json::Value::String(local.api.clone()))
+        .map_err(|_| format!("Unknown API {}", local.api))?;
+    let models: Vec<String> = local
+        .models
+        .iter()
+        .map(|m| m.trim().to_owned())
+        .filter(|m| !m.is_empty())
+        .collect();
+    if models.is_empty() {
+        return Err("Add at least one model name".into());
+    }
+    let provider = config::Provider {
+        id: local.id.trim().to_owned(),
+        base_url: local.base_url.trim().trim_end_matches('/').to_owned(),
+        api,
+        authentication: config::Authentication::ApiKey,
+        api_key_env: None,
+        models: models
+            .into_iter()
+            .map(|id| {
+                serde_json::from_value(
+                    serde_json::json!({"id": id, "contextWindow": local.context_window}),
+                )
+            })
+            .collect::<std::result::Result<_, _>>()?,
+    };
+    if !reqwest::Url::parse(&provider.base_url).is_ok_and(|u| config::private(&u)) {
+        return Err("A local AI server must be on this computer or your private network. Add other servers in config.json.".into());
+    }
+    config::add_provider(&provider)?;
+    // Hibiscus sends every API-key provider a key; servers without one ignore it.
+    let key = if local.key.trim().is_empty() {
+        "local"
+    } else {
+        local.key.trim()
+    };
+    if let Err(e) = save_api_key(&provider.id, key) {
+        let _ = config::remove_provider(&provider.id);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Removes a local AI server added with `add_local_provider`, and its key.
+pub fn remove_local_provider(id: &str) -> Result<()> {
+    sign_out(id)?;
+    crate::engine::config::remove_provider(id)
 }
 
 #[cfg(test)]

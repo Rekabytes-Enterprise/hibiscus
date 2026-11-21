@@ -13,6 +13,18 @@ export type ProviderInfo = {
   browser: boolean;
   signedIn: boolean;
   keyPage: string | null;
+  /** A local AI server added in Settings, which Settings can remove. */
+  local: boolean;
+};
+/** A model server on this computer or the home network, such as Ollama or LM Studio. */
+export type LocalProvider = {
+  id: string;
+  baseUrl: string;
+  api: "chat_completions" | "responses" | "anthropic";
+  models: string[];
+  contextWindow: number | null;
+  /** Empty when the server takes no key. */
+  key: string;
 };
 export type ModelInfo = {
   provider: string;
@@ -107,6 +119,8 @@ export const listProviders = () => invoke<ProviderInfo[]>("providers");
 export const saveApiKey = (provider: string, key: string) =>
   invoke<void>("save_api_key", { provider, key });
 export const signOut = (provider: string) => invoke<void>("sign_out", { provider });
+export const addLocalProvider = (provider: LocalProvider) => invoke<void>("add_local_provider", { provider });
+export const removeLocalProvider = (id: string) => invoke<void>("remove_local_provider", { id });
 /** Whether OpenRouter requests ask for providers that don't store or train on prompts. */
 export const trainingDenied = () => invoke<boolean>("training_denied");
 export const setTrainingDenied = (deny: boolean) => invoke<void>("set_training_denied", { deny });

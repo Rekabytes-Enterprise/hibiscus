@@ -6,6 +6,9 @@ All notable changes to Hibiscus are documented here.
 
 ### Added
 
+- Hibiscus Desktop: Add local AI in Settings > Providers. Point Hibiscus at a model server on your computer or home network, such as Ollama, LM Studio, vLLM or your own, with its URL, API (OpenAI Chat Completions, OpenAI Responses or Anthropic Messages), model names, an optional context window and an optional key. Its models show in the model picker, and Remove takes it out again.
+- Providers can use plain HTTP on a private network as well as on this computer: 192.168.x, 10.x, 172.16-31.x, Tailscale's 100.64.x, IPv6 unique-local and `.local` names. Other hosts still need HTTPS.
+
 - Hibiscus Desktop: switch sessions while the agent works. A running turn, such as a canvas video build, keeps going in the background, its session shows a spinner in the sidebar, and opening it again shows the live conversation and catches its canvas up. Up to 3 turns run in the background at once, and quitting asks first when any are still working.
 
 ## [0.4.3] - 2026-11-19

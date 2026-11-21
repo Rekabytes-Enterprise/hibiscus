@@ -2,6 +2,8 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { onDestroy, onMount } from "svelte";
   import {
+    addLocalProvider,
+    removeLocalProvider,
     codexCancel,
     codexPaste,
     codexStart,
@@ -10,6 +12,7 @@
     rekaAccount,
     saveApiKey,
     signOut,
+    type LocalProvider,
     type ProviderInfo,
     type RekaAccount,
   } from "./engine";
@@ -122,9 +125,38 @@
     }
   }
 
+  /** The Add local AI form, while it is open. */
+  let local = $state<{ id: string; baseUrl: string; api: LocalProvider["api"]; models: string; contextWindow: number | null; key: string } | null>(null);
+
+  async function addLocal() {
+    if (!local) return;
+    saving = true;
+    error = null;
+    try {
+      await addLocalProvider({
+        id: local.id.trim(),
+        baseUrl: local.baseUrl.trim(),
+        api: local.api,
+        models: local.models.split(/[\s,]+/).filter(Boolean),
+        contextWindow: local.contextWindow || null,
+        key: local.key,
+      });
+      local = null;
+      await changed();
+    } catch (e) {
+      error = message(e);
+    } finally {
+      saving = false;
+    }
+  }
+
   async function remove(p: ProviderInfo) {
     error = null;
     try {
+      if (p.local) {
+        await removeLocalProvider(p.id);
+        return await changed();
+      }
       await signOut(p.id);
       await changed();
     } catch (e) {
@@ -151,11 +183,15 @@
   {#each providers as p}
     <li>
       <div class="provider">
-        <Icon name="key" />
-        <span class="grow">{p.id}</span>
-        <span class="small" class:ok={p.signedIn} class:muted={!p.signedIn}>{p.signedIn ? "Signed in" : "Not signed in"}</span>
-        {#if p.signedIn}
-          <button onclick={() => remove(p)}>Sign out</button>
+        <Icon name={p.local ? "server" : "key"} />
+        <span class="grow">{p.id}{#if p.local}<span class="muted small"> · Local AI</span>{/if}</span>
+        {#if p.local}
+          <button onclick={() => remove(p)}>Remove</button>
+        {:else}
+          <span class="small" class:ok={p.signedIn} class:muted={!p.signedIn}>{p.signedIn ? "Signed in" : "Not signed in"}</span>
+          {#if p.signedIn}
+            <button onclick={() => remove(p)}>Sign out</button>
+          {/if}
         {/if}
         {#if p.apiKey}
           <button onclick={() => { chosen = chosen === p.id ? null : p.id; key = ""; error = null; }}>
@@ -193,5 +229,56 @@
       {/if}
     </li>
   {/each}
+  <li>
+    <div class="provider">
+      <Icon name="server" />
+      <span class="grow">Local AI<span class="muted small"> · Ollama, LM Studio, vLLM or your own server</span></span>
+      {#if !local}
+        <button onclick={() => { local = { id: "", baseUrl: "http://", api: "chat_completions", models: "", contextWindow: null, key: "" }; error = null; }}><Icon name="plus" size={14} /> Add local AI</button>
+      {/if}
+    </div>
+    {#if local}
+      <form class="local" onsubmit={(e) => { e.preventDefault(); addLocal(); }}>
+        <label><span class="small">Name</span>
+          <!-- svelte-ignore a11y_autofocus -->
+          <input type="text" autocomplete="off" spellcheck="false" placeholder="ornith" bind:value={local.id} autofocus />
+        </label>
+        <label><span class="small">Server URL</span>
+          <input type="text" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.20:8080/v1" bind:value={local.baseUrl} />
+        </label>
+        <label><span class="small">API</span>
+          <select bind:value={local.api}>
+            <option value="chat_completions">OpenAI Chat Completions (/chat/completions)</option>
+            <option value="responses">OpenAI Responses (/responses)</option>
+            <option value="anthropic">Anthropic Messages (/messages)</option>
+          </select>
+        </label>
+        <label><span class="small">Models, separated by commas</span>
+          <input type="text" autocomplete="off" spellcheck="false" placeholder="qwen3-coder-30b" bind:value={local.models} />
+        </label>
+        <label><span class="small">Context window in tokens (optional)</span>
+          <input type="number" min="8192" placeholder="32768" bind:value={local.contextWindow} />
+        </label>
+        <label><span class="small">API key (optional)</span>
+          <input type="password" autocomplete="off" spellcheck="false" placeholder="Leave empty if the server takes no key" bind:value={local.key} />
+        </label>
+        <p class="small muted">HTTP works for this computer and your private network: 192.168.x, 10.x, Tailscale, .local names. Anything else needs HTTPS.</p>
+        <div class="actions">
+          <span class="grow"></span>
+          <button type="button" onclick={() => (local = null)}>Cancel</button>
+          <button class="primary" disabled={saving || !local.id.trim() || !local.baseUrl.trim() || !local.models.trim()}>Add</button>
+        </div>
+      </form>
+    {/if}
+  </li>
 </ul>
 {#if error}<p class="error small">{error}</p>{/if}
+
+<style>
+  .local label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+</style>

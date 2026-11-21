@@ -306,6 +306,7 @@ struct Provider {
     browser: bool,
     signed_in: bool,
     key_page: Option<&'static str>,
+    local: bool,
 }
 
 #[tauri::command]
@@ -319,8 +320,38 @@ async fn providers() -> Result<Vec<Provider>, String> {
             browser: p.browser,
             signed_in: p.signed_in,
             key_page: p.key_page,
+            local: p.local,
         })
         .collect())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalProvider {
+    id: String,
+    base_url: String,
+    api: String,
+    models: Vec<String>,
+    context_window: Option<u64>,
+    key: String,
+}
+
+#[tauri::command]
+async fn add_local_provider(provider: LocalProvider) -> Result<(), String> {
+    desktop::add_local_provider(desktop::LocalProvider {
+        id: provider.id,
+        base_url: provider.base_url,
+        api: provider.api,
+        models: provider.models,
+        context_window: provider.context_window,
+        key: provider.key,
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn remove_local_provider(id: String) -> Result<(), String> {
+    desktop::remove_local_provider(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1232,6 +1263,8 @@ fn main() {
             delete_session,
             providers,
             save_api_key,
+            add_local_provider,
+            remove_local_provider,
             sign_out,
             training_denied,
             set_training_denied,
