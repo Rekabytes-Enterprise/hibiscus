@@ -44,6 +44,54 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Each PR adds its notes as changes/<name>.md, in CHANGELOG.md's "### Added"
+# form, so PRs never conflict in CHANGELOG.md. They join Unreleased here,
+# under matching headings after any entries already there.
+fragments=$(find changes -maxdepth 1 -type f -name '*.md' ! -name README.md 2>/dev/null | LC_ALL=C sort)
+if [ -n "$fragments" ]; then
+    status=0
+    # shellcheck disable=SC2086 # fragment names have no spaces
+    awk '
+        BEGIN { split("Added Changed Deprecated Removed Fixed Security", seed, " "); for (i = 1; i <= 6; i++) section(seed[i]); cur = "" }
+        function section(name) { if (!(name in known)) { known[name] = 1; names[++count] = name } cur = name }
+        function flush(   i, name) {
+            if (pre != "") printf "\n%s", pre
+            for (i = 1; i <= count; i++) {
+                name = names[i]
+                if (old[name] new[name] != "") printf "\n### %s\n\n%s%s", name, old[name], new[name]
+            }
+            print ""
+        }
+        FILENAME != "CHANGELOG.md" {
+            if (FNR == 1) cur = ""
+            if (/^### /) { section(substr($0, 5)); next }
+            if (!NF) next
+            if (cur == "") { bad = FILENAME; exit }
+            new[cur] = new[cur] $0 "\n"
+            next
+        }
+        /^## \[Unreleased\]$/ && !seen { print; seen = 1; inside = 1; cur = ""; next }
+        inside && /^## / { flush(); inside = 0 }
+        inside {
+            if (/^### /) section(substr($0, 5))
+            else if (NF && cur == "") pre = pre $0 "\n"
+            else if (NF) old[cur] = old[cur] $0 "\n"
+            next
+        }
+        { print }
+        END {
+            if (bad != "") { print bad " has an entry before its \"### Added\"-style heading" > "/dev/stderr"; exit 5 }
+            if (inside) flush()
+            if (!seen) exit 3
+        }
+    ' $fragments CHANGELOG.md > "$backup/folded.tmp" || status=$?
+    case $status in
+    0) cp "$backup/folded.tmp" CHANGELOG.md ;;
+    3) echo 'CHANGELOG.md has no "## [Unreleased]" heading' >&2; exit 1 ;;
+    *) exit 1 ;;
+    esac
+fi
+
 # The Unreleased entries become this version's notes; Unreleased starts empty.
 status=0
 awk -v version="$next" -v date="$(date +%Y-%m-%d)" '
@@ -56,7 +104,7 @@ awk -v version="$next" -v date="$(date +%Y-%m-%d)" '
 case $status in
 0) cp "$backup/changelog.tmp" CHANGELOG.md ;;
 3) echo 'CHANGELOG.md has no "## [Unreleased]" heading' >&2; exit 1 ;;
-4) echo 'CHANGELOG.md has nothing under "## [Unreleased]"; add the release notes first' >&2; exit 1 ;;
+4) echo 'CHANGELOG.md has nothing under "## [Unreleased]" and changes/ has no notes; add the release notes first' >&2; exit 1 ;;
 *) exit "$status" ;;
 esac
 
@@ -74,6 +122,10 @@ sed -e "s/v${old_pattern}/v${next}/g" \
 cp "$backup/docs.tmp" docs/installation.md
 sed "s/\(run_case Darwin arm64 aarch64-apple-darwin \)${old_pattern}/\1${next}/" tests/install.sh > "$backup/installer.tmp"
 cp "$backup/installer.tmp" tests/install.sh
+
+# Last, so a failed bump keeps them; their notes now live in CHANGELOG.md.
+# shellcheck disable=SC2086
+[ -z "$fragments" ] || rm -f $fragments
 
 printf 'Bumped Hibiscus %s -> %s in CHANGELOG.md, Cargo.toml, Cargo.lock, package.json, docs and installer fixture.\n' "$old" "$next"
 if command -v git >/dev/null 2>&1 &&
