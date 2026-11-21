@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-11-21
+
+### Fixed
+
+- Keep Chat and Canvas as separate Desktop session types. The sidebar groups them by folder and opens each in its own view.
+- Show the agent's questions inline in Chat and as cards in Canvas. Analyzing a video in Chat keeps the conversation open.
+- Limit inline tool output on small-context models and check context before sending tool results. Compact and retry once after an explicit provider context-limit rejection.
+- Send non-Rooxcode compaction requests as bounded conversation data and keep the original history when summarization fails or returns an invalid result.
+- Route Desktop's `/compact [instructions]` to the open session's compaction command and show progress and errors locally.
+
 ## [0.4.6] - 2026-11-21
 
 ### Added

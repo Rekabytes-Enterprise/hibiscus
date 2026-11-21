@@ -1,8 +1,9 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { entries, outage, summary, type Chat } from "./chat";
+  import { entries, outage, pendingQuestions, summary, type Chat } from "./chat";
   import Icon from "./Icon.svelte";
+  import ChatQuestions from "./ChatQuestions.svelte";
   import ToolCall from "./ToolCall.svelte";
   import { cachedMarkdown, markdown } from "./markdown";
 
@@ -13,8 +14,12 @@
     onresend,
     fallback,
     onswitch,
+    onanswer,
+    answerDisabled,
   }: {
     chat: Chat;
+    onanswer?: (text: string) => Promise<void>;
+    answerDisabled: boolean;
     folder: string | null;
     /** Loads the page of messages before the loaded ones, when `chat.start` says there are more. */
     onolder: () => Promise<void>;
@@ -24,6 +29,7 @@
     /** Switches to `fallback`, then sends `prompt` again if there is one. */
     onswitch: (prompt: string | null) => void;
   } = $props();
+  const pending = $derived(onanswer ? pendingQuestions(chat.items) : []);
   const down = $derived(fallback ? outage(chat) : null);
   /** Groups the user opened, by the id of their first tool call. */
   let opened = $state<{ [id: string]: boolean }>({});
@@ -127,6 +133,11 @@
   {:else}
     <div class="empty muted">Ask Hibiscus to read, change or explain code in this folder.</div>
   {/each}
+  {#if onanswer && pending.length}
+    {#key pending.map((call) => call.id).join(",")}
+      <ChatQuestions questions={pending.flatMap((call) => call.questions)} disabled={answerDisabled || chat.running} {onanswer} />
+    {/key}
+  {/if}
   {#if chat.running}
     <div class="muted small working">{chat.waiting ? "Waiting in the Rooxcode queue…" : "Working…"}</div>
   {/if}

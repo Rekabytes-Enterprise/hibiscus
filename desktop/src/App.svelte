@@ -2,9 +2,9 @@
   import { invoke } from "@tauri-apps/api/core";
   import { homeDir } from "@tauri-apps/api/path";
   import { ask, open as pickFolder } from "@tauri-apps/plugin-dialog";
-  import { onMount, tick, untrack } from "svelte";
+  import { onMount, tick } from "svelte";
   import { apply, ChatCache, empty, fromMessages, newer, outage, type Chat } from "./lib/chat";
-  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, onBackground, onConfirmQuit, parkProject, quit, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, switchProjectSession, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type ModelInfo, type SavedSession } from "./lib/engine";
+  import { canvasStyles, type Style, canvasLoad, canvasStore, readReference, saveReference, closeProject, onBackground, onConfirmQuit, parkProject, quit, deleteSession, gitChanges, listSessions, onEvent, openFile, openProject, post, rekaAccount, rekaProfile, rekaSignInError, renameSession, request, signOut, switchProjectSession, wslConnect, wslDistros, wslHome, type Distro, type RekaAccount, type Changes, type ModelInfo, type SavedSession, type SessionKind } from "./lib/engine";
   import BrowserPane from "./lib/BrowserPane.svelte";
   import { POINTING } from "./lib/browser";
   import ChatView from "./lib/ChatView.svelte";
@@ -109,7 +109,8 @@
   let extensions = $state<{ name: string; description: string }[]>([]);
   let panelOpen = $state(true);
   let dialog = $state<"models" | null>(null);
-  let page = $state<"chat" | "settings" | "canvas">("chat");
+  let page = $state<SessionKind | "settings">("chat");
+  let sessionKind = $state<SessionKind>("chat");
   // The left sidebar collapses from the title bar; the choice is remembered.
   const SIDEBAR = "hibiscus.sidebarClosed";
   let sidebarOpen = $state(!localStorage.getItem(SIDEBAR));
@@ -156,10 +157,8 @@
   // The session panel only has something to say once the session has started.
   const active = $derived(page === "chat" && !!folder && (chat.items.length > 0 || chat.running));
   // The browser is there before a session starts too, to open a page by hand.
-  // Each session keeps its own canvas, saved with it. `boardSession` is the session the
-  // cards on screen belong to; a canvas started before the first message joins the
-  // session that message creates.
-  let boardSession: string | null = null;
+  // The cards on screen belong to this persisted Canvas session.
+  let boardSession = $state<string | null>(null);
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     const json = serialize();
@@ -168,12 +167,9 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => void canvasStore(session, json).catch(() => {}), 600);
   });
-  $effect(() => {
-    const session = sessionFile;
-    untrack(() => void switchBoard(session));
-  });
   // While the board changes sessions, the shown engine's canvas events wait in `queued`.
-  let switching = false;
+  let switching = $state(false);
+  const canSendCanvas = $derived(!!folder && sessionKind === "canvas" && !opening && !switching);
   let queued: any[] = [];
   /** What a session back from the background did on its canvas meanwhile. */
   let replaying: { session: string; events: any[]; run: Run } | undefined;
@@ -186,12 +182,12 @@
         clearTimeout(saveTimer);
         await canvasStore(boardSession, serialize()).catch(() => {});
       }
-      if (!boardSession && session && board.cards.length) {
-        boardSession = session;
-      } else {
-        boardSession = session;
-        restore(session ? await canvasLoad(session).catch(() => null) : null, readReference);
-      }
+      const savedBoard = session ? await canvasLoad(session).catch(() => null) : null;
+      restore(savedBoard, readReference);
+      board.followUp = undefined;
+      runError = null;
+      lastStep = afterTool = undefined;
+      boardSession = session;
       const back = replaying?.session === session ? replaying : undefined;
       if (back) {
         replaying = undefined;
@@ -217,8 +213,6 @@
   let afterTool: string | undefined;
   void canvasStyles().then((s) => (styles = s)).catch(() => {});
 
-  // A session started from a canvas card: its title bar links back to the canvas.
-  const fromCanvas = $derived(chat.items.some((i) => i.kind === "user" && i.text.startsWith("[Canvas ")));
   const showBrowser = $derived(page === "chat" && !!folder && browserOpen);
   const title = $derived(
     (folder && saved[folder]?.find((s) => s.path === (pending ?? sessionFile))?.title) || "New session",
@@ -275,7 +269,7 @@
   /** An event from the engine the window shows. */
   function shown(event: any) {
     chat = apply(chat, event);
-    if (event.type === "agent_settled") void refresh();
+    if (event.type === "agent_settled" && !opening) void refresh();
     // A session revoked or expired on the gateway mid-run.
     if (event.type === "message_end" && needsSignIn(event.message?.errorMessage)) showSignIn();
     if (event.type === "agent_start") browserShown = false;
@@ -286,8 +280,11 @@
       if (event.args?.action === "start") browserOpen = true;
     }
     if (event.type === "tool_execution_end" && browserCalls.delete(event.toolCallId)) poke++;
-    if (switching) queued.push(event);
-    else canvasEvent(event, true);
+    if (opening && replaying) replaying.events.push(event);
+    else if (sessionKind === "canvas") {
+      if (switching || boardSession !== sessionFile) queued.push(event);
+      else canvasEvent(event, true);
+    }
   }
 
   // Background engines: events land with their session until it shows again.
@@ -325,8 +322,8 @@
       if (live) page = "canvas";
     };
     // The agent's questions open as a card with suggested answers.
-    if (event.type === "tool_execution_start" && event.toolName === "ask_user") {
-      openQuestions(event.args ?? {});
+    if (event.type === "tool_execution_end" && event.toolName === "ask_user" && !event.isError) {
+      openQuestions(event.result?.details ?? {});
       show();
     }
     // The storyboard and the video preview open on the canvas for the user to review.
@@ -368,8 +365,9 @@
     if (event.type === "agent_settled") {
       const sent = board.cards.find((c) => c.id === board.active);
       if (sent) {
-        sent.stopped = runError ? undefined : afterTool;
-        sent.status = runError ? `The model failed: ${runError}` : afterTool ? `Stopped before finishing, after: ${afterTool}.` : "Done. The agent's reply is in the chat.";
+        const waiting = board.cards.some((c) => c.kind === "question" && c.parent === sent.id);
+        sent.stopped = runError || waiting ? undefined : afterTool;
+        sent.status = runError ? `The model failed: ${runError}` : waiting ? "Waiting for your answers." : afterTool ? `Stopped before finishing, after: ${afterTool}.` : "Done. The agent's reply is in the chat.";
       }
       runError = null;
       afterTool = undefined;
@@ -529,12 +527,15 @@
     const t = timer("refresh");
     // None of these depends on another; each fills in its part when it arrives.
     await Promise.all([
-      request({ type: "get_state" }).then((state) => {
+      request({ type: "get_state" }).then(async (state) => {
         model = state.model;
         if (!model) void pickModel(state.sessionFile);
         hasAccess = state.hasAccess;
         thinking = state.thinkingLevel;
+        sessionKind = state.sessionKind === "canvas" ? "canvas" : "chat";
         sessionFile = state.sessionFile;
+        if (sessionKind === "chat") replaying = undefined;
+        await switchBoard(sessionKind === "canvas" ? sessionFile : null);
         extensions = state.extensionCommands ?? [];
         t("get_state");
       }, (e) => notice(message(e))),
@@ -550,7 +551,7 @@
    * Opens `path`: a new session, or a saved `session`. In the folder already open,
    * the running engine switches sessions; `restart` forces a new engine instead.
    */
-  async function open(path: string, session?: string, restart = false) {
+  async function open(path: string, session?: string, restart = false, kind: SessionKind = "chat") {
     if (opening) return;
     opening = true;
     side = "details";
@@ -581,7 +582,7 @@
     const back = session ? bg.take(session) : undefined;
     if (back) replaying = { session: session!, events: back.events, run: back.run };
     const inPlace = path === folder && !!session && !restart && !parked && !back;
-    const before = { chat, sessionFile };
+    const before = { chat, sessionFile, sessionKind, page };
     remember();
     // A session opened before shows at once; the engine's copy replaces it below if the file changed.
     const cached = back?.chat ?? (session ? chats.get(session) : undefined);
@@ -608,7 +609,7 @@
         reused = await switchProjectSession(path, session);
         t("switch_session");
       } else {
-        resumed = await openProject(path, false, session);
+        resumed = await openProject(path, false, session, kind);
         t("engine start");
       }
       if (from && path !== from && !bg.runningIn(from)) stopServer(from);
@@ -629,11 +630,13 @@
       painted(t, "conversation painted");
       // Details fill in after the conversation is on screen.
       await refresh(!reused);
+      if (!restart || page !== "settings") page = sessionKind;
       t("details loaded");
       painted(t, "details painted");
     } catch (e) {
       error = message(e);
-      ({ chat, sessionFile } = before);
+      ({ chat, sessionFile, sessionKind, page } = before);
+      replaying = undefined;
       // A folder deleted since it was listed: say so, and take it off the sidebar.
       if ((session || path !== folder) && !(await loadSessions(path))) {
         error = `${name(path)} no longer exists, so it was removed from the sidebar.`;
@@ -680,28 +683,28 @@
   }
 
   /** Commit the new view only after the engine has left the previous session. */
-  async function startNewSession(path: string) {
-    await switchProjectSession(path);
+  async function startNewSession(path: string, kind: SessionKind = "chat") {
+    await switchProjectSession(path, undefined, kind);
     remember();
     sessionFile = null;
     chat = empty();
     stats = null;
     saveRecent(opened(recent, path));
     await refresh();
+    page = sessionKind;
   }
 
-  async function newSession() {
+  async function newSession(kind: SessionKind) {
     if (opening) return;
-    page = "chat";
     side = "details";
     wide = false;
-    if (!folder) return open(home);
+    if (!folder) return open(home, undefined, false, kind);
     // A running turn goes to the background, so the new session needs its own engine.
-    if (chat.running) return open(folder);
+    if (chat.running) return open(folder, undefined, false, kind);
     opening = true;
     error = null;
     try {
-      await startNewSession(folder);
+      await startNewSession(folder, kind);
     } catch (e) {
       error = message(e);
     } finally {
@@ -710,8 +713,27 @@
   }
 
   async function send(text: string, images: { mimeType: string; data: string }[], steer: boolean) {
-    const command: any = { type: "prompt", message: text, images };
-    if (chat.running) command.streamingBehavior = steer ? "steer" : "followUp";
+    const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text);
+    if (compact) {
+      if (chat.running || opening || images.length) {
+        notice(images.length ? "Remove attachments before compacting." : "Wait for the current run to finish, or stop it, then compact.");
+        composer?.add(text, images);
+        return;
+      }
+      opening = true;
+      notice("Compacting the conversation…", false);
+      try {
+        await request({ type: "compact", customInstructions: compact[1]?.trim() || undefined });
+        notice("Conversation compacted.", false);
+        await refresh(false);
+      } catch (e) {
+        notice(message(e));
+      } finally {
+        opening = false;
+      }
+      return;
+    }
+    const command = { type: "prompt", message: text, images, ...(chat.running ? { streamingBehavior: steer ? "steer" : "followUp" } : {}) };
     try {
       await post(command);
     } catch (e) {
@@ -720,6 +742,15 @@
         composer?.add(text, images);
         showSignIn();
       } else notice(message(e));
+    }
+  }
+
+  async function answerChat(text: string) {
+    if (opening || chat.running || sessionKind !== "chat") return;
+    try {
+      await post({ type: "prompt", message: prompts.answers(text) });
+    } catch (e) {
+      notice(message(e));
     }
   }
 
@@ -764,10 +795,9 @@
   const toDisk = async (name: string, url: string) => saveReference(name, new Uint8Array(await (await fetch(url)).arrayBuffer()));
 
   async function sendCard(card: Card, prompt?: string, extra: Reference[] = []) {
-    if (!folder) {
-      card.status = "Open a folder first. The agent works in it.";
-      return;
-    }
+    const session = boardSession;
+    const current = () => !opening && !switching && sessionKind === "canvas" && session === sessionFile;
+    if (!folder || !session || !current() || !board.cards.includes(card)) return;
     // Locks the card's buttons at once, so a second press can't send it twice.
     if (cardBusy(card)) return;
     card.status = "Sending…";
@@ -787,9 +817,11 @@
         if (!ref.video && ref.url && card.refs.includes(ref)) images.push(await attachment(ref.url));
         if (ref.path) lines.push(`- ${ref.time ? `frame at ${ref.time}` : ref.video ? "video" : "image"}: ${ref.path}`);
       }
+      if (!current()) throw new Error("Reopen this Canvas session to send the card.");
       if (card.model && (card.model.provider !== model?.provider || card.model.id !== model?.id)) {
         await request({ type: "set_model", provider: card.model.provider, modelId: card.model.id });
       }
+      if (!current()) throw new Error("Reopen this Canvas session to send the card.");
       if (card.thinking && card.thinking !== thinking) await request({ type: "set_thinking_level", level: card.thinking });
       await refresh();
       const kind = { video: "Video", image: "Image", speech: "Text to speech", frames: "Frames", storyboard: "Storyboard", preview: "Video preview", question: "Questions" }[card.kind];
@@ -797,13 +829,14 @@
       const style = styleFor(card);
       const rule = style ? `\n\n${prompts.styleRule(style.name, style.path)}` : "";
       const text = `[Canvas ${kind} card]\n${(prompt ?? card.text).trim()}${rule}${lines.length ? `\n\nReferences:\n${lines.join("\n")}` : ""}`;
+      if (!current()) throw new Error("Reopen this Canvas session to send the card.");
       // Cards the agent opens next join the video this work is for.
       board.active = card.parent ?? card.id;
       await send(text, images, false);
       card.status = "Sent. The agent is working on it in the chat.";
     } catch (e) {
       card.status = message(e);
-      board.active = undefined;
+      if (current()) board.active = undefined;
     }
   }
 
@@ -915,6 +948,7 @@
   }
 
   async function skipQuestions(card: Card) {
+    if (chat.running) return;
     const parent = board.cards.find((c) => c.id === card.parent);
     await sendCard(card, prompts.SKIP);
     if (card.status?.startsWith("Sent")) {
@@ -975,6 +1009,7 @@
 
   /** Sends the answers, closes the questions and lets the agent carry on. */
   async function answer(card: Card) {
+    if (chat.running) return;
     const parent = board.cards.find((c) => c.id === card.parent);
     await sendCard(card, prompts.answers(answers(card)));
     if (card.status?.startsWith("Sent")) {
@@ -1046,15 +1081,15 @@
     current={pending ?? sessionFile}
     busy={opening}
     {working}
-    onnew={newSession}
-    onresume={(path, session) => { page = "chat"; void open(path, session); }}
+    onnew={() => newSession("chat")}
+    onresume={(path, session) => open(path, session)}
     onrename={rename}
     ondelete={remove}
     onaddfolder={addFolder}
     onremovefolder={removeFolder}
     onmovefolder={(from, to) => saveRecent(moved(recent, from, to))}
     oncollapse={toggleSidebar}
-    oncanvas={() => (page = "canvas")}
+    oncanvas={() => newSession("canvas")}
     canvas={page === "canvas"}
     onsettings={() => { settingsStart = "providers"; page = "settings"; }}
     onaccount={() => { settingsStart = "account"; page = "settings"; }}
@@ -1093,8 +1128,10 @@
           </Menu>
         </span>
       {/if}
-      {#if page === "chat" && fromCanvas}
+      {#if page === "chat" && sessionKind === "canvas"}
         <button class="iconbtn" onclick={() => (page = "canvas")} title="Open this session's canvas" aria-label="Open canvas"><Icon name="layout" /></button>
+      {:else if page === "canvas"}
+        <button class="iconbtn" onclick={() => (page = "chat")} title="View conversation" aria-label="View conversation"><Icon name="message-square" /></button>
       {/if}
       {#if page === "chat" && folder}
         <button class="iconbtn" class:on={showBrowser} onclick={() => (browserOpen ? closeBrowser() : (browserOpen = true))} title={showBrowser ? "Hide browser" : "Show browser"} aria-label="Browser" aria-pressed={showBrowser}><Icon name="globe" /></button>
@@ -1103,13 +1140,14 @@
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
     </div>
+    {#if page === "canvas" && error}<div class="banner error">{error}</div>{/if}
     <div class="body">
   {#if page === "settings"}
     {#key settingsStart}
-      <Settings onback={() => (page = "chat")} onsaved={signedIn} onsignin={showSignIn} onsignout={rekaSignOut} {account} onaccount={(a) => (account = a)} start={settingsStart} />
+      <Settings onback={() => (page = sessionKind)} onsaved={signedIn} onsignin={showSignIn} onsignout={rekaSignOut} {account} onaccount={(a) => (account = a)} start={settingsStart} />
     {/key}
   {:else if page === "canvas"}
-    <Canvas {model} reasoning={{ thinking, levels }} onsend={(card) => sendCard(card)} canSend={!!folder} onwrite={(card) => writeScript(card)} onredoscript={redoScript} onconfirmscript={confirmScript} onredostoryboard={(card) => { const v = videoOf(card); if (v) makeStoryboard(v); }} onredobeat={redoBeat} onconfirm={confirmStoryboard} onrender={renderVideo} onfollowup={followUp} oncontinue={continueRun} onfixsync={fixSync} {styles} onanswer={answer} onskip={skipQuestions} onstop={() => post({ type: "abort" }).catch(() => {})} onopenvideo={(path) => folder && openFile(folder, path).catch((e) => notice(message(e)))} onconnect={() => { settingsStart = "connectors"; page = "settings"; }} />
+    <Canvas {model} reasoning={{ thinking, levels }} onsend={(card) => sendCard(card)} canSend={canSendCanvas} canAnswer={canSendCanvas && !chat.running} onwrite={(card) => writeScript(card)} onredoscript={redoScript} onconfirmscript={confirmScript} onredostoryboard={(card) => { const v = videoOf(card); if (v) makeStoryboard(v); }} onredobeat={redoBeat} onconfirm={confirmStoryboard} onrender={renderVideo} onfollowup={followUp} oncontinue={continueRun} onfixsync={fixSync} {styles} onanswer={answer} onskip={skipQuestions} onstop={() => post({ type: "abort" }).catch(() => {})} onopenvideo={(path) => folder && openFile(folder, path).catch((e) => notice(message(e)))} onconnect={() => { settingsStart = "connectors"; page = "settings"; }} />
   {:else}
     <div class="center">
     {#if error}<div class="banner error">{error}</div>{/if}
@@ -1126,7 +1164,7 @@
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>
       {/if}
-      {#key sessionFile}<ChatView {chat} {folder} onolder={older} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} fallback={fallback && `${fallback.provider}/${fallback.id}`} onswitch={switchModel} />{/key}
+      {#key sessionFile}<ChatView {chat} {folder} onanswer={sessionKind === "chat" ? answerChat : undefined} answerDisabled={opening} onolder={older} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} fallback={fallback && `${fallback.provider}/${fallback.id}`} onswitch={switchModel} />{/key}
     {/if}
     {#if folder}
       <div class="dock">

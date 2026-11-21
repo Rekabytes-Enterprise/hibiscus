@@ -24,6 +24,12 @@
   let steer = $state(false);
 
   let input: HTMLTextAreaElement;
+  const suggestCompact = $derived(text.startsWith("/") && "/compact".startsWith(text));
+
+  function chooseCompact() {
+    text = "/compact ";
+    input.focus();
+  }
 
   /** Adds text and images from elsewhere in the app, such as browser comments, for the user to send. */
   export function add(more: string, moreImages: Image[]) {
@@ -36,9 +42,10 @@
     const message = text.trim();
     if (disabled) return;
     if (!message && !images.length) return;
-    onsend(message, images, steer);
+    const attachments = images;
     text = "";
     images = [];
+    onsend(message, attachments, steer);
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -92,6 +99,11 @@
           <button class="remove" onclick={() => (images = images.filter((_, j) => j !== i))} aria-label={`Remove image ${i + 1}`} title="Remove"><Icon name="x" size={12} /></button>
         </div>
       {/each}
+    </div>
+  {/if}
+  {#if suggestCompact && !disabled}
+    <div class="composer-commands">
+      <button class="plain" type="button" onclick={chooseCompact}><code>/compact</code> <span class="muted">[instructions]</span></button>
     </div>
   {/if}
   <div class="inputrow">

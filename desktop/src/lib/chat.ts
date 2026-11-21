@@ -147,6 +147,7 @@ export function apply(chat: Chat, event: Record): Chat {
             ? {
                 ...i,
                 running: false,
+                args: i.name === "ask_user" ? event.result?.details : i.args,
                 error: !!event.isError,
                 output: text(event.result?.content),
                 diff: event.result?.details?.diff ?? "",
@@ -216,7 +217,7 @@ export function fromMessages(messages: any[]): Chat {
             kind: "tool",
             id: b.id ?? "",
             name: b.name ?? "tool",
-            args: b.arguments,
+            args: b.name === "ask_user" ? undefined : b.arguments,
             running: false,
             error: false,
             output: "",
@@ -230,10 +231,31 @@ export function fromMessages(messages: any[]): Chat {
       }
     } else if (m.role === "toolResult") {
       const tool = items.find((i) => i.kind === "tool" && i.id === m.toolCallId);
-      if (tool?.kind === "tool") Object.assign(tool, result(m));
+      if (tool?.kind === "tool") {
+        Object.assign(tool, result(m));
+        if (tool.name === "ask_user") tool.args = m.details;
+      }
     }
   }
   return { ...empty(), items };
+}
+
+export type Question = { question: string; options: string[] };
+
+export function pendingQuestions(items: Chat["items"]) {
+  const pending: { id: string; questions: Question[] }[] = [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === "user") break;
+    if (item.kind !== "tool" || item.name !== "ask_user" || item.running || item.error) continue;
+    const raw: unknown = item.args?.questions;
+    if (!Array.isArray(raw)) continue;
+    const questions = raw.filter((q): q is Question =>
+      typeof q?.question === "string" && Array.isArray(q.options) && q.options.every((o: unknown) => typeof o === "string"),
+    );
+    if (questions.length) pending.unshift({ id: item.id, questions });
+  }
+  return pending;
 }
 
 /** Files this session wrote or edited, newest first, for the session panel. */

@@ -19,6 +19,17 @@ use stream::Stream;
 use tokio::sync::mpsc::Sender;
 pub(super) use wire::request_body;
 
+#[derive(Debug)]
+pub(super) struct ContextOverflow;
+
+impl std::fmt::Display for ContextOverflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Provider rejected the request because it exceeds the model context window.")
+    }
+}
+
+impl std::error::Error for ContextOverflow {}
+
 pub struct Reply {
     pub message: Message,
     pub input: Option<u64>,
@@ -56,9 +67,10 @@ pub async fn request(
     let (route, mut body) = request_body(provider, model, conversation, system, thinking, tools);
     super::privacy::apply(&provider.id, super::privacy::training_denied(), &mut body);
     let url = format!("{}/{}", provider.base_url.trim_end_matches('/'), route);
+    let mut following_up = false;
     let mut continuation = Continuation::default();
     let mut state = loop {
-        let mut state = exchange(
+        let result = exchange(
             provider,
             conversation,
             &url,
@@ -67,10 +79,18 @@ pub async fn request(
             tools,
             out,
         )
-        .await?;
+        .await;
+        let mut state = match result {
+            // An earlier HTTP exchange may already have streamed text.
+            Err(error) if following_up && error.is::<ContextOverflow>() => {
+                return Err(error.to_string().into());
+            }
+            other => other?,
+        };
         let Some(follow_up) = continuation.next(&provider.api, &mut state) else {
             break state;
         };
+        following_up = true;
         body["messages"]
             .as_array_mut()
             .ok_or("Invalid chat request body")?

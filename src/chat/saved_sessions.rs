@@ -1,3 +1,4 @@
+use crate::engine::session::{kind_from_header, SessionKind};
 use crate::{ui::messages::Ui, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -12,6 +13,7 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) struct SessionInfo {
+    pub(crate) kind: SessionKind,
     pub(crate) path: PathBuf,
     pub(crate) title: String,
     pub(crate) modified: SystemTime,
@@ -73,6 +75,8 @@ impl Drop for Scan {
     }
 }
 
+type SessionDisplay = (String, SessionKind);
+
 // Disposable, process-local presentation cache. Hibiscus's files remain authoritative.
 // Include inode and ctime as well as size/mtime: equal-size edits, replacements
 // and restored mtimes must not silently reuse an old title.
@@ -113,7 +117,7 @@ impl Stamp {
 #[derive(Default)]
 struct SessionCache {
     scope: Option<(PathBuf, PathBuf)>,
-    entries: HashMap<PathBuf, (Stamp, Instant, Option<String>)>,
+    entries: HashMap<PathBuf, (Stamp, Instant, Option<SessionDisplay>)>,
     #[cfg(test)]
     scans: usize,
 }
@@ -196,7 +200,7 @@ impl SessionCache {
                         .metadata()
                         .is_ok_and(|after| Stamp::of(&after) == stamp)
                         && (self.entries.len() < 1024 || self.entries.contains_key(&path))
-                        && title.as_ref().is_none_or(|s| s.len() <= 8192)
+                        && title.as_ref().is_none_or(|(s, _)| s.len() <= 8192)
                     {
                         self.entries
                             .insert(path.clone(), (stamp, Instant::now(), title.clone()));
@@ -206,9 +210,10 @@ impl SessionCache {
                     title
                 }
             };
-            if let Some(title) = title {
+            if let Some((title, kind)) = title {
                 let modified = meta.modified()?;
                 sessions.push(SessionInfo {
+                    kind,
                     path,
                     title,
                     modified,
@@ -225,7 +230,7 @@ impl SessionCache {
     }
 }
 
-fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<String>> {
+fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<SessionDisplay>> {
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
     let Some(header) = lines.next() else {
@@ -241,6 +246,9 @@ fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<Str
     {
         return Ok(None);
     }
+    let Ok(kind) = kind_from_header(&header, path) else {
+        return Ok(None);
+    };
     let named = header["name"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -268,15 +276,19 @@ fn inspect(path: &Path, cwd: &Path, cancelled: &AtomicBool) -> Result<Option<Str
             }
         }
     }
-    if message_count == 0 {
+    if message_count == 0 && kind == SessionKind::Chat {
         return Ok(None);
     }
-    Ok(Some(
-        named
-            .or(title)
-            .or(first)
-            .unwrap_or_else(|| "(no messages)".into()),
-    ))
+    Ok(Some((
+        named.or(title).or(first).unwrap_or_else(|| {
+            if kind == SessionKind::Canvas {
+                "Untitled Canvas".into()
+            } else {
+                "(no messages)".into()
+            }
+        }),
+        kind,
+    )))
 }
 
 fn text(content: &Value) -> Option<String> {
@@ -596,6 +608,7 @@ mod tests {
     #[test]
     fn picker_handles_cancel_and_selection() {
         let sessions = vec![SessionInfo {
+            kind: SessionKind::Chat,
             path: PathBuf::from("a.jsonl"),
             title: "one".into(),
             modified: SystemTime::UNIX_EPOCH,

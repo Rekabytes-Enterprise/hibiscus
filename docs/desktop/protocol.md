@@ -15,7 +15,7 @@ while let Some(event) = engine.next_event(Duration::from_millis(100))? { /* … 
 engine.shutdown();
 ```
 
-- `Engine::start(start, workspace)`: `Start::New`, `Start::Latest` (newest session for the workspace, else new) or `Start::Selected(path)`. The session and every tool work in `workspace`. Several engines can run in one process, each in its own workspace.
+- `Engine::start(start, workspace)`: `Start::New` (Chat), `Start::Canvas`, `Start::Latest` (newest session for the workspace, else new) or `Start::Selected(path)`. The session and every tool work in `workspace`. Several engines can run in one process, each in its own workspace.
 - `send(command)` sets the command's `id` and returns it. Fails if `type` is missing or the engine is shut down.
 - `next_event(timeout)` returns `Ok(None)` on timeout and an error once the engine has stopped.
 - `shutdown()` (or dropping the engine) stops the run and waits for its tools to stop.
@@ -28,7 +28,7 @@ engine.shutdown();
 - `desktop::REKA_SIGN_IN` is the error a Rooxcode `prompt` gets without a session. The prompt was not added to the conversation, so it can be sent again after sign-in.
 - `desktop::training_denied()` / `desktop::set_training_denied(deny)` read and save the "don't let providers train on my prompts" choice in `privacy.json` in the Hibiscus home. While it is on, OpenRouter requests carry `"provider": {"data_collection": "deny"}`. Engines read it on every request, in the terminal app too, so no restart is needed.
 - `desktop::CodexSignIn::start()` listens on `localhost:1455` and builds the Codex sign-in link (`url()`). Open it in the browser, then await `finish()`. `paste()` takes the redirect URL by hand when the browser cannot reach the app. Dropping `finish()` cancels and frees the port; a failed or cancelled sign-in keeps the previous login. It times out after 10 minutes.
-- `desktop::sessions(workspace)` lists saved sessions (path, title, modified time), newest first.
+- `desktop::sessions(workspace)` lists saved sessions (path, title, kind, modified time), newest first.
 
 The transport keeps the TUI's limits: `HIBISCUS_RPC_BUFFER_MIB` (default 64) and `HIBISCUS_RPC_MAX_RECORDS` (default 4096) bound queued events, and writes time out after 30 seconds.
 
@@ -42,7 +42,7 @@ Every command gets exactly one `response` with the same `id`:
 | `prompt` | `message`, optional `images: [{mimeType, data}]` (base64), optional `streamingBehavior` | While a run is active, needs `streamingBehavior: "steer"` or `"followUp"`; otherwise fails with "Agent is busy". At most 16 queued. |
 | `abort` | | Cancels the active run. The run still ends with `agent_settled`. |
 | `clear_queue` | | Drops queued prompts. |
-| `get_state` | | Session state, including extension commands. |
+| `get_state` | | Session state, including `sessionKind` (`chat` or `canvas`) and extension commands. |
 | `get_messages` | optional `limit`, `before` | Without `limit`, `data.messages` is the whole conversation. With `limit` (at most 1000), it's one page for the desktop chat: up to `limit` messages ending before position `before` (default: the end), moved back so it never starts with a tool result. `data.start` is the page's first position, `data.total` the conversation's length, and `data.edited` the files written or edited without error, newest first. In a page, tool output over 2 KB is cut (`trimmed: true`), edit diffs over 16 KB are left out, tool images are left out (`omittedImages: n`), and prompt images keep only their type. |
 | `get_tool_result` | `toolCallId` | `data`: that tool result in full, as stored. For rows a page trimmed. |
 | `get_tool_outputs` / `get_tool_output` | `index` (1-based, optional) | Stored tool output. |
@@ -51,7 +51,7 @@ Every command gets exactly one `response` with the same `id`:
 | `get_available_thinking_levels` | | Levels for the current model. |
 | `set_model` | `provider`, `modelId` | Not during a run. |
 | `set_thinking_level` | `level` | Not during a run. |
-| `new_session` | | Not during a run. Same workspace. |
+| `new_session` | optional `kind` | Defaults to `chat`. Desktop can pass `canvas`. Same workspace. Unavailable during a run. |
 | `switch_session` | `sessionPath` | Not during a run. Must belong to the same workspace. |
 | `set_session_name` | `name` | Not during a run. Names the open session; an empty name restores the automatic title. |
 | `compact` | optional `customInstructions` | Not during a run. |
@@ -70,7 +70,7 @@ Commands marked "not during a run" fail with "Command unavailable while a run is
 | `tool_execution_start` | `toolCallId`, `toolName`, `args` | A tool started. |
 | `tool_execution_end` | `toolCallId`, `toolName`, `isError`, `result`, `durationMs` | A tool finished. |
 | `queue_update` | `steering: [text]`, `followUp: [text]` | Queued prompts changed. |
-| `queue_rejected` | `message`, `images`, `steer`, `error` | A queued prompt was not delivered because the run failed. Show it so the user can resend it. |
+| `queue_rejected` | `message`, `images`, `steer`, `error` | A queued prompt was held back after a failure or while waiting for an answer. Show it so the user can review and resend it. |
 | `auto_retry_start` / `auto_retry_end` | `success` | The engine is retrying a provider error. |
 | `compaction_start` / `compaction_end` | `result` or `errorMessage` | Context compaction. |
 | `provider_status` | `provider`, `waiting` | The Rooxcode Gateway is queueing the request. |
@@ -114,6 +114,10 @@ A pasted API key, when there is one, comes first and uses the REST API:
 
 ### Cards and sessions
 
+- Desktop groups saved Chat and Canvas sessions by folder and opens each in its own view. The kind is stored in the session header and stays fixed. Legacy sessions with a saved board open in Canvas. Other legacy sessions open in Chat.
+- Both Desktop session types support `ask_user`. A successful call pauses the run. Chat shows an inline form for suggested or typed answers, and Canvas shows a question card. The answers arrive as the next user message.
+- Storyboard, video preview and text-to-speech cards are Canvas tools. `analyze_video` can return frames to the agent in Chat too, without opening a board.
+
 - A card's Send runs the agent in the open folder's session. The card's model and reasoning level become the session's. Cards the agent's tools open while it works join the card that was sent.
 - A card locks the moment it's sent, so it can't be sent twice. A failed model reply shows on the card as "The model failed: …".
 - `desktop::save_canvas_reference` saves each reference when the user adds it, under `~/.hibiscus/canvas/references`. The message lists references by path, and attaches images too. `desktop::read_canvas_reference` reads only from that folder, so previews come back after a restart.
@@ -128,7 +132,7 @@ Download engine, shown in place of New until it's done, installs the video engin
 - `hyperframes@0.9.59` (Apache-2.0, the CLI and its skills), installed with that Node's npm.
 - HyperFrames' pinned Chrome, from `hyperframes browser ensure`.
 
-Once it's installed, the agent's shell finds Node.js, `hyperframes` and the bundled ffmpeg first on `PATH`, with `HYPERFRAMES_NO_TELEMETRY=1`. HyperFrames' skills load alongside the project's.
+Once it's installed, the agent's shell finds Node.js, `hyperframes` and the bundled ffmpeg first on `PATH`, with `HYPERFRAMES_NO_TELEMETRY=1`. HyperFrames' skills load alongside the project's in Canvas sessions.
 
 ### Styles
 

@@ -14,6 +14,7 @@
     onconnect,
     onsend,
     canSend,
+    canAnswer,
     onwrite,
     onredoscript,
     onconfirmscript,
@@ -33,9 +34,10 @@
     model: Model | null;
     reasoning: { thinking: string; levels: string[] };
     onconnect: () => void;
-    /** Runs the agent on the card; `canSend` is false with no folder open. */
+    /** Runs the agent on the card. */
     onsend: (card: Card) => void;
     canSend: boolean;
+    canAnswer: boolean;
     /** Video steps: draw the storyboard, confirm it into a video, render it, open the file. */
     onwrite: (video: Card) => void;
     onredoscript: (script: Card) => void;
@@ -396,9 +398,9 @@
           {/each}
         </div>
         <div class="foot">
-          <button class="link small" onclick={() => onskip(card)} disabled={!canSend || card.status === "Sending…"} title="Let the agent use its best judgement">Skip</button>
+          <button class="link small" onclick={() => onskip(card)} disabled={!canAnswer || card.status === "Sending…"} title="Let the agent use its best judgement">Skip</button>
           <span class="grow"></span>
-          <button class="primary action" onclick={() => onanswer(card)} disabled={!canSend || !(card.questions ?? []).every((q) => q.answer?.trim()) || card.status === "Sending…"}><Icon name="check" size={12} /> Confirm</button>
+          <button class="primary action" onclick={() => onanswer(card)} disabled={!canAnswer || !(card.questions ?? []).every((q) => q.answer?.trim()) || card.status === "Sending…"}><Icon name="check" size={12} /> Confirm</button>
         </div>
       {:else if card.kind === "storyboard"}
         <header class="frameshead"><Icon name="layout" size={14} /> <span class="ellipsis grow">{card.text}</span>

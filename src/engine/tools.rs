@@ -26,7 +26,14 @@ fn jobs() -> bool {
     agent_browser().is_some()
 }
 
-pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Surface {
+    Terminal,
+    Chat,
+    Canvas,
+}
+
+pub fn definitions(cwd: Option<&Path>, surface: Surface) -> Vec<Value> {
     let shell = match cwd.and_then(crate::wsl::distro_for) {
         Some(distro) => crate::wsl::description(&distro),
         None => crate::sys::shell_description().to_owned(),
@@ -49,10 +56,12 @@ pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
         definitions.push(json!({"name":"job","description":"Check on background jobs started with bash background.\n- list: every job in this folder and whether it is running.\n- output: a job's status and its last `lines` of output (default 50).\n- stop: stop a running job.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["list","output","stop"]},"id":{"type":"integer","minimum":1},"lines":{"type":"integer","minimum":1,"maximum":500}},"required":["action"],"additionalProperties":false}}));
     }
     if crate::video::ffmpeg().is_some() {
-        definitions.push(json!({"name":"analyze_video","description":"See a video: returns `frames` stills spread across it (default 12, at most 24) as images with their times, plus its length. Use it before describing, analysing or remaking a video file. The frames also open on the canvas as a Frames card.","parameters":{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":4096},"frames":{"type":"integer","minimum":1,"maximum":24}},"required":["path"],"additionalProperties":false}}));
+        definitions.push(json!({"name":"analyze_video","description":"See a video: returns `frames` stills spread across it (default 12, at most 24) as images with their times, plus its length. Use it before describing, analysing or remaking a video file.","parameters":{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":4096},"frames":{"type":"integer","minimum":1,"maximum":24}},"required":["path"],"additionalProperties":false}}));
     }
-    if canvas() {
-        definitions.push(json!({"name":"ask_user","description":"Ask the user on the canvas when a canvas request needs an answer before you can go on. Give each question 2 to 5 short suggested `options`. The user can also type an answer. Then end your turn. The answers arrive as the user's next message.","parameters":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":500},"options":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"string","minLength":1,"maxLength":200}}},"required":["question","options"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}}));
+    if surface != Surface::Terminal {
+        definitions.push(json!({"name":"ask_user","description":"Ask the user when you need an answer before you can go on. Give each question 2 to 5 short suggested `options`. The user can also type an answer. Then end your turn. The answers arrive as the user's next message.","parameters":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":500},"options":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"string","minLength":1,"maxLength":200}}},"required":["question","options"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}}));
+    }
+    if surface == Surface::Canvas {
         definitions.push(json!({"name":"storyboard","description":"Open a storyboard on the canvas for the user to review before any video is made. Each beat has the script `line` it goes with and an `svg`: a complete <svg> element, viewBox 0 0 1920 1080, with no scripts or external links.\n- Follow the style of any reference frames.\n- With a style, set each beat's `component` to the style body it uses. No two beats share one.\n- Send long storyboards in batches of up to 4: the first call without `from`, later calls with `from` set to the batch's first beat number (5, 9, …).\nThe user keeps or removes beats and confirms. Only then build the video.","parameters":{"type":"object","properties":{"title":{"type":"string","maxLength":200},"beats":{"type":"array","minItems":1,"maxItems":40,"items":{"type":"object","properties":{"line":{"type":"string","minLength":1,"maxLength":2000},"svg":{"type":"string","minLength":10,"maxLength":200000},"component":{"type":"string","maxLength":80}},"required":["line","svg"],"additionalProperties":false}},"from":{"type":"integer","minimum":1,"maximum":40}},"required":["beats"],"additionalProperties":false}}));
         definitions.push(json!({"name":"video_preview","description":"Show a video in a preview card joined to the user's Video card.\n- project: the HyperFrames project folder. The app starts its preview server and shows it; don't start one yourself. It also checks the video's length against the voiceover.\n- video: the rendered MP4, once there is one.\n- url: only for a page you serve some other way, at http://localhost or http://127.0.0.1.","parameters":{"type":"object","properties":{"project":{"type":"string","maxLength":4096},"video":{"type":"string","maxLength":4096},"url":{"type":"string","maxLength":2048}},"additionalProperties":false}}));
         definitions.push(json!({"name":"text_to_speech","description":"Open a script on the canvas as a Text to speech card, where the user reviews it and makes the audio with ElevenLabs.\n- script: only the words to be spoken.\n- video: one line on what the video shows, if there is one.\n- references: paths of images or videos the user gave as references.","parameters":{"type":"object","properties":{"script":{"type":"string","minLength":1,"maxLength":20000},"video":{"type":"string","maxLength":2000},"references":{"type":"array","items":{"type":"string","maxLength":4096},"maxItems":32}},"required":["script"],"additionalProperties":false}}));
@@ -102,7 +111,7 @@ const LINE_CHARS: usize = 2000;
 
 /// Lines `start..` of a file, numbered, within the read limits; also returns
 /// the line after the last one shown and whether any line was cut.
-fn numbered(lines: &[&str], start: usize, limit: usize) -> (String, usize, bool) {
+fn numbered(lines: &[&str], start: usize, limit: usize, bytes: usize) -> (String, usize, bool) {
     let mut out = String::new();
     let mut cut_any = false;
     let mut end = start;
@@ -121,7 +130,13 @@ fn numbered(lines: &[&str], start: usize, limit: usize) -> (String, usize, bool)
         } else {
             format!("{:>6}\t{line}\n", i + 1)
         };
-        if i > start && out.len() + entry.len() > READ_BYTES {
+        if out.len() + entry.len() > bytes {
+            if i == start {
+                out.push_str(&entry[..entry.floor_char_boundary(bytes.saturating_sub(4))]);
+                out.push_str("…\n");
+                end = i + 1;
+                cut_any = true;
+            }
             break;
         }
         out.push_str(&entry);
@@ -233,10 +248,6 @@ struct TextToSpeech {
     video: Option<String>,
     references: Option<Vec<String>>,
 }
-/// The desktop app shows a canvas; the text_to_speech tool exists only there.
-pub(crate) fn canvas() -> bool {
-    std::env::var_os("HIBISCUS_CANVAS").is_some()
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Browser {
@@ -341,7 +352,7 @@ impl std::fmt::Display for ShellExit {
     }
 }
 impl std::error::Error for ShellExit {}
-pub fn validate(name: &str, args: &Value) -> Result<()> {
+pub fn validate(name: &str, args: &Value, surface: Surface) -> Result<()> {
     match name {
         "read" => {
             let a: Read = serde_json::from_value(args.clone())?;
@@ -454,7 +465,7 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
         "ask_user" => {
             let a: AskUser = serde_json::from_value(args.clone())?;
             let short = |s: &str, max: usize| !s.trim().is_empty() && s.len() <= max;
-            if !canvas()
+            if surface == Surface::Terminal
                 || !(1..=4).contains(&a.questions.len())
                 || a.questions.iter().any(|q| {
                     !short(&q.question, 500)
@@ -473,7 +484,7 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
                 let lower = s.to_ascii_lowercase();
                 s.len() <= 200_000 && lower.contains("<svg") && !lower.contains("<script")
             };
-            if !canvas()
+            if surface != Surface::Canvas
                 || a.beats.is_empty()
                 || a.beats.len() > 40
                 || !(1..=40).contains(&a.from.unwrap_or(1))
@@ -492,7 +503,7 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
         }
         "video_preview" => {
             let a: VideoPreview = serde_json::from_value(args.clone())?;
-            if !canvas() || a.url.as_deref().is_some_and(|u| !local_url(u)) {
+            if surface != Surface::Canvas || a.url.as_deref().is_some_and(|u| !local_url(u)) {
                 return Err(
                     "video_preview shows only http://localhost or http://127.0.0.1 pages".into(),
                 );
@@ -503,7 +514,7 @@ pub fn validate(name: &str, args: &Value) -> Result<()> {
         }
         "text_to_speech" => {
             let a: TextToSpeech = serde_json::from_value(args.clone())?;
-            if !canvas()
+            if surface != Surface::Canvas
                 || a.script.trim().is_empty()
                 || a.script.len() > 20000
                 || a.references.as_ref().is_some_and(|r| r.len() > 32)
@@ -521,12 +532,14 @@ pub async fn execute(
     context: &mut crate::checkpoints::Context<'_>,
     steps: &mut Vec<Value>,
     cancel: &mut watch::Receiver<bool>,
+    output_limit: Option<usize>,
+    surface: Surface,
 ) -> Result<Value> {
     if let Some(tool) = crate::checkpoints::Tool::parse(name) {
         return tool.execute(args, context, cancel).await;
     }
     let cwd = context.cwd;
-    validate(name, args)?;
+    validate(name, args, surface)?;
     if *cancel.borrow() {
         return Err("Tool cancelled before execution".into());
     }
@@ -547,7 +560,8 @@ pub async fn execute(
             if start >= total {
                 return Err(format!("Offset {} is past the end: the file has {total} lines.", start + 1).into());
             }
-            let (shown, end, cut) = numbered(&lines, start, a.limit.unwrap_or(READ_LINES));
+            let bytes = output_limit.map_or(READ_BYTES, |limit| limit.saturating_sub(128).min(READ_BYTES));
+            let (shown, end, cut) = numbered(&lines, start, a.limit.unwrap_or(READ_LINES), bytes);
             let mut note = String::new();
             if start > 0 || end < total {
                 note.push_str(&format!("[Lines {}-{end} of {total}.", start + 1));
@@ -557,7 +571,11 @@ pub async fn execute(
                 note.push(']');
             }
             if cut {
-                note.push_str(&format!("[Lines over {LINE_CHARS} characters were cut.]"));
+                if bytes < READ_BYTES {
+                    note.push_str("[Long lines were shortened to fit the context budget.]");
+                } else {
+                    note.push_str(&format!("[Lines over {LINE_CHARS} characters were cut.]"));
+                }
             }
             Ok(result(format!("{shown}{note}"), json!({"totalLines":total})))
         }
@@ -869,8 +887,8 @@ pub async fn execute(
             }}))
         }
         "ask_user" => Ok(result(
-            "The questions are on the canvas. End your turn now; the user's answers come as their next message.".into(),
-            json!({}),
+            "The questions were shown. The user's answers come as their next message.".into(),
+            json!({"questions":args["questions"]}),
         )),
         "storyboard" => Ok(result(
             "Added these beats to the storyboard on the canvas. Send any remaining batch, then stop and wait for the user to confirm it before building the video.".into(),
@@ -1138,7 +1156,7 @@ mod tests {
     }
     #[test]
     fn dev_server_tool_checks_its_action() {
-        let ok = |args: Value| validate("dev_server", &args).is_ok();
+        let ok = |args: Value| validate("dev_server", &args, super::Surface::Terminal).is_ok();
         assert!(ok(json!({"action":"start","command":"npm run dev"})));
         assert!(ok(json!({"action":"output","lines":100})));
         assert!(!ok(json!({"action":"restart"})));
@@ -1147,8 +1165,7 @@ mod tests {
     }
     #[test]
     fn questions_come_with_a_few_short_answers() {
-        std::env::set_var("HIBISCUS_CANVAS", "1");
-        let ok = |args: Value| validate("ask_user", &args).is_ok();
+        let ok = |args: Value| validate("ask_user", &args, super::Surface::Chat).is_ok();
         assert!(ok(
             json!({"questions":[{"question":"Which language?","options":["English","Bahasa Melayu"]}]})
         ));
@@ -1171,10 +1188,10 @@ mod tests {
     fn reads_are_numbered_paged_and_cut_on_long_lines() {
         let long = "x".repeat(2500);
         let lines = vec!["one", "two", long.as_str(), "four"];
-        let (text, end, cut) = numbered(&lines, 0, 2);
+        let (text, end, cut) = numbered(&lines, 0, 2, READ_BYTES);
         assert_eq!(text, "     1\tone\n     2\ttwo\n");
         assert_eq!((end, cut), (2, false));
-        let (text, end, cut) = numbered(&lines, 2, 10);
+        let (text, end, cut) = numbered(&lines, 2, 10, READ_BYTES);
         assert!(
             text.starts_with("     3\txxx")
                 && text.contains("… [line cut at 2000 characters]\n     4\tfour")
@@ -1183,7 +1200,7 @@ mod tests {
         // The byte limit ends a read on a whole line.
         let many: Vec<String> = (0..3000).map(|i| format!("{i:>40}")).collect();
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
-        let (text, end, _) = numbered(&many, 0, READ_LINES);
+        let (text, end, _) = numbered(&many, 0, READ_LINES, READ_BYTES);
         assert!(text.len() <= READ_BYTES && text.ends_with('\n') && end < 2000);
     }
 
@@ -1201,8 +1218,7 @@ mod tests {
 
     #[test]
     fn storyboards_and_previews_stay_local_and_script_free() {
-        std::env::set_var("HIBISCUS_CANVAS", "1");
-        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        let ok = |name: &str, args: Value| validate(name, &args, super::Surface::Canvas).is_ok();
         let svg = r#"<svg viewBox="0 0 1920 1080"><rect width="10" height="10"/></svg>"#;
         assert!(ok(
             "storyboard",
@@ -1244,21 +1260,27 @@ mod tests {
     }
     #[test]
     fn text_to_speech_needs_a_script_and_the_canvas() {
-        std::env::set_var("HIBISCUS_CANVAS", "1");
-        let ok = |args: Value| validate("text_to_speech", &args).is_ok();
+        let ok = |args: Value| validate("text_to_speech", &args, super::Surface::Canvas).is_ok();
         assert!(ok(
             json!({"script":"Hello there.","video":"A product tour","references":["a.png"]})
         ));
         assert!(!ok(json!({"script":"  "})));
         assert!(!ok(json!({"video":"No script"})));
         assert!(!ok(json!({"script":"Hi","voice":"x"})));
-        assert!(super::definitions(None)
+        assert!(super::definitions(None, super::Surface::Canvas)
             .iter()
             .any(|d| d["name"] == "text_to_speech"));
     }
     #[test]
     fn browser_tool_refuses_commands_outside_its_own_headless_chrome() {
-        let ok = |args: Value| validate("browser", &json!({ "args": args })).is_ok();
+        let ok = |args: Value| {
+            validate(
+                "browser",
+                &json!({ "args": args }),
+                super::Surface::Terminal,
+            )
+            .is_ok()
+        };
         assert!(ok(json!(["open", "http://localhost:5173"])));
         assert!(ok(json!([
             "fill",
@@ -1274,7 +1296,12 @@ mod tests {
         assert!(!ok(json!(["open", "x", "--profile", "Default"])));
         assert!(!ok(json!(["open", "x", "--cdp=9222"])));
         assert!(!ok(json!(["open", "x", "--session", "other"])));
-        assert!(validate("browser", &json!({"args":["open"],"timeout":601})).is_err());
+        assert!(validate(
+            "browser",
+            &json!({"args":["open"],"timeout":601}),
+            super::Surface::Terminal
+        )
+        .is_err());
     }
     #[test]
     fn edit_diff_trims_unchanged_lines_and_tracks_actual_line_numbers() {
