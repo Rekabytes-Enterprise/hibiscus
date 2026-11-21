@@ -4,6 +4,8 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-21
+
 ### Added
 
 - Hibiscus Desktop: Add local AI in Settings > Providers. Point Hibiscus at a model server on your computer or home network, such as Ollama, LM Studio, vLLM or your own, with its URL, API (OpenAI Chat Completions, OpenAI Responses or Anthropic Messages), model names, an optional context window and an optional key. Its models show in the model picker, and Remove takes it out again.
