@@ -209,3 +209,23 @@ export const videoEngine = {
 /** A video style: a skill in ~/.hibiscus/skills marked `hibiscus-style: true`. */
 export type Style = { name: string; description: string; path: string };
 export const canvasStyles = () => invoke<Style[]>("canvas_styles");
+
+/** A command the agent runs in the background (`bash` with `background: true`). */
+export type Job = {
+  id: number;
+  label: string;
+  command: string;
+  /** Milliseconds since the Unix epoch. */
+  started: number;
+  running: boolean;
+  exitCode: number | null;
+  /** Stopped by the user or the agent, not by itself. */
+  stopped: boolean;
+  durationMs: number;
+  output: string[];
+};
+/** The folder's background jobs, newest first. */
+export const listJobs = (folder: string) => invoke<Job[]>("jobs", { folder });
+export const stopJob = (id: number) => invoke<void>("job_stop", { id });
+/** Forgets the folder's finished jobs. */
+export const clearJobs = (folder: string) => invoke<void>("jobs_clear", { folder });

@@ -70,6 +70,8 @@ The engine's `browser` tool lets Hibi open and test web pages, and the browser p
 
 The app runs one dev server per folder for the pane and for Hibi's `dev_server` tool (`src/devserver.rs`).
 
+Long commands can run as background jobs: in the app, `bash` takes `background: true` and returns at once, and the `job` tool lists, reads and stops them (`src/jobs.rs`, on the same process code as dev servers). Every `bash` call may carry a short `description`, its label for the user. The right panel's **Background tasks** pane lists running jobs with a Stop button, then finished jobs and this session's commands, each with its command and output. Jobs stop when the app quits.
+
 - The pane's empty state offers to start the project's usual command when no server is running: the `dev`, `start`, `serve` or `preview` script from `package.json` (run with pnpm, yarn, bun or npm by lockfile), `python3 manage.py runserver`, `bin/rails server`, or `python3 -m http.server 8000` for a folder with an `index.html`.
 - Hibi's tool starts, checks, reads and stops the same server. `start` waits up to 60 seconds for the first local URL in the output and returns it. A running server is reused, not started twice.
 - The server runs in its own process group with `BROWSER=none` and `PYTHONUNBUFFERED=1`. The app keeps its last 1,000 lines of output, which the pane shows under the page.
