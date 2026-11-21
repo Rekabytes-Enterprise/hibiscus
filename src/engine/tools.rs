@@ -57,7 +57,6 @@ pub fn definitions(cwd: Option<&Path>) -> Vec<Value> {
         definitions.push(json!({"name":"video_preview","description":"Show a video in a preview card joined to the user's Video card.\n- project: the HyperFrames project folder. The app starts its preview server and shows it; don't start one yourself. It also checks the video's length against the voiceover.\n- video: the rendered MP4, once there is one.\n- url: only for a page you serve some other way, at http://localhost or http://127.0.0.1.","parameters":{"type":"object","properties":{"project":{"type":"string","maxLength":4096},"video":{"type":"string","maxLength":4096},"url":{"type":"string","maxLength":2048}},"additionalProperties":false}}));
         definitions.push(json!({"name":"text_to_speech","description":"Open a script on the canvas as a Text to speech card, where the user reviews it and makes the audio with ElevenLabs.\n- script: only the words to be spoken.\n- video: one line on what the video shows, if there is one.\n- references: paths of images or videos the user gave as references.","parameters":{"type":"object","properties":{"script":{"type":"string","minLength":1,"maxLength":20000},"video":{"type":"string","maxLength":2000},"references":{"type":"array","items":{"type":"string","maxLength":4096},"maxItems":32}},"required":["script"],"additionalProperties":false}}));
     }
-    definitions.extend(super::web::definitions());
     definitions.extend(crate::extensions::agent_definitions());
     definitions.extend(crate::checkpoints::definitions());
     definitions
@@ -523,10 +522,6 @@ pub async fn execute(
     steps: &mut Vec<Value>,
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<Value> {
-    if matches!(name, "web_search" | "web_fetch") {
-        let data = super::web::run(name, args, cancel).await?;
-        return Ok(result(data.to_string(), json!({})));
-    }
     if let Some(tool) = crate::checkpoints::Tool::parse(name) {
         return tool.execute(args, context, cancel).await;
     }

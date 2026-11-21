@@ -34,15 +34,7 @@ impl Screen {
     ) -> String {
         let mut out = String::new();
         let mut previous = Tone::Plain;
-        let mut link = None;
         for (index, cell) in row.cells.iter().enumerate() {
-            let target = cell.link.as_deref();
-            if target != link {
-                out.push_str("\x1b]8;;");
-                out.push_str(target.unwrap_or_default());
-                out.push_str("\x1b\\");
-                link = target;
-            }
             if self.color && cell.tone != previous {
                 out.push_str("\x1b[0m");
                 let code = match cell.tone {
@@ -76,9 +68,6 @@ impl Screen {
             if selected {
                 out.push_str("\x1b[27m");
             }
-        }
-        if link.is_some() {
-            out.push_str("\x1b]8;;\x1b\\");
         }
         if self.color && row.role == Role::Diff {
             out.push_str(&" ".repeat(width.saturating_sub(row.cells.len())));

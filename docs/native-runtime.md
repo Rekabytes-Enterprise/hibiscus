@@ -229,12 +229,6 @@ Native `write`/`edit` also capture covered workspace files before mutation. `che
 
 Native tools execute directly, including shell commands in interactive and piped modes. There is no approval prompt or enable/disable setting. Old `approval.json` files are ignored and left untouched. Argument validation, timeouts, cancellation and the complete-provider-response requirement still apply. Tools are not sandboxed. Provider/configuration errors remain recoverable in interactive chat; one-shot/piped failures exit nonzero.
 
-### Web search and source reading
-
-Connect a [Brave Search API key](https://brave.com/search/api/) under Desktop Settings → Connectors. CLI and TUI can use that saved key or the `BRAVE_SEARCH_API_KEY` environment variable. A saved key takes precedence and is stored in the private `connectors.json` file. The search query goes to Brave. Search returns up to six ranked results with publisher, URL, snippet and a page date when supplied. A page date can reflect publication or an update. Temporary connection and upstream errors get at most one retry. Rate limits and key errors surface directly.
-
-Ask Hibiscus to research a topic or provide a public URL. Reading a URL works without a search key. It reads bounded static HTML or plain text without browser cookies or provider credentials. JavaScript-only pages, paywalls, sign-in walls and challenges can prevent access. Replies link to the sources used and identify snippet-only evidence. Desktop and compatible TUI terminals render clickable citations. Inline CLI replies include the source URLs.
-
 ## Implementation and verification
 
 `src/engine/` owns configuration, credentials, sessions, providers, tools, typed lifecycle events and the agent loop, and never imports terminal code. `src/client/` is the terminal's side of the connection: the worker client, bounded transport, run state and user-facing errors. The existing terminal adapter consumes bounded presentation records over a local in-process socket. It does not start another executable. Queued steering is inserted at a tool boundary; followups wait for the current turn. Settlement follows tool results and queue delivery.

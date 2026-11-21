@@ -3,8 +3,8 @@
   import { onDestroy, onMount } from "svelte";
   import { elevenlabs } from "./engine";
   import Icon from "./Icon.svelte";
-  import WebSearch from "./WebSearch.svelte";
 
+  /** Services the canvas uses besides the chat's model providers. */
   const KEY_PAGE = "elevenlabs.io/app/settings/api-keys";
 
   let status = $state<"oauth" | "key" | null>(null);
@@ -85,9 +85,8 @@
 </script>
 
 <h2>Connectors</h2>
-<p class="muted small">Connect services for chat and the canvas. Hibiscus stores credentials in private files and sends them only to the connected service.</p>
+<p class="muted small">Services the canvas uses to make audio, images and video. Sign-ins and keys are stored in Hibiscus's private files and sent only to that service.</p>
 <ul class="settings-list">
-  <WebSearch />
   <li>
     <div class="provider">
       <Icon name="mic" />

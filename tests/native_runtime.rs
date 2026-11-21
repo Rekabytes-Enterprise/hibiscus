@@ -189,7 +189,6 @@ impl Fixture {
             .env("HIBISCUS_TEST_NATIVE_KEY", "SYNTHETIC-KEY")
             .env("HIBISCUS_NO_UPDATE_CHECK", "1")
             .env_remove("HIBISCUS_MODEL")
-            .env_remove("BRAVE_SEARCH_API_KEY")
             .env("HIBISCUS_PI", "/not-installed/pi")
             .env("HIBISCUS_NODE", "/not-installed/node");
         c
@@ -795,6 +794,29 @@ fn project_instructions_and_skill_catalog_enter_native_prompt() {
     assert!(system.contains("Available project skill: example"));
     assert!(system.contains("Writing guidance"));
 }
+
+#[test]
+fn web_research_uses_the_existing_shell_and_requires_source_evidence() {
+    let f = Fixture::new("responses", vec![response("PUBLIC_RESEARCH")]);
+    good(&f.run("", &["Can you search the web?"]));
+    let requests = f.captured();
+    let system = requests[0]["instructions"].as_str().unwrap();
+    for guidance in [
+        "uses the existing bash tool with curl",
+        "when it is installed and the shell has network access",
+        "transient timeout or server error at most once",
+        "Open the original sources",
+        "Put direct source links beside claims they support",
+    ] {
+        assert!(system.contains(guidance), "{guidance}");
+    }
+    let tools = requests[0]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "bash"));
+    assert!(!tools
+        .iter()
+        .any(|tool| matches!(tool["name"].as_str(), Some("web_search" | "web_fetch"))));
+}
+
 #[test]
 fn global_and_project_memory_enter_every_native_prompt() {
     let f = Fixture::new(
