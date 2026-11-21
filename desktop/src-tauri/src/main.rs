@@ -302,6 +302,12 @@ async fn jobs_clear(folder: PathBuf) {
 
 #[tauri::command]
 async fn sessions(folder: PathBuf) -> Result<Vec<Saved>, String> {
+    // Saved sessions outlive their folder; a deleted folder must not stay listed.
+    if let Err(e) = std::fs::metadata(&folder) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return Err(format!("{} no longer exists.", folder.display()));
+        }
+    }
     Ok(desktop::sessions(&folder)
         .map_err(|e| e.to_string())?
         .into_iter()

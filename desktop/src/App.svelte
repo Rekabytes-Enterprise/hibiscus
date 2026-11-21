@@ -495,13 +495,17 @@
     delete saved[path];
   }
 
-  async function loadSessions(path: string) {
+  /** Lists a folder's sessions; false when the folder is gone and left the sidebar. */
+  async function loadSessions(path: string): Promise<boolean> {
     try {
       saved[path] = await listSessions(path);
+      return true;
     } catch {
       // Moved or deleted: it can no longer be opened, so drop it from the sidebar.
-      if (path === folder) return;
+      if (path === folder) return true;
       saveRecent(removed(recent, path));
+      delete saved[path];
+      return false;
     }
   }
 
@@ -629,6 +633,8 @@
     } catch (e) {
       error = message(e);
       ({ chat, sessionFile } = before);
+      // A folder deleted since it was listed: say so, and take it off the sidebar.
+      if (path !== folder && !(await loadSessions(path))) error = `${name(path)} no longer exists, so it was removed from the sidebar.`;
       // The turn sent to the background comes back to the window.
       if (parked && from) {
         const p = bg.take(parked);
@@ -1036,7 +1042,9 @@
     {account}
     onsignin={showSignIn}
     onsignout={rekaSignOut}
-  />
+  >
+    {#snippet update()}<UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />{/snippet}
+  </Sidebar>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="resizer" onpointerdown={resizeSidebar} ondblclick={() => { sidebarWidth = 260; localStorage.removeItem(SIDEBAR_WIDTH); }} title="Drag to resize, double-click to reset"></div>
   {/if}
@@ -1076,7 +1084,6 @@
         <button class="iconbtn" class:on={panelOpen} onclick={() => (panelOpen = !panelOpen)} title={panelOpen ? "Hide session details" : "Show session details"} aria-label="Session details" aria-pressed={panelOpen}><Icon name="panel" /></button>
       {/if}
     </div>
-    <UpdateBanner {busy} onrestart={() => closeProject().catch(() => {})} />
     <div class="body">
   {#if page === "settings"}
     {#key settingsStart}
