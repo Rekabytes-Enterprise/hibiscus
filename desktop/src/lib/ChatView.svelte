@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { entries, summary, type Chat } from "./chat";
+  import { entries, outage, summary, type Chat } from "./chat";
   import Icon from "./Icon.svelte";
   import ToolCall from "./ToolCall.svelte";
   import { cachedMarkdown, markdown } from "./markdown";
@@ -11,13 +11,20 @@
     folder,
     onolder,
     onresend,
+    fallback,
+    onswitch,
   }: {
     chat: Chat;
     folder: string | null;
     /** Loads the page of messages before the loaded ones, when `chat.start` says there are more. */
     onolder: () => Promise<void>;
     onresend: (text: string) => void;
+    /** The model a Rooxcode outage can switch to, as `provider/id`. */
+    fallback: string | null;
+    /** Switches to `fallback`, then sends `prompt` again if there is one. */
+    onswitch: (prompt: string | null) => void;
   } = $props();
+  const down = $derived(fallback ? outage(chat) : null);
   /** Groups the user opened, by the id of their first tool call. */
   let opened = $state<{ [id: string]: boolean }>({});
   let scroller: HTMLDivElement;
@@ -110,7 +117,12 @@
         {/if}
       </div>
     {:else}
-      <div class="notice" class:error={item.error}>{item.text}</div>
+      <div class="notice" class:error={item.error}>
+        {item.text}
+        {#if down && start + i === all.length - 1}
+          <button class="link" onclick={() => onswitch(down.prompt)}>{down.prompt ? `Switch to ${fallback} and send again` : `Switch to ${fallback}`}</button>
+        {/if}
+      </div>
     {/if}
   {:else}
     <div class="empty muted">Ask Hibiscus to read, change or explain code in this folder.</div>

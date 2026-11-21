@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apply, ChatCache, empty, entries, newer, fromMessages, outputs, relative, summary, toolHunks, toolLabel, toolView, type Chat, type Tool } from "./chat";
+import { apply, ChatCache, empty, entries, newer, fromMessages, outage, outputs, relative, summary, toolHunks, toolLabel, toolView, type Chat, type Tool } from "./chat";
 
 const run = (events: any[], start: Chat = empty()) => events.reduce(apply, start);
 const delta = (d: string) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: d } });
@@ -247,5 +247,26 @@ describe("ChatCache", () => {
     expect(cache.get("2")).toBeUndefined();
     expect(cache.get("1")).toBeDefined();
     expect(cache.get("3")).toBeDefined();
+  });
+});
+
+describe("outage", () => {
+  const down = "Rooxcode HTTP 530: the service or upstream provider is unavailable. Nothing was retried or switched automatically.";
+  const notice = (text: string) => ({ kind: "notice" as const, text, error: true });
+  const user = (text: string) => ({ kind: "user" as const, text, images: 0 });
+
+  it("offers the failed prompt for resending", () => {
+    expect(outage({ ...empty(), items: [user("fix it"), notice(down)] })).toEqual({ prompt: "fix it" });
+  });
+
+  it("switches without resending when the turn had started or no prompt failed", () => {
+    expect(outage({ ...empty(), items: [user("fix it"), { kind: "assistant", text: "On it", streaming: false }, notice(down)] })).toEqual({ prompt: null });
+    expect(outage({ ...empty(), items: [notice("Rooxcode model discovery failed. Check connectivity and open /models to refresh.")] })).toEqual({ prompt: null });
+  });
+
+  it("ignores other errors, a running turn, and an outage already answered", () => {
+    expect(outage({ ...empty(), items: [user("a"), notice("Rooxcode HTTP 429: rate limit or shared capacity is exhausted.")] })).toBeNull();
+    expect(outage({ ...empty(), running: true, items: [user("a"), notice(down)] })).toBeNull();
+    expect(outage({ ...empty(), items: [notice(down), user("again")] })).toBeNull();
   });
 });
