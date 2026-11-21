@@ -7,6 +7,7 @@ All notable changes to Hibiscus are documented here.
 ### Added
 
 - Hibiscus Desktop: switch sessions while the agent works. A running turn, such as a canvas video build, keeps going in the background, its session shows a spinner in the sidebar, and opening it again shows the live conversation and catches its canvas up. Up to 3 turns run in the background at once, and quitting asks first when any are still working.
+- Hibiscus Desktop: a Background tasks pane on the right. The agent can start long commands, such as a render or a test suite, as background jobs that keep running while it works (`bash` with `background: true`, and a `job` tool to check or stop them). The pane lists running jobs with a Stop button, then finished jobs and every command of the session, each with its label, command, output and time. Open it from Background tasks in the session panel. Jobs stop when the app quits.
 
 ### Changed
 
