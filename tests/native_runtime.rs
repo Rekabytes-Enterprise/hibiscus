@@ -471,7 +471,7 @@ fn small_context_pages_parallel_tool_results_and_compacts_before_the_next_reques
             local_completion(
                 json!({"tool_calls":[
                     {"index":0,"id":"read-id","function":{"name":"read","arguments":json!({"path":"large.txt"}).to_string()}},
-                    {"index":1,"id":"shell-id","function":{"name":"bash","arguments":json!({"command":"printf 'line%077d\\n' {1..400}"}).to_string()}}
+                    {"index":1,"id":"shell-id","function":{"name":"bash","arguments":json!({"command":"i=1; while [ $i -le 400 ]; do printf 'line%077d\\n' $i; i=$((i+1)); done"}).to_string()}}
                 ]}),
                 "tool_calls",
                 25000,
