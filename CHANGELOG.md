@@ -15,6 +15,7 @@ All notable changes to Hibiscus are documented here.
 ### Changed
 
 - Hibiscus Desktop: a new version shows as a row above your profile in the sidebar, "Relaunch to update to X", instead of a banner across the top, which the session panel covered.
+- Hibiscus Desktop: folders in the sidebar stay where you put them. Chatting in a session moves it to the top of its own folder, not the folder to the top of the list. Drag a folder's header to reorder, or use Move up and Move down in its menu. The app still reopens the folder you used last, and the sidebar no longer drops folders past the eighth.
 
 ## [0.4.3] - 2026-11-19
 
