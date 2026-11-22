@@ -9,7 +9,8 @@ function render(running: boolean) {
   document.body.append(host);
   const onsend = vi.fn();
   const onabort = vi.fn();
-  const composer = mount(Composer, { target: host, props: { running, chat: empty(), onsend, onabort } });
+  const onpdfsend = vi.fn(async () => {});
+  const composer = mount(Composer, { target: host, props: { running, chat: empty(), onsend, onpdfsend, onabort } });
 
   function button(name: string) {
     const match = [...host.querySelectorAll("button")].find((item) =>
@@ -28,7 +29,7 @@ function render(running: boolean) {
     return input;
   }
 
-  return { host, button, draft, onsend, onabort, async dispose() { await unmount(composer); host.remove(); } };
+  return { host, button, draft, onsend, onpdfsend, onabort, async dispose() { await unmount(composer); host.remove(); } };
 }
 
 it("steers the selected draft and returns to queue for the next message", async () => {
@@ -68,6 +69,33 @@ it("shows regular Send when there is no active run", async () => {
     await view.draft("Hello");
     view.button("Send").click();
     expect(view.onsend).toHaveBeenCalledWith("Hello", [], false);
+  } finally {
+    await view.dispose();
+  }
+});
+
+it("keeps a dropped PDF and draft after setup fails, then sends on retry", async () => {
+  const view = render(false);
+  try {
+    const input = await view.draft("Summarize page 2");
+    const file = new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [file] } });
+    input.dispatchEvent(drop);
+    await tick();
+    expect(view.button("Remove PDF report.pdf")).toBeDefined();
+
+    view.onpdfsend.mockRejectedValueOnce(new Error("Setup cancelled"));
+    view.button("Send").click();
+    await vi.waitFor(() => expect(view.host.querySelector('[role="alert"]')?.textContent).toBe("Setup cancelled"));
+    expect(input.value).toBe("Summarize page 2");
+    expect(view.button("Remove PDF report.pdf")).toBeDefined();
+    expect(view.onsend).not.toHaveBeenCalled();
+
+    view.button("Send").click();
+    await vi.waitFor(() => expect(input.value).toBe(""));
+    expect(view.onpdfsend).toHaveBeenNthCalledWith(2, "Summarize page 2", [], false, [file]);
+    expect(view.host.textContent).not.toContain("report.pdf");
   } finally {
     await view.dispose();
   }

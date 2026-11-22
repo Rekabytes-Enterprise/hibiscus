@@ -945,6 +945,17 @@ fn canvas_save_reference(request: tauri::ipc::Request<'_>) -> Result<PathBuf, St
     desktop::save_canvas_reference(name, bytes).map_err(|e| e.to_string())
 }
 
+/// Converts a PDF the user sent through the composer to a local text reference.
+#[tauri::command]
+async fn prepare_pdf(request: tauri::ipc::Request<'_>) -> Result<PathBuf, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected PDF file bytes".into());
+    };
+    desktop::prepare_pdf(bytes.clone())
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// How ElevenLabs is connected: "oauth", "key" or `null`.
 #[tauri::command]
 fn elevenlabs_status() -> Option<&'static str> {
@@ -1286,6 +1297,7 @@ fn main() {
             wsl_connect,
             wsl_home,
             canvas_save_reference,
+            prepare_pdf,
             canvas_load,
             video_engine_status,
             canvas_styles,

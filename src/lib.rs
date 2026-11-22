@@ -12,6 +12,7 @@ mod extensions;
 mod jobs;
 mod memory;
 mod paths;
+mod pdf;
 mod process;
 mod sys;
 mod tui;
