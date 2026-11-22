@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-23
+
+### Fixed
+
+- Let Desktop chat tables scroll horizontally and vertically within the reply, with whole-word wrapping, readable headers, and slim, themed scrollbars.
+
+### Security
+
+- Update the CLI and Desktop lockfiles to `url` 2.5.9 to address RUSTSEC-2026-0592.
+
 ## [0.4.8] - 2026-11-22
 
 ### Added
