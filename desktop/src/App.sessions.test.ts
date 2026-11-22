@@ -146,6 +146,7 @@ it("runs /compact for the current session and refuses to queue it in an active t
     await vi.waitFor(() => expect(target.querySelector('[aria-label="Stop"]')).not.toBeNull());
     submit(await draft("/compact"));
     await vi.waitFor(() => expect(target.textContent).toContain("then compact"));
+    expect(target.querySelector("textarea")?.value).toBe("/compact");
     expect(commands.filter((item) => item.type === "compact")).toHaveLength(1);
     expect(commands.some((item) => item.type === "prompt")).toBe(false);
   } finally {
@@ -267,5 +268,56 @@ it("keeps Chat questions and video analysis in Chat and resumes Canvas on its bo
     localStorage.clear();
     if (originalScrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScrollTo);
     else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
+it("sends a local text reference after preparing a PDF attachment", async () => {
+  localStorage.setItem("hibiscus.ownProvider", "1");
+  let sequence = 0;
+  const prompts: unknown[] = [];
+  const file = new File(["%PDF-1.4"], "guide.pdf", { type: "application/pdf" });
+  const bytes = new TextEncoder().encode("%PDF-1.4");
+  Object.defineProperty(file, "arrayBuffer", { value: async () => bytes.buffer });
+  const extractedTextPath = "/app/attachments/pdf-local.txt";
+  tauri.invoke.mockImplementation(async (name: string, args?: { command?: { type: string } }) => {
+    if (name === "open_project") return false;
+    if (name === "sessions" || name === "wsl_distros" || name === "canvas_styles") return [];
+    if (name === "prepare_pdf") return extractedTextPath;
+    if (name === "send" && args?.command) {
+      if (args.command.type === "prompt") prompts.push(args.command);
+      const id = `desktop-pdf-${++sequence}`;
+      tauri.events.get("engine")?.({ payload: {
+        type: "response", id, success: true,
+        data: { hasAccess: true, messages: [], models: [], levels: [] },
+      } });
+      return id;
+    }
+    return null;
+  });
+  const target = document.body.appendChild(document.createElement("div"));
+  const app = mount(App, { target });
+
+  try {
+    await vi.waitFor(() => expect(target.querySelector("textarea")?.disabled).toBe(false));
+    const input = target.querySelector("textarea")!;
+    input.value = "Summarize page two";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [file] } });
+    input.dispatchEvent(drop);
+    await vi.waitFor(() => expect(target.textContent).toContain("guide.pdf"));
+    target.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    const payload = tauri.invoke.mock.calls.filter(([name]) => name === "prepare_pdf").at(-1)?.[1];
+    expect(Array.from(payload ?? [])).toEqual(Array.from(bytes));
+    expect(prompts[0]).toMatchObject({
+      message: expect.stringContaining(JSON.stringify([{ name: "guide.pdf", extractedTextPath }])),
+      images: [],
+    });
+    expect(JSON.stringify(prompts[0])).not.toContain("%PDF-");
+  } finally {
+    await unmount(app);
+    target.remove();
+    localStorage.clear();
   }
 });

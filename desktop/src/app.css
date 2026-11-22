@@ -249,13 +249,14 @@ aside.left footer .profile { min-width: 0; }
 /* Children of a scrolling flex column would otherwise shrink to slivers. */
 .chat > * { flex-shrink: 0; }
 .assistant { overflow-wrap: anywhere; }
-.assistant.streaming > :last-child::after { content: "▍"; color: var(--accent); }
+.assistant.streaming > :last-child:not(.table-scroll)::after,
+.assistant.streaming:has(> .table-scroll:last-child)::after { content: "▍"; color: var(--accent); }
 
 /* Markdown in replies: book-like rhythm, roomy lists, framed code. */
 .assistant { font-size: 14.5px; line-height: 1.7; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p, .md ul, .md ol, .md table, .md blockquote, .md .codeblock { margin: 0 0 16px; }
+.md p, .md ul, .md ol, .md .table-scroll, .md blockquote, .md .codeblock { margin: 0 0 16px; }
 .md h1, .md h2, .md h3, .md h4 { margin: 28px 0 10px; line-height: 1.35; font-weight: 600; }
 .md h1 { font-size: 21px; } .md h2 { font-size: 18px; } .md h3 { font-size: 16px; } .md h4 { font-size: 14.5px; }
 .md ul, .md ol { padding-left: 24px; }
@@ -266,9 +267,20 @@ aside.left footer .profile { min-width: 0; }
 .md a { color: var(--accent); text-underline-offset: 2px; }
 .md code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--hover); padding: 2px 6px; border-radius: 5px; }
 .md blockquote { border-left: 3px solid var(--line); padding: 2px 0 2px 14px; color: var(--muted); }
-.md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13.5px; }
-.md th, .md td { border: 1px solid var(--line); padding: 7px 12px; text-align: left; vertical-align: top; }
-.md th { background: var(--panel); font-weight: 600; }
+.md .table-scroll { max-width: 100%; max-height: min(420px, 55vh); overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.md .table-scroll:focus-visible { outline: 1px solid var(--muted); outline-offset: 2px; }
+.md .table-scroll::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 38%, transparent); }
+.md .table-scroll:hover::-webkit-scrollbar-thumb,
+.md .table-scroll:focus-within::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--muted) 68%, transparent); }
+/* Let the table grow to its longest words before the scroll area takes over. */
+.md table { width: 100%; min-width: min-content; border-collapse: separate; border-spacing: 0; font-size: 13.5px; }
+.md th, .md td { overflow-wrap: normal; word-break: normal; hyphens: none; }
+.md th, .md td { border-inline-end: 1px solid var(--line); border-block-end: 1px solid var(--line); padding: 7px 12px; text-align: left; vertical-align: top; }
+.md tr > :last-child { border-inline-end: 0; }
+.md tbody:last-child tr:last-child > * { border-block-end: 0; }
+.md thead { position: sticky; top: 0; z-index: 1; }
+.md th { background: var(--panel); font-weight: 600; white-space: nowrap; }
+.md td { min-width: 10ch; }
 .md hr { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
 .md img { max-width: 100%; }
 

@@ -19,7 +19,7 @@ pub(crate) struct Output {
 #[derive(Debug)]
 pub(crate) enum Error {
     Io(io::Error),
-    OutputLimit,
+    OutputLimit(usize),
     TimedOut,
     Cancelled,
 }
@@ -27,9 +27,11 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "Process I/O failed: {e}"),
-            Self::OutputLimit => {
-                f.write_str("Process output exceeded 64 KiB per stream; command group terminated")
-            }
+            Self::OutputLimit(limit) => write!(
+                f,
+                "Process output exceeded {} KiB; command group terminated",
+                limit / 1024
+            ),
             Self::TimedOut => f.write_str("Process timed out; command group terminated"),
             Self::Cancelled => f.write_str("Process cancelled; command group terminated"),
         }
@@ -41,22 +43,32 @@ impl From<io::Error> for Error {
         Self::Io(e)
     }
 }
-async fn read(stream: impl AsyncRead + Unpin) -> Result<Vec<u8>, Error> {
+async fn read(stream: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     stream
-        .take(OUTPUT_LIMIT as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .await?;
-    if bytes.len() > OUTPUT_LIMIT {
-        return Err(Error::OutputLimit);
+    if bytes.len() > limit {
+        return Err(Error::OutputLimit(limit));
     }
     Ok(bytes)
 }
 pub(crate) async fn run(
+    command: Command,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<Output, Error> {
+    run_with_stdout_limit(command, input, timeout, cancel, OUTPUT_LIMIT).await
+}
+
+pub(crate) async fn run_with_stdout_limit(
     mut command: Command,
     input: Option<Vec<u8>>,
     timeout: Duration,
     cancel: &mut watch::Receiver<bool>,
+    stdout_limit: usize,
 ) -> Result<Output, Error> {
     if *cancel.borrow() {
         return Err(Error::Cancelled);
@@ -95,8 +107,12 @@ pub(crate) async fn run(
             Ok::<_, Error>(())
         };
         let waiting = async { child.wait().await.map_err(Error::from) };
-        let (_, stdout, stderr, status) =
-            tokio::try_join!(writing, read(stdout), read(stderr), waiting)?;
+        let (_, stdout, stderr, status) = tokio::try_join!(
+            writing,
+            read(stdout, stdout_limit),
+            read(stderr, OUTPUT_LIMIT),
+            waiting
+        )?;
         Ok(Output {
             status,
             stdout,

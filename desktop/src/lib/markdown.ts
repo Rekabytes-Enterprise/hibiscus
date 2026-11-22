@@ -56,9 +56,23 @@ const COPY = `<button class="iconbtn copycode" title="Copy" aria-label="Copy cod
 
 export function markdown(text: string): string {
   const html = parser.parse(text, { async: false });
-  const clean = DOMPurify.sanitize(html, { FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select"] });
+  const clean = DOMPurify.sanitize(html, {
+    RETURN_DOM_FRAGMENT: true,
+    FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select"],
+  });
+  for (const table of clean.querySelectorAll("table")) {
+    const scroll = clean.ownerDocument.createElement("div");
+    scroll.className = "table-scroll";
+    scroll.tabIndex = 0;
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute("aria-label", "Scrollable table");
+    table.replaceWith(scroll);
+    scroll.append(table);
+  }
+  const container = clean.ownerDocument.createElement("div");
+  container.append(clean);
   // Added after sanitizing, which strips buttons; the markup is our own constant.
-  return clean.replaceAll('<div class="codeblock">', `<div class="codeblock">${COPY}`);
+  return container.innerHTML.replaceAll('<div class="codeblock">', `<div class="codeblock">${COPY}`);
 }
 
 // Finished messages never change, so their HTML is kept rather than parsed on

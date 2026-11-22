@@ -5,6 +5,7 @@ pub use crate::client::embed::{Engine, Start};
 pub use crate::engine::reka::SIGN_IN as REKA_SIGN_IN;
 pub use crate::engine::session::SessionKind;
 pub use crate::engine::{CodexSignIn, RekaSignIn};
+pub use crate::pdf::prepare as prepare_pdf;
 
 /// The agent-browser session the engine's browser tool uses, for the browser pane.
 pub const BROWSER_SESSION: &str = crate::engine::BROWSER_SESSION;

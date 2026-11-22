@@ -215,6 +215,11 @@ export const elevenlabs = {
 export const saveReference = (name: string, bytes: Uint8Array) =>
   invoke<string>("canvas_save_reference", bytes, { headers: { "x-name": name.replace(/[^A-Za-z0-9._-]/g, "_") } });
 
+/** Extracts a PDF locally and returns the path of its pageable text file. */
+export async function preparePdf(file: File): Promise<string> {
+  return invoke<string>("prepare_pdf", new Uint8Array(await file.arrayBuffer()));
+}
+
 /** A session's saved canvas as JSON, or null. */
 export const canvasLoad = (session: string) => invoke<string | null>("canvas_load", { session });
 /** Saves a session's canvas; an empty string removes it. */

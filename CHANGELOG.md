@@ -4,6 +4,30 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-23
+
+### Fixed
+
+- Let Desktop chat tables scroll horizontally and vertically within the reply, with whole-word wrapping, readable headers, and slim, themed scrollbars.
+
+### Security
+
+- Update the CLI and Desktop lockfiles to `url` 2.5.9 to address RUSTSEC-2026-0592.
+
+## [0.4.8] - 2026-11-22
+
+### Added
+
+- Drop or attach a PDF in Desktop chat. Hibiscus extracts its text locally with Poppler, keeps page numbers, and preserves the draft if setup or extraction fails.
+
+### Changed
+
+- Replace the Desktop composer's steering checkbox with a Queue / Steer split button that defaults to Queue for each new draft.
+
+### Fixed
+
+- Guide public web lookups to the right source for each item. Switch sources after unproductive searches and distinguish zero matches from blocked or unreadable responses.
+
 ## [0.4.7] - 2026-11-21
 
 ### Fixed
