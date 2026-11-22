@@ -4,6 +4,20 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-11-22
+
+### Added
+
+- Drop or attach a PDF in Desktop chat. Hibiscus extracts its text locally with Poppler, keeps page numbers, and preserves the draft if setup or extraction fails.
+
+### Changed
+
+- Replace the Desktop composer's steering checkbox with a Queue / Steer split button that defaults to Queue for each new draft.
+
+### Fixed
+
+- Guide public web lookups to the right source for each item. Switch sources after unproductive searches and distinguish zero matches from blocked or unreadable responses.
+
 ## [0.4.7] - 2026-11-21
 
 ### Fixed
