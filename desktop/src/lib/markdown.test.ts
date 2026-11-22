@@ -10,7 +10,16 @@ it("renders common Markdown", () => {
   expect(html).toContain('<code class="hljs language-rust"><span class="hljs-keyword">fn</span> <span class="hljs-title function_">main</span>');
   expect(html).toContain('<div class="code-lang">rust</div>');
   expect(html).toContain('aria-label="Copy code"');
-  expect(html).toContain("<table>");
+  expect(html).toContain('<div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>');
+});
+
+it("wraps sanitized HTML tables without changing their headers and cells", () => {
+  const root = document.createElement("div");
+  root.innerHTML = markdown('<table onclick="alert(1)"><thead><tr><th>Stars</th></tr></thead><tbody><tr><td>131</td></tr></tbody></table>');
+  const scroll = root.querySelector(".table-scroll");
+  expect(scroll?.querySelector("th")?.textContent).toBe("Stars");
+  expect(scroll?.querySelector("td")?.textContent).toBe("131");
+  expect(scroll?.querySelector("table")?.hasAttribute("onclick")).toBe(false);
 });
 
 it("strips anything that could run or phone home", () => {
