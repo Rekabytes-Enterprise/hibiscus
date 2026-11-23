@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-11-23
+
+### Added
+
+- Add a project skill for grouping independent native edits and an offline comparison that verifies the same file results with fewer model requests.
+
+### Fixed
+
+- Hibiscus Desktop distinguishes Rooxcode account usage limits from temporary request limits. Account exhaustion now shows a notice above the composer with the relevant usage window when available and a link to get more usage.
+
 ## [0.4.9] - 2026-11-23
 
 ### Fixed

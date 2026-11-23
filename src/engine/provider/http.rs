@@ -93,7 +93,7 @@ pub(super) async fn exchange(
             let event: Value =
                 serde_json::from_str(&frame).map_err(|_| "Malformed provider streaming event")?;
             if anonymous && event["error"].is_object() {
-                return Err(crate::engine::rooxcode::stream_error(&event).into());
+                return Err(crate::engine::rooxcode::stream_error(&event));
             }
             if !anonymous && provider.api == Api::ChatCompletions {
                 // A local server can open the stream with a loading keepalive
