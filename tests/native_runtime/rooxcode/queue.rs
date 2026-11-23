@@ -174,6 +174,34 @@ fn http_and_sse_queue_errors_and_terminal_allowances_do_not_retry_or_leak() {
 }
 
 #[test]
+fn account_limit_on_http_or_sse_stops_without_retrying() {
+    for reply in [
+        (
+            429,
+            json!({"error":{"code":"account_tokens_exhausted"}}).to_string(),
+        ),
+        (
+            200,
+            KEEPALIVE.to_owned() + &service_error("account_tokens_exhausted", 429),
+        ),
+    ] {
+        let f = Fixture::new("chat_completions", vec![reply]);
+        setup(&f, json!([{"id":"free"}]));
+        fs::write(f.root.join("rooxcode-retry-after"), "79354").unwrap();
+        let result = f.run("", &["hello"]);
+        assert!(!result.status.success());
+        let shown = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            shown.contains("Rooxcode account usage limit reached"),
+            "{shown}"
+        );
+        assert!(shown.contains("Open your Rooxcode account"), "{shown}");
+        assert!(!shown.contains("shared capacity"));
+        assert_eq!(f.captured().len(), 1);
+    }
+}
+
+#[test]
 fn queued_failure_restores_for_review_and_does_not_replay_completed_tools() {
     let call = sse(
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"once","function":{"name":"bash","arguments":json!({"command":"printf once >> completed.txt"}).to_string()}}]},"finish_reason":"tool_calls"}]}),

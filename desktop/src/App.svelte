@@ -13,6 +13,7 @@
   import TasksPane from "./lib/TasksPane.svelte";
   import { parseDiff } from "./lib/diff";
   import Composer from "./lib/Composer.svelte";
+  import RooxcodeUsageNotice from "./lib/RooxcodeUsageNotice.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import { added, moved, opened, removed } from "./lib/folders";
@@ -1191,6 +1192,14 @@
     {/if}
     {#if folder}
       <div class="dock">
+        {#if chat.rooxcodeAccountLimit && model?.provider === "rooxcode"}
+          {#key chat.rooxcodeAccountLimit}
+            <RooxcodeUsageNotice
+              retryAfter={chat.rooxcodeAccountLimit.retryAfter}
+              ondismiss={() => (chat = { ...chat, rooxcodeAccountLimit: null })}
+            />
+          {/key}
+        {/if}
         <Composer bind:this={composer} running={chat.running} disabled={opening} {chat} onsend={send} onpdfsend={sendPdf} onabort={() => post({ type: "abort" }).catch(() => {})} />
         <div class="status">
           <Menu

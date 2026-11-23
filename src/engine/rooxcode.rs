@@ -146,14 +146,14 @@ pub(super) async fn send_chat(
         if response.status().is_success() {
             return Ok(response);
         }
-        let (_, code, message) = response_parts(response).await;
+        let (status, code, retry) = response_parts(response).await;
         match code.as_deref() {
             Some("rooxcode_session_expired") if rejected.is_none() => rejected = Some(token),
             Some("rooxcode_sign_in_required") => {
                 super::reka::forget();
                 return Err(super::reka::SIGN_IN.into());
             }
-            _ => return Err(message.into()),
+            _ => return Err(request_error(status, code.as_deref(), retry, false)),
         }
     }
 }
@@ -208,7 +208,8 @@ pub(super) async fn refresh(config: &mut Config) -> Result<CatalogStatus> {
             "Rooxcode model discovery failed. Check connectivity and open /models to refresh."
         })?;
     if !response.status().is_success() {
-        return Err(response_error(response).await.into());
+        let (status, code, retry) = response_parts(response).await;
+        return Err(with_retry(code_message(status, code.as_deref()), retry).into());
     }
     provider.models = catalog(&bounded_body(&mut response, 1024 * 1024).await?)?;
     Ok(if provider.models.is_empty() {
@@ -297,6 +298,7 @@ pub(super) fn code_message(status: u16, code: Option<&str>) -> String {
         Some("inference_disabled") => "inference is disabled by the operator",
         Some("rooxcode_sign_in_required" | "rooxcode_session_expired") => "the Reka Bytes session is missing or expired. Sign in again with /login",
         Some("model_not_found" | "model_unavailable" | "model_ineligible") => "the selected model is unavailable. Open /models and explicitly choose an available model",
+        Some("network_rate_exhausted" | "shared_rate_exhausted") => "a temporary request rate limit was reached. Retry manually later",
         Some("queue_full") => "the shared waiting queue is full. Retry manually later",
         Some("network_queue_full") => "your network already has its maximum number of waiting requests. Let those requests finish before retrying manually",
         Some("queue_timeout") => "the maximum queue wait elapsed before generation started. Retry manually later",
@@ -339,29 +341,56 @@ fn with_retry(mut message: String, retry: Option<u64>) -> String {
     message
 }
 
-pub(super) fn stream_error(event: &Value) -> String {
+#[derive(Debug)]
+pub(super) struct AccountLimit {
+    pub retry_after: Option<u64>,
+}
+
+impl std::fmt::Display for AccountLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Rooxcode account usage limit reached. Open your Rooxcode account to get more usage, or retry after the allowance refreshes.")
+    }
+}
+
+impl std::error::Error for AccountLimit {}
+
+fn request_error(
+    status: u16,
+    code: Option<&str>,
+    retry: Option<u64>,
+    streaming: bool,
+) -> Box<dyn std::error::Error + Send + Sync> {
+    if status == 429 && code == Some("account_tokens_exhausted") {
+        return Box::new(AccountLimit {
+            retry_after: retry.filter(|seconds| *seconds <= 7 * 24 * 60 * 60),
+        });
+    }
+    let message = code_message(status, code);
+    let message = if streaming {
+        message.replacen("Rooxcode HTTP", "Rooxcode stream error", 1)
+    } else {
+        message
+    };
+    with_retry(message, retry).into()
+}
+
+pub(super) fn stream_error(event: &Value) -> Box<dyn std::error::Error + Send + Sync> {
     let error = &event["error"];
     let status = error["status"]
         .as_u64()
         .filter(|s| (400..=599).contains(s))
         .and_then(|s| u16::try_from(s).ok())
         .unwrap_or(502);
-    with_retry(
-        code_message(status, error["code"].as_str()).replacen(
-            "Rooxcode HTTP",
-            "Rooxcode stream error",
-            1,
-        ),
+    request_error(
+        status,
+        error["code"].as_str(),
         error["retry_after"].as_u64(),
+        true,
     )
 }
 
-pub(super) async fn response_error(response: reqwest::Response) -> String {
-    response_parts(response).await.2
-}
-
-/// The status, error code and the message to show for a failed response.
-async fn response_parts(mut response: reqwest::Response) -> (u16, Option<String>, String) {
+/// Parse the gateway envelope without using its untrusted message text.
+async fn response_parts(mut response: reqwest::Response) -> (u16, Option<String>, Option<u64>) {
     let status = response.status().as_u16();
     let retry = response
         .headers()
@@ -376,8 +405,8 @@ async fn response_parts(mut response: reqwest::Response) -> (u16, Option<String>
         .as_ref()
         .and_then(|b| b["error"]["code"].as_str())
         .map(str::to_owned);
-    let message = with_retry(code_message(status, code.as_deref()), retry);
-    (status, code, message)
+    let retry = retry.or_else(|| body.as_ref()?.get("error")?.get("retry_after")?.as_u64());
+    (status, code, retry)
 }
 
 #[cfg(test)]
@@ -389,7 +418,7 @@ mod tests {
     fn queue_stream_errors_validate_status_retry_and_never_echo_untrusted_text() {
         let error = stream_error(
             &json!({"error":{"code":"queue_timeout","status":429,"retry_after":5,"message":"PRIVATE"}}),
-        );
+        ).to_string();
         assert!(
             error.contains("stream error 429")
                 && error.contains("maximum queue wait")
@@ -405,7 +434,7 @@ mod tests {
         ] {
             let error = stream_error(
                 &json!({"error":{"code":"queue_full","status":invalid,"retry_after":invalid,"message":"PRIVATE"}}),
-            );
+            ).to_string();
             assert!(error.contains("stream error 502") && error.contains("queue is full"));
             assert!(!error.contains("Retry-After") && !error.contains("PRIVATE"));
         }
@@ -418,6 +447,36 @@ mod tests {
         assert!(model_output(
             &json!({"choices":[{"delta":{"content":"hi"}}]})
         ));
+    }
+
+    #[test]
+    fn only_account_exhaustion_adds_usage_metadata_to_failure_events() {
+        use crate::engine::event::Event;
+
+        for streaming in [false, true] {
+            let error = request_error(
+                429,
+                Some("account_tokens_exhausted"),
+                Some(170_000),
+                streaming,
+            );
+            let message = Event::Failed(error.as_ref()).wire()["message"].clone();
+            assert_eq!(message["stopReason"], "error");
+            assert_eq!(message["rooxcodeAccountLimit"]["retryAfter"], 170_000);
+        }
+        for code in [Some("network_rate_exhausted"), Some("queue_full"), None] {
+            let error = request_error(429, code, Some(15), false);
+            assert!(Event::Failed(error.as_ref()).wire()["message"]
+                .get("rooxcodeAccountLimit")
+                .is_none());
+        }
+        let invalid_retry =
+            request_error(429, Some("account_tokens_exhausted"), Some(u64::MAX), false);
+        assert_eq!(
+            Event::Failed(invalid_retry.as_ref()).wire()["message"]["rooxcodeAccountLimit"]
+                ["retryAfter"],
+            Value::Null
+        );
     }
 
     #[test]

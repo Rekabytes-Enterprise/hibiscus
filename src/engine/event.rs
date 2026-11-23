@@ -22,7 +22,7 @@ pub enum Event<'a> {
         result: &'a Value,
         elapsed: std::time::Duration,
     },
-    Failed(&'a str),
+    Failed(&'a (dyn std::error::Error + 'static)),
     Settled,
 }
 impl Event<'_> {
@@ -52,8 +52,12 @@ impl Event<'_> {
                 let duration_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
                 json!({"type":"tool_execution_end","toolCallId":id,"toolName":name,"isError":failed,"result":result,"durationMs":duration_ms})
             }
-            Self::Failed(message) => {
-                json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":super::safe_message(message)}})
+            Self::Failed(error) => {
+                let mut message = json!({"role":"assistant","content":[],"stopReason":"error","errorMessage":super::safe_message(&error.to_string())});
+                if let Some(limit) = error.downcast_ref::<super::rooxcode::AccountLimit>() {
+                    message["rooxcodeAccountLimit"] = json!({"retryAfter":limit.retry_after});
+                }
+                json!({"type":"message_end","message":message})
             }
             Self::Settled => json!({"type":"agent_settled"}),
         }

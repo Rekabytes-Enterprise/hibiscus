@@ -340,6 +340,87 @@ fn native_tools_complete_real_file_shell_and_goal_work() {
     assert!(data.contains("@@ -1,1 +1,1 @@"));
 }
 #[test]
+fn grouping_independent_edits_keeps_the_same_result_with_fewer_provider_requests() {
+    const SKILL_PATH: &str = ".hibiscus/skills/group-independent-edits/SKILL.md";
+    const SKILL: &str = include_str!("../.hibiscus/skills/group-independent-edits/SKILL.md");
+    let files = ["one.txt", "two.txt", "three.txt", "four.txt", "five.txt"];
+    let verify = r#"for file in one.txt two.txt three.txt four.txt five.txt; do
+        test "$(cat "$file")" = 'new value' || exit 1
+    done
+    printf 'fixture checks passed'
+    "#;
+
+    // Script both schedules so this test measures the engine behavior.
+    // Model adoption and token cost require a separate live evaluation.
+    let run = |grouped: bool| {
+        let mut reads: Vec<_> = files
+            .iter()
+            .map(|path| ("read", json!({"path":path})))
+            .collect();
+        if grouped {
+            reads.push(("read", json!({"path":SKILL_PATH})));
+        }
+        let edits: Vec<_> = files
+            .iter()
+            .map(|path| {
+                (
+                    "edit",
+                    json!({"path":path,"oldText":"old value","newText":"new value"}),
+                )
+            })
+            .collect();
+        let mut replies = vec![calls(reads)];
+        if grouped {
+            replies.push(calls(edits));
+        } else {
+            replies.extend(edits.into_iter().map(|edit| calls(vec![edit])));
+        }
+        replies.push(calls(vec![("bash", json!({"command":verify}))]));
+        replies.push(response("Refactor finished."));
+
+        let fixture = Fixture::new("responses", replies);
+        for path in files {
+            fs::write(fixture.root.join(path), "old value\n").unwrap();
+        }
+        if grouped {
+            let path = fixture.root.join(SKILL_PATH);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, SKILL).unwrap();
+        }
+        good(&fixture.run(
+            "",
+            &["Update the value independently in all five files and verify."],
+        ));
+
+        let requests = fixture.captured();
+        assert_eq!(
+            requests[0]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("Available project skill: group-independent-edits"),
+            grouped
+        );
+        assert_eq!(
+            requests[1]["input"]
+                .to_string()
+                .contains("emit the independent"),
+            grouped
+        );
+        assert!(requests.last().unwrap()["input"]
+            .to_string()
+            .contains("fixture checks passed"));
+        let output = files.map(|path| fs::read(fixture.root.join(path)).unwrap());
+        assert!(output.iter().all(|contents| contents == b"new value\n"));
+        (requests.len(), output)
+    };
+
+    let (serial_requests, serial_files) = run(false);
+    let (grouped_requests, grouped_files) = run(true);
+    assert_eq!(serial_files, grouped_files);
+    assert_eq!((serial_requests, grouped_requests), (8, 4));
+}
+
+#[test]
 fn noninteractive_shell_runs_without_a_permission_prompt() {
     let f = Fixture::new(
         "responses",
