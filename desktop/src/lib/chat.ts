@@ -33,6 +33,7 @@ export type Chat = {
   followUp: string[];
   /** Shown while the Rooxcode Gateway queues the request. */
   waiting: boolean;
+  rooxcodeAccountLimit: { retryAfter: number | null } | null;
   /** Prompts the engine could not deliver; offered for resending. */
   rejected: string[];
   /** Where the loaded messages begin in the session: 0 once all are loaded (#171). */
@@ -47,6 +48,7 @@ export const empty = (): Chat => ({
   steering: [],
   followUp: [],
   waiting: false,
+  rooxcodeAccountLimit: null,
   rejected: [],
   start: 0,
   edited: [],
@@ -82,7 +84,7 @@ export function apply(chat: Chat, event: Record): Chat {
   const last = items[items.length - 1];
   switch (event.type) {
     case "agent_start":
-      return { ...chat, running: true };
+      return { ...chat, running: true, rooxcodeAccountLimit: null };
     case "agent_settled":
       return { ...chat, running: false, waiting: false, items: finishStreaming(items) };
     case "message_start": {
@@ -107,6 +109,13 @@ export function apply(chat: Chat, event: Record): Chat {
         const partial = last?.kind === "assistant" && last.streaming && last.text
           ? [{ ...last, streaming: false }]
           : [];
+        const limit: unknown = m.rooxcodeAccountLimit;
+        if (limit && typeof limit === "object" && "retryAfter" in limit) {
+          const retry = limit.retryAfter;
+          const retryAfter = typeof retry === "number" && Number.isSafeInteger(retry) && retry >= 0 && retry <= 604800
+            ? retry : null;
+          return { ...chat, waiting: false, items: [...rest, ...partial], rooxcodeAccountLimit: { retryAfter } };
+        }
         return {
           ...chat,
           items: [...rest, ...partial, { kind: "notice", text: m.errorMessage ?? "The run failed.", error: true }],

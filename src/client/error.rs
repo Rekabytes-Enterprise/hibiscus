@@ -141,6 +141,7 @@ fn classify(message: &str) -> ErrorCategory {
         "freeusagelimiterror",
     ]) || (text.starts_with("rooxcode ")
         && has(&[
+            "account usage limit",
             "daily quota",
             "daily work budget",
             "upstream free request quota",

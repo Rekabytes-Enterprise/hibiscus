@@ -343,7 +343,7 @@ async fn serve_async(
                             queue.items.clear();
                             lost
                         };
-                        let _ = emit(&o, Event::Failed(&e.to_string()).wire()).await;
+                        let _ = emit(&o, Event::Failed(e.as_ref()).wire()).await;
                         if let Some(lost) = lost {
                             let _=emit(&o,json!({"type":"queue_rejected","message":lost.text,"images":lost.images,"steer":lost.steer,"error":"Run failed before queued delivery; review this message before retrying."})).await;
                         }
