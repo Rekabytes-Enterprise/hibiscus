@@ -4,6 +4,17 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-11-24
+
+### Removed
+
+- Remove the fixed agent step limit so long tasks can continue through tool calls in the same turn. Existing `maxSteps` settings are ignored.
+
+### Fixed
+
+- Keep desktop chat tables mounted while a reply streams so their scroll position and keyboard focus survive new text.
+- Open saved chats after their provider or model is removed or renamed. The history stays visible while you choose a replacement model.
+
 ## [0.4.12] - 2026-11-24
 
 ### Removed
