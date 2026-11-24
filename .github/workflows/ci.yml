@@ -83,7 +83,12 @@ jobs:
           # The desktop app's engine. The PTY and Unix-fixture tests are
           # cfg(unix), so this runs the unit tests and tests/desktop_api.rs.
           - windows-latest
-    runs-on: ${{ matrix.os }}
+        include:
+          # Keep the required macOS check name. Native ARM64 verification runs
+          # in the release workflows.
+          - os: macos-15
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner || matrix.os }}
     # Cold Rust builds on Windows runners take about twice as long.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
     steps:
