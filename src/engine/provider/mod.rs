@@ -51,6 +51,7 @@ pub async fn request(
     out: &Sender<Value>,
 ) -> Result<Reply> {
     super::rooxcode::validate_provider(provider)?;
+    super::chatgpt::validate_provider(provider)?;
     if provider.authentication == super::config::Authentication::Rooxcode
         && !super::thinking::Policy::for_model(provider, model).supports_stored(thinking)
     {

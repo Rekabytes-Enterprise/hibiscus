@@ -1,4 +1,4 @@
-use super::search;
+use super::{batch_edit, search};
 use crate::Result;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -45,6 +45,7 @@ pub fn definitions(cwd: Option<&Path>, surface: Surface) -> Vec<Value> {
         json!({"name":"session_search","description":"Search earlier sessions in this workspace for what the user and you said, such as a past decision, a fix or a request. Returns up to 20 matching messages, newest session first, with the session's title and age. Use it when the user refers to earlier work that memory doesn't cover.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Words that must all appear in the message, in any case."}},"required":["query"],"additionalProperties":false}}),
         json!({"name":"write","description":"Write UTF-8 contents to a file. Creates parent directories. Replaces existing contents.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}),
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
+        batch_edit::definition(),
         bash(shell),
         json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
     ];
@@ -309,7 +310,7 @@ struct Goal {
     steps: Option<Vec<String>>,
     id: Option<usize>,
 }
-fn path(cwd: &Path, path: &str) -> Result<PathBuf> {
+pub(super) fn path(cwd: &Path, path: &str) -> Result<PathBuf> {
     if path.is_empty() {
         return Err("Empty file path".into());
     }
@@ -323,14 +324,14 @@ fn path(cwd: &Path, path: &str) -> Result<PathBuf> {
     let p = PathBuf::from(path);
     Ok(if p.is_absolute() { p } else { cwd.join(p) })
 }
-fn read_file(path: &Path) -> Result<String> {
+pub(super) fn read_file(path: &Path) -> Result<String> {
     let meta = std::fs::metadata(path)?;
     if !meta.is_file() || meta.len() > 16 * 1024 * 1024 {
         return Err("Expected a regular UTF-8 file no larger than 16 MiB".into());
     }
     Ok(std::fs::read_to_string(path)?)
 }
-fn result(text: String, details: Value) -> Value {
+pub(super) fn result(text: String, details: Value) -> Value {
     json!({"content":[{"type":"text","text":text}],"details":details})
 }
 
@@ -393,6 +394,9 @@ pub fn validate(name: &str, args: &Value, surface: Surface) -> Result<()> {
             if a.path.is_empty() || a.old_text.is_empty() || a.new_text.len() > 16 * 1024 * 1024 {
                 return Err("Invalid edit arguments".into());
             }
+        }
+        "batch_edit" => {
+            batch_edit::parse(args)?;
         }
         "bash" => {
             let a: Bash = serde_json::from_value(args.clone())?;
@@ -539,6 +543,9 @@ pub async fn execute(
         return tool.execute(args, context, cancel).await;
     }
     let cwd = context.cwd;
+    if name == "batch_edit" {
+        return batch_edit::execute(batch_edit::parse(args)?, context, cancel);
+    }
     validate(name, args, surface)?;
     if *cancel.borrow() {
         return Err("Tool cancelled before execution".into());
@@ -1039,6 +1046,15 @@ fn checkpoint_notice(receipt: &Value) -> String {
 /// One exact replacement has a contiguous changed region. Trim equal lines at
 /// both ends and retain one context line, without a quadratic diff algorithm.
 pub(crate) fn edit_diff(before: &str, after: &str) -> (String, usize, usize) {
+    edit_diff_at(before, after, 0, 0)
+}
+
+pub(super) fn edit_diff_at(
+    before: &str,
+    after: &str,
+    old_offset: usize,
+    new_offset: usize,
+) -> (String, usize, usize) {
     let old = before.split_inclusive('\n').collect::<Vec<_>>();
     let new = after.split_inclusive('\n').collect::<Vec<_>>();
     let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
@@ -1059,9 +1075,9 @@ pub(crate) fn edit_diff(before: &str, after: &str) -> (String, usize, usize) {
     let new_end = new.len() - suffix;
     let mut diff = format!(
         "@@ -{},{} +{},{} @@\n",
-        start + 1,
+        old_offset + start + 1,
         old_end + context - start,
-        start + 1,
+        new_offset + start + 1,
         new_end + context - start
     );
     let mut append = |sign: char, line: &str| {

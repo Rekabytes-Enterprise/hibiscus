@@ -354,3 +354,82 @@ fn history_defaults_to_this_session_and_explicitly_can_include_other_conversatio
         records(&f)[0]["id"].as_str().unwrap()
     );
 }
+
+#[test]
+fn batch_edits_write_each_file_once_under_one_checkpoint() {
+    let batch = calls(vec![(
+        "batch_edit",
+        json!({"edits":[
+            {"path":"translations.txt","oldText":"privateNotes\n","newText":""},
+            {"path":"./translations.txt","oldText":"savedLocally","newText":"localOnly"},
+            {"path":"profile.txt","oldText":"Old heading","newText":"New heading"}
+        ]}),
+    )]);
+    let f = Fixture::new("responses", vec![batch, response("BATCH_DONE")]);
+    fs::write(
+        f.root.join("translations.txt"),
+        "privateNotes\nkeep middle\nkeep too\nsavedLocally\n",
+    )
+    .unwrap();
+    fs::write(f.root.join("profile.txt"), "Old heading\n").unwrap();
+    good(&f.run("", &["Edit the translations and profile"]));
+    assert_eq!(
+        fs::read_to_string(f.root.join("translations.txt")).unwrap(),
+        "keep middle\nkeep too\nlocalOnly\n"
+    );
+    assert_eq!(
+        fs::read_to_string(f.root.join("profile.txt")).unwrap(),
+        "New heading\n"
+    );
+
+    let snapshots = records(&f);
+    assert_eq!(snapshots.len(), 1);
+    let files = snapshots[0]["files"].as_object().unwrap();
+    assert_eq!(files.len(), 2);
+    for entry in files.values() {
+        assert_eq!(entry["calls"].as_array().unwrap().len(), 1);
+    }
+
+    let session_path = fs::read_dir(f.root.join("app/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let session = fs::read_to_string(session_path).unwrap();
+    assert!(session.contains("editedPaths"));
+    assert!(session.contains("diff --git"));
+    assert!(session.contains("@@ -4,1 +3,1 @@"));
+    assert!(!session.contains("-keep middle"));
+    assert!(!session.contains("+keep middle"));
+}
+
+#[test]
+fn invalid_batch_replacements_leave_all_files_unchanged() {
+    for (old_text, expected) in [
+        ("missing", "oldText was not found"),
+        ("aa", "oldText matches more than once"),
+    ] {
+        let batch = calls(vec![(
+            "batch_edit",
+            json!({"edits":[
+                {"path":"first.txt","oldText":"ready","newText":"changed"},
+                {"path":"last.txt","oldText":old_text,"newText":"changed"}
+            ]}),
+        )]);
+        let f = Fixture::new("responses", vec![batch, response("BATCH_REJECTED")]);
+        fs::write(f.root.join("first.txt"), "ready\n").unwrap();
+        fs::write(f.root.join("last.txt"), "aaa\n").unwrap();
+        good(&f.run("", &["Try to edit both files"]));
+        assert_eq!(
+            fs::read_to_string(f.root.join("first.txt")).unwrap(),
+            "ready\n"
+        );
+        assert_eq!(
+            fs::read_to_string(f.root.join("last.txt")).unwrap(),
+            "aaa\n"
+        );
+        assert!(f.captured()[1]["input"].to_string().contains(expected));
+        assert!(records(&f).is_empty());
+    }
+}

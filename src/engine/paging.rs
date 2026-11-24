@@ -83,14 +83,15 @@ fn preview(message: &Message) -> Value {
 
 /// Files written or edited without error, newest first, for the session panel.
 fn edited(messages: &[Message]) -> Vec<String> {
-    let failed: HashMap<&str, bool> = messages
+    let results: HashMap<&str, (bool, &Value)> = messages
         .iter()
         .filter_map(|m| match m {
             Message::ToolResult {
                 tool_call_id,
                 is_error,
+                details,
                 ..
-            } => Some((tool_call_id.as_str(), *is_error)),
+            } => Some((tool_call_id.as_str(), (*is_error, details))),
             _ => None,
         })
         .collect();
@@ -103,17 +104,32 @@ fn edited(messages: &[Message]) -> Vec<String> {
             _ => None,
         })
         .flat_map(|content| content.iter().rev())
-        .filter_map(|b| match b {
-            Block::ToolCall {
+        .flat_map(|block| {
+            let Block::ToolCall {
                 id,
                 name,
                 arguments,
-            } if (name == "write" || name == "edit") && failed.get(id.as_str()) == Some(&false) => {
-                arguments["path"]
+            } = block
+            else {
+                return Vec::new();
+            };
+            let Some((failed, details)) = results.get(id.as_str()) else {
+                return Vec::new();
+            };
+            match name.as_str() {
+                "batch_edit" => details["editedPaths"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect(),
+                "write" | "edit" if !failed => arguments["path"]
                     .as_str()
                     .or_else(|| arguments["filePath"].as_str())
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
             }
-            _ => None,
         })
         .filter(|path| !path.is_empty() && seen.insert(*path))
         .map(String::from)

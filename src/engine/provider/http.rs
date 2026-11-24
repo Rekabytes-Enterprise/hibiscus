@@ -23,8 +23,10 @@ pub(super) async fn exchange(
     tools: Option<&[Value]>,
     out: &Sender<Value>,
 ) -> Result<Stream> {
-    let anonymous = provider.authentication == crate::engine::config::Authentication::Rooxcode;
-    let mut response = if anonymous {
+    use crate::engine::{chatgpt, config::Authentication};
+    let anonymous = provider.authentication == Authentication::Rooxcode;
+    let chatgpt_plan = provider.authentication == Authentication::ChatGptPlan;
+    let response = if anonymous {
         crate::engine::rooxcode::send_chat(provider, body, &conversation.rooxcode_session).await?
     } else {
         let mut client = reqwest::Client::builder()
@@ -37,6 +39,8 @@ pub(super) async fn exchange(
         let client = client.build()?;
         let req = if provider.authentication == crate::engine::config::Authentication::Local {
             client.post(url).json(body)
+        } else if chatgpt_plan {
+            chatgpt_request(&client, url, body, &chatgpt::credential().await?)?
         } else {
             let key = if let Some(token) = codex {
                 token.access.clone()
@@ -55,6 +59,9 @@ pub(super) async fn exchange(
         })?;
         let status = response.status();
         if !status.is_success() {
+            if chatgpt_plan {
+                return Err(chatgpt::response_error(response).await);
+            }
             if matches!(status.as_u16(), 400 | 413 | 422)
                 && tokio::time::timeout(Duration::from_secs(2), context_overflow(response))
                     .await
@@ -66,6 +73,18 @@ pub(super) async fn exchange(
         }
         response
     };
+    stream_response(response, provider, tools, out).await
+}
+
+pub(super) async fn stream_response(
+    mut response: reqwest::Response,
+    provider: &Provider,
+    tools: Option<&[Value]>,
+    out: &Sender<Value>,
+) -> Result<Stream> {
+    use crate::engine::{chatgpt, config::Authentication};
+    let anonymous = provider.authentication == Authentication::Rooxcode;
+    let chatgpt_plan = provider.authentication == Authentication::ChatGptPlan;
     let mut decoder = Decoder::default();
     let mut state = Stream::default();
     let mut capacity = Capacity::Pending;
@@ -87,7 +106,9 @@ pub(super) async fn exchange(
                 Frame::Data(data) => data,
             };
             if frame == "[DONE]" {
-                state.done = true;
+                if !chatgpt_plan {
+                    state.done = true;
+                }
                 break 'stream;
             }
             let event: Value =
@@ -111,6 +132,19 @@ pub(super) async fn exchange(
                         }) || choice["finish_reason"].is_string()
                     })
                 });
+            }
+            if chatgpt_plan
+                && (event["error"].is_object()
+                    || matches!(event["type"].as_str(), Some("response.failed" | "error")))
+            {
+                let code = event["response"]["error"]["code"]
+                    .as_str()
+                    .or_else(|| event["code"].as_str())
+                    .or_else(|| event["error"]["code"].as_str());
+                return Err(chatgpt::request_error(reqwest::StatusCode::BAD_REQUEST, code).into());
+            }
+            if chatgpt_plan && event["type"] == "response.done" {
+                continue;
             }
             let delta = state.observe(&provider.api, &event)?;
             if anonymous
@@ -200,4 +234,19 @@ pub(super) fn authenticated_request(
         .header("originator", "hibiscus")
         .header("OpenAI-Beta", "responses=experimental")
         .header("accept", "text/event-stream"))
+}
+
+pub(super) fn chatgpt_request(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+    token: &str,
+) -> Result<reqwest::RequestBuilder> {
+    if url != format!("{}/responses", crate::engine::chatgpt::RESOURCE) {
+        return Err(
+            "Refusing to send ChatGPT plan credentials outside the OpenAI Responses endpoint."
+                .into(),
+        );
+    }
+    Ok(client.post(url).bearer_auth(token).json(body))
 }

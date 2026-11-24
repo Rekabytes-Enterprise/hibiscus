@@ -75,6 +75,17 @@ impl Store {
                 .to_owned(),
         )?))
     }
+    pub(super) fn batch_target(&self, path: &Path) -> Result<(PathBuf, String)> {
+        let target = files::target(&self.workspace, path)?;
+        self.covered(&target)?
+            .ok_or("Batch edits require a checkpointed workspace path")?;
+        let canonical = target.canonicalize()?;
+        let relative = self
+            .covered(&canonical)?
+            .ok_or("Batch edits require a checkpointed workspace path")?;
+        Ok((canonical, relative.0))
+    }
+
     fn load(&self, id: &Id) -> Result<Record> {
         let record: Record = files::json(&self.directory(id).join("record.json"))?;
         record.validate(&self.workspace, id)?;
@@ -169,11 +180,33 @@ impl Store {
         bytes: &[u8],
         expected: Option<&[u8]>,
     ) -> Result<Value> {
+        self.write_file(context, path, bytes, expected, false)
+    }
+    pub(super) fn write_protected(
+        &self,
+        context: &mut Context<'_>,
+        path: &Path,
+        bytes: &[u8],
+        expected: &[u8],
+    ) -> Result<Value> {
+        self.write_file(context, path, bytes, Some(expected), true)
+    }
+    fn write_file(
+        &self,
+        context: &mut Context<'_>,
+        path: &Path,
+        bytes: &[u8],
+        expected: Option<&[u8]>,
+        require_coverage: bool,
+    ) -> Result<Value> {
         if bytes.len() as u64 > MAX_FILE {
             return Err("File exceeds 16 MiB".into());
         }
         let target = files::target(&self.workspace, path)?;
         let relative = self.covered(&target)?;
+        if require_coverage && relative.is_none() {
+            return Err("Batch edits require a checkpointed workspace path".into());
+        }
         let _lock = self.lock()?;
         let (current, original) = files::read(&target)?;
         if expected.is_some_and(|expected| expected != original) {

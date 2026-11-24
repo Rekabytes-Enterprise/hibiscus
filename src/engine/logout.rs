@@ -9,6 +9,9 @@ pub(crate) fn stored() -> Result<Vec<String>> {
     if super::oauth::stored_access_token().is_ok() {
         providers.push("openai-codex".into());
     }
+    if super::chatgpt::has_registration() {
+        providers.push(super::chatgpt::ID.into());
+    }
     if super::reka::account().is_some() {
         providers.push(super::rooxcode::ID.into());
     }
@@ -20,6 +23,9 @@ pub(crate) fn stored() -> Result<Vec<String>> {
 pub(crate) fn remove(provider: &str) -> Result<()> {
     if provider == "openai-codex" {
         return super::oauth::remove();
+    }
+    if provider == super::chatgpt::ID {
+        return super::chatgpt::remove();
     }
     if provider == super::rooxcode::ID {
         return super::reka::sign_out();

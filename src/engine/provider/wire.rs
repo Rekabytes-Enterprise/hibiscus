@@ -219,7 +219,9 @@ pub(in crate::engine) fn request_body(
         // The client reserves output space without overriding that default.
         body.as_object_mut().unwrap().remove("max_tokens");
     }
-    if model.max_tokens == 0 {
+    if model.max_tokens == 0
+        || provider.authentication == crate::engine::config::Authentication::ChatGptPlan
+    {
         // Discovered catalog models: the provider applies its own output limit.
         let body = body.as_object_mut().unwrap();
         body.remove("max_tokens");

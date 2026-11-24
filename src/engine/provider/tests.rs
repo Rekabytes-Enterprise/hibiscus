@@ -235,3 +235,127 @@ fn content_filter_and_missing_finish_reason_are_errors() {
         .to_string();
     assert!(error.contains("truncated or incomplete"), "{error}");
 }
+
+fn chatgpt_provider() -> Provider {
+    use crate::engine::{chatgpt, config::Authentication};
+    Provider {
+        id: chatgpt::ID.into(),
+        base_url: chatgpt::RESOURCE.into(),
+        api: Api::Responses,
+        authentication: Authentication::ChatGptPlan,
+        discover_models: false,
+        api_key_env: None,
+        models: vec![],
+    }
+}
+
+#[test]
+fn chatgpt_plan_uses_the_public_responses_endpoint_without_codex_headers() {
+    let provider = chatgpt_provider();
+    let client = reqwest::Client::new();
+    let body = json!({"model":"fixture","input":[],"store":false,"stream":true});
+    for url in [
+        "https://example.org/responses",
+        "https://chatgpt.com/backend-api/codex/responses",
+        "https://api.openai.com/v1/responses?unexpected=true",
+    ] {
+        assert!(http::chatgpt_request(&client, url, &body, "fixture-token").is_err());
+    }
+    let request = http::chatgpt_request(
+        &client,
+        &format!("{}/responses", provider.base_url),
+        &body,
+        "fixture-token",
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+    assert_eq!(request.headers()["authorization"], "Bearer fixture-token");
+    for header in ["chatgpt-account-id", "originator", "openai-beta"] {
+        assert!(!request.headers().contains_key(header));
+    }
+}
+
+#[tokio::test]
+async fn chatgpt_plan_requires_completed_stream_and_surfaces_structured_limit() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let completed = json!({"type":"response.completed","response":{"status":"completed","output":[
+        {"type":"function_call","call_id":"fixture-call","name":"read","arguments":"{}"}
+    ]}});
+    let limited = json!({"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}});
+    for (events, expected) in [
+        (format!("data: {completed}\n\n"), None),
+        (
+            "data: [DONE]\n\n".to_owned(),
+            Some("before its completion event"),
+        ),
+        (
+            format!("data: {limited}\n\n"),
+            Some("ChatGPT plan usage limit"),
+        ),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+            }
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{events}", events.len());
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let response = reqwest::get(url).await.unwrap();
+        let (out, _receiver) = tokio::sync::mpsc::channel(4);
+        let stream = http::stream_response(response, &chatgpt_provider(), None, &out).await;
+        if let Some(expected) = expected {
+            let error = stream.err().expect("stream should fail");
+            assert!(error.to_string().contains(expected), "{error}");
+        } else {
+            let reply = stream.unwrap().reply(&Api::Responses).unwrap();
+            assert!(matches!(reply.message, Message::Assistant {content, ..}
+                if matches!(content.first(), Some(Block::ToolCall { .. }))));
+        }
+        server.await.unwrap();
+    }
+}
+
+#[test]
+fn chatgpt_plan_body_streams_explicit_history_without_a_storage_or_output_limit_request() {
+    let provider = chatgpt_provider();
+    let model: Model =
+        serde_json::from_value(json!({"id":"fixture-model","maxTokens":4096})).unwrap();
+    let session = crate::engine::session::Session {
+        id: "fixture".into(),
+        kind: crate::engine::session::SessionKind::Chat,
+        rooxcode_session: crate::engine::rooxcode::SessionId::new().unwrap(),
+        path: Default::default(),
+        cwd: Default::default(),
+        model: Some((provider.id.clone(), model.id.clone())),
+        thinking: "off".into(),
+        messages: vec![Message::User {
+            content: vec![Block::Text {
+                text: "Hello".into(),
+            }],
+        }],
+        steps: vec![],
+        usage: Value::Null,
+        context: None,
+        name: None,
+    };
+    let (route, body) = request_body(
+        &provider,
+        &model,
+        &session,
+        "You are Hibi",
+        "off",
+        Some(&[]),
+    );
+    assert_eq!(route, "responses");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["instructions"], "You are Hibi");
+    assert_eq!(body["input"][0]["role"], "user");
+    assert!(body.get("max_output_tokens").is_none());
+    assert!(body.get("previous_response_id").is_none());
+}

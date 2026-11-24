@@ -345,7 +345,7 @@ pub(super) fn exchange<F: BufRead, W: ScrollDisplay>(
                     } else {
                         "✓ done"
                     };
-                    let diff = (matches!(name, "edit" | "checkpoint_diff")
+                    let diff = (matches!(name, "edit" | "batch_edit" | "checkpoint_diff")
                         && event["isError"] != true)
                         .then(|| event["result"]["details"]["diff"].as_str())
                         .flatten();

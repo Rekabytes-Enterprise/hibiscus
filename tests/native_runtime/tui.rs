@@ -196,11 +196,13 @@ fn browser_login_menu_cancels_locally_without_starting_auth() {
     tty.wait_text("Sign in to Hibiscus");
     tty.send(b"\r");
     tty.wait_text("Codex · ChatGPT account");
+    tty.wait_text("Continue with ChatGPT · Hibiscus");
     tty.send(b"\x1b");
     tty.wait_text("Enter send");
     tty.send(b"/quit\r");
     let _ = tty.finish();
     assert!(!f.root.join("app/codex-auth.json").exists());
+    assert!(!f.root.join("app/chatgpt-plan-auth.json").exists());
     assert!(f.captured().is_empty());
 }
 

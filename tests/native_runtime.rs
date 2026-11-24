@@ -371,7 +371,8 @@ fn grouping_independent_edits_keeps_the_same_result_with_fewer_provider_requests
             .collect();
         let mut replies = vec![calls(reads)];
         if grouped {
-            replies.push(calls(edits));
+            let edits: Vec<_> = edits.into_iter().map(|(_, args)| args).collect();
+            replies.push(calls(vec![("batch_edit", json!({"edits":edits}))]));
         } else {
             replies.extend(edits.into_iter().map(|edit| calls(vec![edit])));
         }
@@ -393,6 +394,15 @@ fn grouping_independent_edits_keeps_the_same_result_with_fewer_provider_requests
         ));
 
         let requests = fixture.captured();
+        assert!(requests[0]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Prefer one batch_edit call"));
+        assert!(requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "batch_edit"));
         assert_eq!(
             requests[0]["instructions"]
                 .as_str()
@@ -403,7 +413,7 @@ fn grouping_independent_edits_keeps_the_same_result_with_fewer_provider_requests
         assert_eq!(
             requests[1]["input"]
                 .to_string()
-                .contains("emit the independent"),
+                .contains("Once two or more replacements are ready"),
             grouped
         );
         assert!(requests.last().unwrap()["input"]

@@ -10,7 +10,7 @@ export type SavedSession = { path: string; title: string; modified: number; kind
 export type ProviderInfo = {
   id: string;
   apiKey: boolean;
-  /** Signs in through the browser (Codex). */
+  /** Signs in through the browser. */
   browser: boolean;
   signedIn: boolean;
   keyPage: string | null;
@@ -136,8 +136,8 @@ export const removeLocalProvider = (id: string) => invoke<void>("remove_local_pr
 /** Whether OpenRouter requests ask for providers that don't store or train on prompts. */
 export const trainingDenied = () => invoke<boolean>("training_denied");
 export const setTrainingDenied = (deny: boolean) => invoke<void>("set_training_denied", { deny });
-/** Opens the Codex sign-in page; returns its link. Watch `onCodexLogin` for the result. */
-export const codexStart = () => invoke<string>("codex_start");
+/** Opens the provider sign-in page; returns its link. Watch `onCodexLogin` for the result. */
+export const codexStart = (provider: string) => invoke<string>("codex_start", { provider });
 export const codexPaste = (url: string) => invoke<void>("codex_paste", { url });
 export const codexCancel = () => invoke<void>("codex_cancel");
 /** `null` once signed in, else the error. */
