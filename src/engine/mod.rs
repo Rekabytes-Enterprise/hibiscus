@@ -5,6 +5,7 @@ pub(crate) mod auth;
 mod batch_edit;
 mod capped;
 pub(crate) mod catalog;
+pub(crate) mod chatgpt;
 pub(crate) mod config;
 mod context;
 pub(crate) mod elevenlabs_auth;

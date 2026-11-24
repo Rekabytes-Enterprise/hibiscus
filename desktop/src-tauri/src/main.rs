@@ -3,7 +3,7 @@
 //! Thin glue between the window and `hibiscus::desktop`. The engine runs in
 //! this process on its own thread; the frontend only sees JSON records.
 
-use hibiscus::desktop::{self, CodexSignIn, Engine, RekaSignIn, Start};
+use hibiscus::desktop::{self, ChatGptSignIn, CodexSignIn, Engine, RekaSignIn, Start};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -441,21 +441,45 @@ impl Codex {
     }
 }
 
-/// Opens the Codex sign-in page and returns its link. The result arrives as a
-/// `codex-login` event: `null` once signed in, else the error.
+/// Starts a provider's browser sign-in. The result arrives through the login event.
 #[tauri::command]
-async fn codex_start(app: AppHandle, codex: State<'_, Codex>) -> Result<String, String> {
+async fn codex_start(
+    app: AppHandle,
+    codex: State<'_, Codex>,
+    provider: String,
+) -> Result<String, String> {
     codex.cancel();
-    let sign_in = CodexSignIn::start().map_err(|e| e.to_string())?;
-    let url = sign_in.url().to_owned();
-    let paste = sign_in.paste();
-    let done = app.clone();
+    match provider.as_str() {
+        "openai-codex" => {
+            let flow = CodexSignIn::start().map_err(|e| e.to_string())?;
+            start_browser_login(&app, &codex, flow.url().into(), flow.paste(), async move {
+                flow.finish().await.map_err(|e| e.to_string())
+            })
+        }
+        "openai-chatgpt" => {
+            let flow = ChatGptSignIn::start().map_err(|e| e.to_string())?;
+            start_browser_login(&app, &codex, flow.url().into(), flow.paste(), async move {
+                flow.finish().await.map_err(|e| e.to_string())
+            })
+        }
+        _ => Err("Unknown browser sign-in provider.".into()),
+    }
+}
+
+fn start_browser_login(
+    app: &AppHandle,
+    pending: &Codex,
+    url: String,
+    paste: tauri::async_runtime::Sender<String>,
+    finish: impl std::future::Future<Output = Result<(), String>> + Send + 'static,
+) -> Result<String, String> {
+    // Keep the URL available for manual opening if the system browser fails.
+    let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
+    let app = app.clone();
     let task = tauri::async_runtime::spawn(async move {
-        let error = sign_in.finish().await.err().map(|e| e.to_string());
-        let _ = done.emit("codex-login", error);
+        let _ = app.emit("codex-login", finish.await.err());
     });
-    *codex.0.lock().unwrap() = Some((paste, task));
-    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| e.to_string())?;
+    *pending.0.lock().unwrap() = Some((paste, task));
     Ok(url)
 }
 
@@ -468,9 +492,9 @@ async fn codex_paste(codex: State<'_, Codex>, url: String) -> Result<(), String>
         .as_ref()
         .map(|(paste, _)| paste.clone());
     paste
-        .ok_or("No Codex sign-in is waiting.")?
+        .ok_or("No provider sign-in is waiting.")?
         .try_send(url)
-        .map_err(|_| "Codex sign-in is no longer waiting for a link.".into())
+        .map_err(|_| "Provider sign-in is no longer waiting for a link.".into())
 }
 
 #[tauri::command]

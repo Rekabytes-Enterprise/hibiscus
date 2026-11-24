@@ -16,6 +16,7 @@ pub enum Authentication {
     #[default]
     ApiKey,
     Codex,
+    ChatGptPlan,
     Rooxcode,
     Local,
 }
@@ -147,11 +148,27 @@ fn parse(raw: serde_json::Value) -> Result<Config> {
         });
         config.discovered.insert("openai-codex".into());
     }
+    if !config.providers.iter().any(|p| p.id == super::chatgpt::ID) {
+        config.providers.push(Provider {
+            id: super::chatgpt::ID.into(),
+            base_url: super::chatgpt::RESOURCE.into(),
+            api: Api::Responses,
+            authentication: Authentication::ChatGptPlan,
+            discover_models: false,
+            api_key_env: None,
+            models: vec![],
+        });
+    }
+    config.discovered.insert(super::chatgpt::ID.into());
     super::rooxcode::install(&mut config);
     super::catalog::install(&mut config);
     let mut ids = std::collections::HashSet::new();
     for p in &mut config.providers {
         super::rooxcode::validate_provider(p)?;
+        super::chatgpt::validate_provider(p)?;
+        if p.authentication == Authentication::ChatGptPlan && !p.models.is_empty() {
+            return Err("ChatGPT plan models come from the signed-in account catalog.".into());
+        }
         if (p.authentication == Authentication::Codex || p.id == "openai-codex")
             && (p.id != "openai-codex"
                 || p.authentication != Authentication::Codex
@@ -348,6 +365,9 @@ pub fn key(provider: &Provider) -> Result<String> {
     if provider.authentication == Authentication::Codex {
         return super::oauth::stored_access_token();
     }
+    if provider.authentication == Authentication::ChatGptPlan {
+        return Err("ChatGPT plan credentials require the dedicated Responses connection.".into());
+    }
     if provider.authentication == Authentication::Local {
         return Err("This local server does not use provider credentials.".into());
     }
@@ -366,6 +386,8 @@ pub fn key(provider: &Provider) -> Result<String> {
 pub fn access(provider: &Provider) -> Result<()> {
     if provider.authentication == Authentication::Rooxcode {
         super::rooxcode::validate_provider(provider)
+    } else if provider.authentication == Authentication::ChatGptPlan {
+        super::chatgpt::access()
     } else if provider.authentication == Authentication::Local {
         Ok(())
     } else {
@@ -400,5 +422,31 @@ mod private_tests {
         ] {
             assert!(!private(u), "{u}");
         }
+    }
+}
+
+#[cfg(test)]
+mod chatgpt_plan_tests {
+    use super::*;
+
+    #[test]
+    fn chatgpt_plan_has_a_fixed_inference_endpoint_and_no_static_catalog() {
+        let config = parse(serde_json::json!({})).unwrap();
+        let provider = config
+            .providers
+            .iter()
+            .find(|p| p.id == super::super::chatgpt::ID)
+            .unwrap();
+        assert_eq!(provider.base_url, super::super::chatgpt::RESOURCE);
+        assert!(provider.models.is_empty());
+        assert!(config.discovered.contains(&provider.id));
+        assert!(key(provider).is_err());
+
+        let mut changed = provider.clone();
+        changed.base_url = "https://example.org/v1".into();
+        assert!(parse(serde_json::json!({"providers":[changed]})).is_err());
+        let mut changed = provider.clone();
+        changed.api_key_env = Some("OPENAI_API_KEY".into());
+        assert!(parse(serde_json::json!({"providers":[changed]})).is_err());
     }
 }

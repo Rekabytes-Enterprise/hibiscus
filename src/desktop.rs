@@ -334,12 +334,52 @@ pub fn delete_session(path: &Path) -> Result<()> {
     crate::engine::session::delete_saved(path)
 }
 
+/// One pending browser sign-in for the ChatGPT plan provider.
+pub struct ChatGptSignIn {
+    flow: crate::engine::chatgpt::BrowserSignIn,
+    paste: tokio::sync::mpsc::Sender<String>,
+    pasted: tokio::sync::mpsc::Receiver<String>,
+}
+
+impl ChatGptSignIn {
+    pub fn start() -> Result<Self> {
+        let flow = crate::engine::chatgpt::BrowserSignIn::start()?;
+        let (paste, pasted) = tokio::sync::mpsc::channel(1);
+        Ok(Self {
+            flow,
+            paste,
+            pasted,
+        })
+    }
+
+    pub fn url(&self) -> &str {
+        self.flow.url()
+    }
+
+    pub fn paste(&self) -> tokio::sync::mpsc::Sender<String> {
+        self.paste.clone()
+    }
+
+    pub async fn finish(self) -> Result<()> {
+        let Self {
+            flow,
+            paste: _paste,
+            pasted,
+        } = self;
+        let registration =
+            tokio::time::timeout(std::time::Duration::from_secs(600), flow.complete(pasted))
+                .await
+                .map_err(|_| "ChatGPT sign-in timed out. Try again.")??;
+        crate::engine::chatgpt::save(&registration)
+    }
+}
+
 /// A configured provider, for the login screen.
 pub struct ProviderInfo {
     pub id: String,
     /// Signs in with an API key (other providers use their own flow).
     pub api_key: bool,
-    /// Signs in through the browser with `CodexSignIn`.
+    /// Signs in with a native browser OAuth flow.
     pub browser: bool,
     pub signed_in: bool,
     pub key_page: Option<&'static str>,
@@ -356,7 +396,10 @@ pub fn providers() -> Result<Vec<ProviderInfo>> {
         .map(|p| ProviderInfo {
             id: p.id.clone(),
             api_key: p.authentication == config::Authentication::ApiKey,
-            browser: p.authentication == config::Authentication::Codex,
+            browser: matches!(
+                p.authentication,
+                config::Authentication::Codex | config::Authentication::ChatGptPlan
+            ),
             signed_in: config::access(p).is_ok(),
             key_page: key_page(&p.id),
             local: matches!(

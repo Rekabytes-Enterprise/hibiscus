@@ -338,6 +338,8 @@ impl Session {
             .find(|v| &v.id == m)
             .ok_or(if p == super::rooxcode::ID {
                 "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly."
+            } else if p == super::chatgpt::ID {
+                "The selected ChatGPT model is unavailable. Sign in with ChatGPT or open /models to refresh and choose a model."
             } else if provider.discover_models {
                 "The selected local model is unavailable. Check the local server or open /models to choose another model."
             } else if super::catalog::discovered(config, p) {
@@ -353,8 +355,9 @@ impl Session {
             .ok()
             .filter(|(p, _)| config::access(p).is_ok())
             .map(|(p, m)| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window}));
-        let has_credentials = config.providers.iter().any(|p| {
-            p.authentication != config::Authentication::Rooxcode && config::key(p).is_ok()
+        let has_credentials = config.providers.iter().any(|p| match p.authentication {
+            config::Authentication::Rooxcode | config::Authentication::Local => false,
+            _ => config::access(p).is_ok(),
         });
         let has_access = config
             .providers

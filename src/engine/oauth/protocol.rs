@@ -45,8 +45,8 @@ pub(in crate::engine) fn random() -> Result<String> {
         .map_err(|_| "Cannot obtain secure randomness for sign-in")?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
-/// A browser sign-in waiting for its loopback callback. Codex and Reka Bytes
-/// (engine/reka.rs) share it; `label` names the service in errors.
+/// A browser sign-in waiting for its loopback callback.
+/// The label names the service in errors.
 pub(in crate::engine) struct Pending {
     listener: std::net::TcpListener,
     pub(in crate::engine) state: String,
@@ -55,7 +55,7 @@ pub(in crate::engine) struct Pending {
     label: &'static str,
 }
 enum Callback {
-    Code(String),
+    Code(String, Option<String>),
     Denied,
 }
 impl Pending {
@@ -104,9 +104,10 @@ impl Pending {
         ]);
         Ok(url)
     }
+    #[cfg(test)]
     fn code(&self, input: &str) -> Result<String> {
         match self.callback(input)? {
-            Callback::Code(code) => Ok(code),
+            Callback::Code(code, _) => Ok(code),
             Callback::Denied => Err(self.denied()),
         }
     }
@@ -129,7 +130,13 @@ impl Pending {
         exchange(endpoints, &code, &self.verifier, &self.redirect).await
     }
     /// The authorization code from the browser callback or a pasted redirect URL.
-    pub(in crate::engine) async fn wait(&self, mut manual: Receiver<String>) -> Result<String> {
+    pub(in crate::engine) async fn wait(&self, manual: Receiver<String>) -> Result<String> {
+        self.wait_registration(manual).await.map(|(code, _)| code)
+    }
+    pub(in crate::engine) async fn wait_registration(
+        &self,
+        mut manual: Receiver<String>,
+    ) -> Result<(String, Option<String>)> {
         let listener = self.listener.try_clone()?;
         // tokio needs a nonblocking socket, and on Windows a duplicated
         // socket doesn't keep the original's nonblocking mode.
@@ -140,7 +147,12 @@ impl Pending {
         let prefix = format!("{path}?");
         Ok(loop {
             tokio::select! {
-                answer = manual.recv() => break self.code(&answer.ok_or("Sign-in input closed")?)?,
+                answer = manual.recv() => {
+                    match self.callback(&answer.ok_or("Sign-in input closed")?)? {
+                        Callback::Code(code, client) => break (code, client),
+                        Callback::Denied => return Err(self.denied()),
+                    }
+                },
                 accepted = listener.accept() => {
                     let (mut socket, peer) = accepted?;
                     if !peer.ip().is_loopback() { continue; }
@@ -166,7 +178,7 @@ impl Pending {
                     let reply = format!("HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{text}",text.len());
                     let _ = tokio::time::timeout(Duration::from_secs(1),socket.write_all(reply.as_bytes())).await;
                     match code {
-                        Some(Callback::Code(code)) => break code,
+                        Some(Callback::Code(code, client)) => break (code, client),
                         Some(Callback::Denied) => return Err(self.denied()),
                         None => {},
                     }
@@ -319,7 +331,7 @@ fn callback(input: &str, redirect: &str, state: &str, label: &str) -> Result<Cal
     params
         .remove("code")
         .filter(|s| !s.is_empty() && s.len() <= 8192 && !s.chars().any(char::is_control))
-        .map(Callback::Code)
+        .map(|code| Callback::Code(code, params.remove("client_id")))
         .ok_or_else(|| format!("Missing {label} authorization code").into())
 }
 
@@ -329,7 +341,7 @@ pub(super) fn fuzz_callback(bytes: &[u8]) {
         let _ = callback(input, REDIRECT, "fuzz-state", "Codex");
         if matches!(
             callback(input, REDIRECT, "fuzz-state", "Codex"),
-            Ok(Callback::Code(_))
+            Ok(Callback::Code(..))
         ) {
             assert!(callback(input, REDIRECT, "different-state", "Codex").is_err());
         }

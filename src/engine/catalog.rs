@@ -93,6 +93,9 @@ pub(super) async fn refresh(config: &mut Config) -> Vec<String> {
             let job = if p.authentication == Authentication::Codex {
                 super::oauth::stored_access_token().ok()?;
                 tokio::spawn(fetch_codex(config.codex_version.clone()))
+            } else if p.authentication == Authentication::ChatGptPlan {
+                super::chatgpt::access().ok()?;
+                tokio::spawn(async { fetch_chatgpt().await.map(|models| (models, None)) })
             } else if p.discover_models {
                 let key = if p.authentication == Authentication::Local {
                     None
@@ -196,6 +199,25 @@ async fn body(mut response: reqwest::Response, failed: impl Fn() -> String) -> R
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+async fn fetch_chatgpt() -> Result<Vec<Model>> {
+    let token = super::chatgpt::credential().await?;
+    let response = client()?
+        .get(format!("{}/models", super::chatgpt::RESOURCE))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| "Could not reach the ChatGPT plan model catalog.")?;
+    if !response.status().is_success() {
+        return Err(super::chatgpt::request_error(response.status(), None).into());
+    }
+    parse_codex(
+        &body(response, || {
+            "Could not read the ChatGPT plan model catalog.".into()
+        })
+        .await?,
+    )
 }
 
 /// The models the signed-in Codex plan offers. Only ever sent to the fixed Codex endpoint.

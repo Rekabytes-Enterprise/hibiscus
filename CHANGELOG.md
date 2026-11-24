@@ -4,6 +4,13 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-11-24
+
+### Added
+
+- Add **Continue with ChatGPT** in desktop provider settings and terminal `/login`. Eligible accounts can authorize Hibiscus as a connected app, select models from their account’s catalog, and manage the app’s limits in ChatGPT.
+- Hibi now defaults to one native batch edit for independent replacements in existing files. It checks every replacement before writing, saves each changed file once under the turn's checkpoint, and shows one expandable edit with per-file diffs in Desktop.
+
 ## [0.4.10] - 2026-11-23
 
 ### Added

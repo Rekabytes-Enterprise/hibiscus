@@ -30,8 +30,8 @@
   let key = $state("");
   let error = $state<string | null>(null);
   let saving = $state(false);
-  /** The Codex sign-in in progress: its link, and a pasted redirect URL. */
-  let browser = $state<{ url: string; pasted: string; sent: boolean } | null>(null);
+  /** The provider sign-in in progress: its link, and a pasted redirect URL. */
+  let browser = $state<{ provider: string; url: string; pasted: string; sent: boolean } | null>(null);
   let copied = $state(false);
 
   const message = (e: unknown) => String(e instanceof Error ? e.message : e);
@@ -83,13 +83,16 @@
     }
   }
 
-  async function startBrowser() {
+  async function startBrowser(provider: string) {
     error = null;
     chosen = null;
     copied = false;
+    browser = { provider, url: "", pasted: "", sent: false };
     try {
-      browser = { url: await codexStart(), pasted: "", sent: false };
+      const url = await codexStart(provider);
+      if (browser?.provider === provider) browser.url = url;
     } catch (e) {
+      browser = null;
       error = message(e);
     }
   }
@@ -215,7 +218,7 @@
     <li>
       <div class="provider">
         <Icon name={p.local ? "server" : "key"} />
-        <span class="grow">{p.id}{#if p.local}<span class="muted small"> · Local AI</span>{/if}</span>
+        <span class="grow">{p.id === "openai-chatgpt" ? "ChatGPT plan" : p.id}{#if p.local}<span class="muted small"> · Local AI</span>{/if}</span>
         {#if p.local}
           <button onclick={() => remove(p)}>Remove</button>
         {:else}
@@ -229,13 +232,18 @@
             {p.signedIn ? "Replace key" : "Add key"}
           </button>
         {:else if !p.signedIn && !browser}
-          <button onclick={startBrowser}>Sign in</button>
+          <button onclick={() => startBrowser(p.id)}>
+            {p.id === "openai-chatgpt" ? "Continue with ChatGPT" : "Sign in"}
+          </button>
         {/if}
       </div>
-      {#if p.browser && browser}
+      {#if p.id === "openai-chatgpt" && p.signedIn}
+        <button class="link small" onclick={() => openUrl("https://chatgpt.com/settings/usage")}>Manage usage</button>
+      {/if}
+      {#if browser?.provider === p.id && browser.url}
         <form onsubmit={(e) => { e.preventDefault(); paste(); }}>
           <p class="small">{browser.sent ? "Finishing sign-in…" : "Waiting for the browser. Finish signing in there."}</p>
-          <input aria-label="Redirect URL" type="text" autocomplete="off" spellcheck="false" placeholder="If the browser can't reach Hibiscus, paste the URL it ended on" bind:value={browser.pasted} disabled={browser.sent} />
+          <input aria-label="Redirect URL" type="password" autocomplete="off" spellcheck="false" placeholder="If the browser can't reach Hibiscus, paste the URL it ended on" bind:value={browser.pasted} disabled={browser.sent} />
           <div class="actions">
             <button type="button" class="link small" onclick={copy}>{copied ? "Link copied" : "Copy sign-in link"}</button>
             <span class="grow"></span>
