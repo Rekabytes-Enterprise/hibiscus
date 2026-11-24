@@ -118,7 +118,8 @@ fn estimate_tokens(value: &mut Value) -> Result<u64> {
         + image_tokens)
 }
 
-/// Small-window models share a step budget. Large-window and Rooxcode models
+/// Small-window models share an output budget across tool calls in one reply.
+/// Large-window and Rooxcode models
 /// retain the existing per-tool limits.
 pub(super) fn tool_output_budget(p: &Provider, m: &Model) -> Option<usize> {
     let window = m.context_window?;

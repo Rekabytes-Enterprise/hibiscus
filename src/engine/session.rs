@@ -197,55 +197,48 @@ impl Session {
             SessionStart::New | SessionStart::Canvas => None,
         };
         if let Some(path) = path {
-            return Self::load(path, &cwd, config);
+            return Self::load(path, cwd);
         }
-        let id = format!("{:x}", config::unique());
-        let selected = config.model.clone();
-        let model = selected
-            .map(|s| {
-                s.split_once('/')
-                    .map(|(p, m)| (p.to_owned(), m.to_owned()))
+        let kind = if matches!(start, SessionStart::Canvas) {
+            SessionKind::Canvas
+        } else {
+            SessionKind::Chat
+        };
+        let mut session = Self::empty(cwd, kind)?;
+        session.model = config
+            .model
+            .as_deref()
+            .map(|selection| {
+                selection
+                    .split_once('/')
+                    .map(|(provider, model)| (provider.to_owned(), model.to_owned()))
                     .ok_or("model must be provider/model")
             })
             .transpose()?;
-        let session = Self {
-            kind: if matches!(start, SessionStart::Canvas) {
-                SessionKind::Canvas
-            } else {
-                SessionKind::Chat
-            },
-            id: id.clone(),
+        if kind == SessionKind::Canvas {
+            session.save()?;
+        }
+        Ok(session)
+    }
+    fn empty(cwd: PathBuf, kind: SessionKind) -> Result<Self> {
+        let id = format!("{:x}", config::unique());
+        let path = sessions_dir()?.join(format!("{id}.jsonl"));
+        Ok(Self {
+            kind,
+            id,
             rooxcode_session: super::rooxcode::SessionId::new()?,
-            path: crate::paths::home()?
-                .join("sessions")
-                .join(format!("{id}.jsonl")),
+            path,
             cwd,
-            model,
+            model: None,
             thinking: "off".into(),
             messages: vec![],
             steps: vec![],
             usage: json!({"input":0,"output":0,"cacheRead":0}),
             context: None,
             name: None,
-        };
-        if session
-            .model
-            .as_ref()
-            // Rooxcode and catalog providers load their models after the session opens.
-            .is_some_and(|(p, _)| {
-                p != super::rooxcode::ID
-                    && p != config::RETIRED_CODEX_ID
-                    && !super::catalog::discovered(config, p)
-            })
-        {
-            session.selected(config)?;
-        }
-        if session.kind == SessionKind::Canvas {
-            session.save()?;
-        }
-        Ok(session)
+        })
     }
-    fn load(path: PathBuf, cwd: &std::path::Path, config: &Config) -> Result<Self> {
+    fn load(path: PathBuf, cwd: PathBuf) -> Result<Self> {
         let file = fs::File::open(&path)?;
         if file.metadata()?.len() > 128 * 1024 * 1024 {
             return Err("Session exceeds 128 MiB".into());
@@ -258,8 +251,10 @@ impl Session {
         {
             return Err("Not a supported Hibiscus session for this workspace. Original sessions are never modified.".into());
         }
-        let mut session = Self::open(&SessionStart::New, cwd, config)?;
-        session.kind = kind_from_header(&head, &path)?;
+        // A saved conversation can be opened regardless of its model selection.
+        // Keep the saved selection so no other provider is picked implicitly.
+        let kind = kind_from_header(&head, &path)?;
+        let mut session = Self::empty(cwd, kind)?;
         session.path = path;
         session.id = head["id"].as_str().ok_or("Invalid session ID")?.into();
         if let Some(value) = head.get("rooxcodeSession") {
@@ -279,18 +274,6 @@ impl Session {
                     .messages
                     .push(serde_json::from_value(value["message"].clone())?);
             }
-        }
-        if session
-            .model
-            .as_ref()
-            // Rooxcode and catalog providers load their models after the session opens.
-            .is_some_and(|(p, _)| {
-                p != super::rooxcode::ID
-                    && p != config::RETIRED_CODEX_ID
-                    && !super::catalog::discovered(config, p)
-            })
-        {
-            session.selected(config)?;
         }
         let mut pending = std::collections::BTreeMap::<String, String>::new();
         for message in &session.messages {
@@ -338,28 +321,32 @@ impl Session {
             .providers
             .iter()
             .find(|v| &v.id == p)
-            .ok_or("Session provider is no longer configured")?;
+            .ok_or_else(|| {
+                format!(
+                    "Provider {p:?} is no longer configured. Choose another model with /models."
+                )
+            })?;
         let model = provider
             .models
             .iter()
             .find(|v| &v.id == m)
-            .ok_or(if p == super::rooxcode::ID {
-                "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly."
+            .ok_or_else(|| if p == super::rooxcode::ID {
+                "Rooxcode selected model is unavailable. Open /models to refresh and choose explicitly.".to_owned()
             } else if p == super::chatgpt::ID {
-                "The selected ChatGPT model is unavailable. Sign in with ChatGPT or open /models to refresh and choose a model."
+                "The selected ChatGPT model is unavailable. Sign in with ChatGPT or open /models to refresh and choose a model.".to_owned()
             } else if provider.discover_models {
-                "The selected local model is unavailable. Check the local server or open /models to choose another model."
+                "The selected local model is unavailable. Check the local server or open /models to choose another model.".to_owned()
             } else if super::catalog::discovered(config, p) {
-                "The selected model is not in the provider's model list. Use /login to add its API key, or open /models to choose another."
+                "The selected model is not in the provider's model list. Use /login to add its API key, or open /models to choose another.".to_owned()
             } else {
-                "Session model is no longer configured"
+                format!("Model {m:?} from {p:?} is no longer configured. Choose another model with /models.")
             })?;
         Ok((provider, model))
     }
     pub fn state(&self, config: &Config) -> Value {
-        let model = self
-            .selected(config)
-            .ok()
+        let selected = self.selected(config).ok();
+        let model_selection_unavailable = self.model.is_some() && selected.is_none();
+        let model = selected
             .filter(|(p, _)| config::access(p).is_ok())
             .map(|(p, m)| json!({"provider":p.id,"id":m.id,"contextWindow":m.context_window}));
         let has_credentials = config.providers.iter().any(|p| match p.authentication {
@@ -380,7 +367,7 @@ impl Session {
         } else {
             &self.thinking
         };
-        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"sessionKind":self.kind,"model":model,"thinkingLevel":thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
+        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"sessionKind":self.kind,"model":model,"modelSelectionUnavailable":model_selection_unavailable,"thinkingLevel":thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
     }
     /// Call only after authoritative discovery or an explicit model change.
     pub fn reconcile_rooxcode_thinking(&mut self, config: &Config) -> bool {

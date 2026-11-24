@@ -44,7 +44,6 @@ fn retired_context_setting_preserves_native_provider_and_saved_key() {
     let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     config["codexContextWindow"] = json!(1_000_000);
     config["providers"][0]["apiKeyEnv"] = Value::Null;
-    config["maxSteps"] = json!(7);
     config["customSetting"] = json!({"preserved":true});
     let before = serde_json::to_vec_pretty(&config).unwrap();
     fs::write(&path, &before).unwrap();
@@ -71,7 +70,6 @@ fn retired_context_setting_preserves_native_provider_and_saved_key() {
 #[test]
 fn retired_context_setting_does_not_mask_invalid_native_configuration() {
     for config in [
-        "{\"codexContextWindow\":1000000,\"maxSteps\":0}",
         "{\"codexContextWindow\":1000000,\"providers\":null}",
         "{\"codexContextWindow\":1000000,\"providers\":[{\"id\":\"bad\",\"api\":\"responses\",\"baseUrl\":\"http://example.com/v1\"}]}",
         "{\"codexContextWindow\":1000000,",

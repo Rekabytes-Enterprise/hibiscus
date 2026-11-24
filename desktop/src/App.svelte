@@ -530,7 +530,7 @@
     await Promise.all([
       request({ type: "get_state" }).then(async (state) => {
         model = state.model;
-        if (!model) void pickModel(state.sessionFile);
+        if (!model && !state.modelSelectionUnavailable) void pickModel(state.sessionFile);
         hasAccess = state.hasAccess;
         thinking = state.thinkingLevel;
         sessionKind = state.sessionKind === "canvas" ? "canvas" : "chat";

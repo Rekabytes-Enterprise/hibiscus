@@ -58,11 +58,17 @@ class SpecTests(unittest.TestCase):
         source = self.path.read_text()
         for text in (source.replace('"formatVersion": 1', '"formatVersion": 1, "formatVersion": 1'),
                      source.replace('"repetitions": 2', '"repetitions": true'),
-                     source.replace('"maxSteps": 8', '"maxSteps": 0'),
+                     source.replace('"timeoutSeconds": 20', '"timeoutSeconds": 0'),
                      source.replace('"mode": "offline"', '"mode": "offline", "extra": 1')):
             self.path.write_text(text)
             with self.assertRaises(InvalidSpec):
                 load_plan(self.path)
+
+    def test_legacy_step_limit_is_ignored(self):
+        data = json.loads(self.path.read_text())
+        data["limits"]["maxSteps"] = 2
+        self.path.write_text(json.dumps(data))
+        self.assertNotIn("maxSteps", load_plan(self.path).limits)
 
     def test_manifest_paths_cannot_escape_and_inventory_rejects_symlinks(self):
         self.change("suite", "../other.json")
@@ -289,14 +295,6 @@ class FlowTests(unittest.TestCase):
         status = subprocess.run(["/bin/ps", "-o", "stat=", "-p", pidfile.read_text().strip()],
                                 capture_output=True, text=True, timeout=5).stdout.strip()
         self.assertTrue(not status or status.startswith("Z"), status)
-
-    def test_max_steps_stays_in_denominator_and_partial_usage_is_retained(self):
-        plan = replace(self.plan, limits={**self.plan.limits, "maxSteps": 2})
-        result = self.case(plan=plan)
-        self.assertFalse(result["solved"])
-        self.assertEqual(result["execution"]["error"], "nonzero_exit")
-        self.assertEqual(result["tokens"]["input"], 40)
-        self.assertTrue(result["tools"])
 
     def test_timeout_kills_shell_descendants_and_does_not_hang(self):
         root = self.root / "timeout"

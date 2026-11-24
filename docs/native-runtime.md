@@ -96,7 +96,6 @@ For other providers, optionally create `~/.hibiscus/config.json`, or the equival
 ```json
 {
   "model": "openai/gpt-4.1",
-  "maxSteps": 64,
   "providers": [
     {
       "id": "openai",
@@ -140,7 +139,7 @@ Hibiscus reads `privacy.json` on every request, so no restart is needed.
 
 Supported `api` values are `responses`, `chat_completions` and `anthropic`. A custom OpenAI-compatible provider uses its own ID, base URL, key environment variable and model IDs. These providers use explicit configuration; Rooxcode and the OpenRouter and OpenCode Go providers below discover their catalogs. Only configure endpoints you trust to receive your prompts and credential. HTTPS is required except for local providers on loopback or a private network (192.168.x, 10.x, 172.16-31.x, Tailscale 100.64.x, IPv6 unique-local and `.local` names), where HTTP is allowed. In the desktop app, Settings > Providers > Add local AI writes such a provider into `config.json`. Redirects are disabled.
 
-`model` is `provider/model-id`; `HIBISCUS_MODEL` can override it at launch. Explicit model preferences and resumed-session selections are preserved. Otherwise a new session discovers and selects an available Rooxcode model, with no paid-provider fallback. The header shows no active model when neither provider credentials nor an available Rooxcode catalog provide access. Credential presence does not prove remote model access. Model IDs may contain slashes. `maxSteps` bounds provider/tool iterations per user turn, from 1 to 1024. `maxTokens` is the output limit. Optional `contextWindow` must exceed `maxTokens` and should match the provider's actual capability. Unknown context limits stay unknown. `reasoning: true` enables off/low/medium/high for the Responses adapter; it is not inferred from a model name. Only mark `images: true` when the model supports them.
+`model` is `provider/model-id`; `HIBISCUS_MODEL` can override it at launch. Explicit model preferences and resumed-session selections are preserved. Otherwise a new session discovers and selects an available Rooxcode model, with no paid-provider fallback. The header shows no active model when neither provider credentials nor an available Rooxcode catalog provide access. Credential presence does not prove remote model access. Model IDs may contain slashes. Agent turns continue through tool calls until the model finishes, asks for input, encounters an error that stops the run, or you cancel. Older `maxSteps` settings are ignored. `maxTokens` is the output limit. Optional `contextWindow` must exceed `maxTokens` and should match the provider's actual capability. Unknown context limits stay unknown. `reasoning: true` enables off/low/medium/high for the Responses adapter; it is not inferred from a model name. Only mark `images: true` when the model supports them.
 
 Usage comes from provider receipts. Missing usage and unconfigured pricing remain unknown. Hibiscus uses the configured context window to estimate whether the next request fits, including tool results the last receipt did not count. Small windows share an inline text budget per tool step. Reads remain pageable, and large command output is saved to a local file. For a known context window, an explicit provider rejection before any model output can trigger one compaction and retry without rerunning completed tools.
 

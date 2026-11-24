@@ -224,8 +224,9 @@ def load_plan(path, live=False):
     if raw["mode"] not in ("offline", "live") or (raw["mode"] == "live") != live:
         raise InvalidSpec("Real-provider plans require --live; --live requires mode live")
     number(raw["repetitions"], 1, 10)
-    limits = object_fields(raw["limits"], ["maxSteps", "timeoutSeconds", "checkTimeoutSeconds"])
-    number(limits["maxSteps"], 2, 128)
+    # Older evaluation plans may still contain the retired agent round cap.
+    limits = object_fields(raw["limits"], ["timeoutSeconds", "checkTimeoutSeconds"], ["maxSteps"]).copy()
+    limits.pop("maxSteps", None)
     number(limits["timeoutSeconds"], 1, 600)
     number(limits["checkTimeoutSeconds"], 1, 60)
     provider = object_fields(raw["provider"], ["id", "api", "model"], ["baseUrl", "apiKeyEnv"])

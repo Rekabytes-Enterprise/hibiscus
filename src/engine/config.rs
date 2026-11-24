@@ -66,14 +66,9 @@ pub struct Config {
     pub providers: Vec<Provider>,
     #[serde(default)]
     pub model: Option<String>,
-    #[serde(default = "default_steps")]
-    pub max_steps: usize,
     /// Providers whose models come from their own catalog at runtime.
     #[serde(skip)]
     pub(super) discovered: std::collections::HashSet<String>,
-}
-fn default_steps() -> usize {
-    64
 }
 fn model(id: &str) -> Model {
     Model {
@@ -210,9 +205,6 @@ fn parse(mut raw: serde_json::Value) -> Result<Config> {
         }) {
             return Err("invalid or duplicate model configuration".into());
         }
-    }
-    if !(1..=1024).contains(&config.max_steps) {
-        return Err("maxSteps must be between 1 and 1024".into());
     }
     if let Ok(id) = std::env::var("HIBISCUS_MODEL") {
         config.model = Some(id);

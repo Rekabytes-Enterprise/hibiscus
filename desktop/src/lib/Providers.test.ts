@@ -8,7 +8,7 @@ const desktop = vi.hoisted(() => ({
   addLocalProvider: vi.fn(),
   listProviders: vi.fn().mockResolvedValue([]),
   rekaAccount: vi.fn().mockResolvedValue(null),
-  onCodexLogin: vi.fn().mockResolvedValue(() => {}),
+  onChatGptLogin: vi.fn().mockResolvedValue(() => {}),
 }));
 vi.mock("./engine", () => desktop);
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));

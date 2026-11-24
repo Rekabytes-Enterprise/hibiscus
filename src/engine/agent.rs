@@ -657,9 +657,8 @@ async fn run_turns(
         let mut checkpoint_request = crate::checkpoints::Request::new(&session.lock().unwrap().id);
         let user = session.lock().unwrap().messages.last().cloned().unwrap();
         emit(out, Event::MessageStarted(&user).wire()).await?;
-        let mut completed = false;
         let mut awaiting_answer = false;
-        'steps: for _ in 0..config.max_steps {
+        'steps: loop {
             if *cancel.borrow() {
                 break;
             }
@@ -782,7 +781,6 @@ async fn run_turns(
                 s.save()?;
             }
             if calls.is_empty() {
-                completed = true;
                 break;
             }
             let mut output_budget = super::context::tool_output_budget(p, m);
@@ -929,12 +927,6 @@ async fn run_turns(
             let update = queued(&queue.lock().unwrap());
             emit(out, update).await?;
             break;
-        }
-        if !completed && !*cancel.borrow() {
-            return Err(
-                "Agent reached maxSteps. Review the work and submit a new prompt to continue."
-                    .into(),
-            );
         }
         if *cancel.borrow() {
             queue.lock().unwrap().items.clear();
