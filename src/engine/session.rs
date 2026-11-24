@@ -233,7 +233,9 @@ impl Session {
             .as_ref()
             // Rooxcode and catalog providers load their models after the session opens.
             .is_some_and(|(p, _)| {
-                p != super::rooxcode::ID && !super::catalog::discovered(config, p)
+                p != super::rooxcode::ID
+                    && p != config::RETIRED_CODEX_ID
+                    && !super::catalog::discovered(config, p)
             })
         {
             session.selected(config)?;
@@ -283,7 +285,9 @@ impl Session {
             .as_ref()
             // Rooxcode and catalog providers load their models after the session opens.
             .is_some_and(|(p, _)| {
-                p != super::rooxcode::ID && !super::catalog::discovered(config, p)
+                p != super::rooxcode::ID
+                    && p != config::RETIRED_CODEX_ID
+                    && !super::catalog::discovered(config, p)
             })
         {
             session.selected(config)?;
@@ -327,6 +331,9 @@ impl Session {
             .model
             .as_ref()
             .ok_or("No active model. Use /login to sign in, then choose a model with /models.")?;
+        if p == config::RETIRED_CODEX_ID {
+            return Err("The legacy Codex provider was retired. Use Continue with ChatGPT in /login or Settings, then select a model.".into());
+        }
         let provider = config
             .providers
             .iter()

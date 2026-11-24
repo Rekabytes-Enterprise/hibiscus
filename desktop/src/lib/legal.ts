@@ -11,7 +11,7 @@ Hibiscus is made by Reka Bytes (Rekabytes Enterprise), Malaysia. By using the Hi
 
 **AI output can be wrong.** Replies and code come from AI models and may be incorrect, insecure or incomplete. Check them before you rely on them.
 
-**Model providers.** You choose which provider answers your prompts. When you use OpenAI, Anthropic, OpenRouter, OpenCode or a Codex sign-in, your use is also governed by that provider's own terms. When you use the Rooxcode Gateway, these terms and the Privacy Policy apply.
+**Model providers.** You choose which provider answers your prompts. When you use OpenAI, Anthropic, OpenRouter, OpenCode or a ChatGPT plan sign-in, your use is also governed by that provider's own terms. When you use the Rooxcode Gateway, these terms and the Privacy Policy apply.
 
 **Fair use of the Rooxcode Gateway.** Don't use it to break the law, harm others, or overload or attack the service. We may limit or block access that does.
 
@@ -30,7 +30,7 @@ This policy explains what happens to your data when you use Hibiscus.
 
 **What stays on your computer.** Your sessions, settings and API keys are stored only on your machine, in your Hibiscus folder. Keys are kept in a private file only your user account can read. We never receive them.
 
-**Prompts you send to other providers.** If you use OpenAI, Anthropic, OpenRouter, OpenCode or a Codex sign-in, your prompts and files go directly from your computer to that provider. Reka Bytes doesn't see or store them. That provider's privacy policy applies, including whether it may train on your data.
+**Prompts you send to other providers.** If you use OpenAI, Anthropic, OpenRouter, OpenCode or a ChatGPT plan sign-in, your prompts and files go directly from your computer to that provider. Reka Bytes doesn't see or store them. That provider's privacy policy applies, including whether it may train on your data.
 
 **Prompts you send through the Rooxcode Gateway.** When you use a Rooxcode model, your prompts and the model's replies pass through our servers. We store full prompts and replies for up to 30 days, to:
 
@@ -44,14 +44,13 @@ Prompts can contain anything in the files Hibiscus reads, including secrets. Don
 **Other network requests.** Hibiscus also:
 
 - checks GitHub for new Hibiscus versions;
-- looks up the current version of OpenAI's Codex app on npm, so Codex can list your plan's models. This request contains no personal data.
 
 **Training on your data.**
 
 - Reka Bytes doesn't train on your data.
 - With OpenRouter, the "Don't let providers train on my prompts" setting above asks OpenRouter to use only providers that don't store or train on prompts.
 - OpenAI and Anthropic don't train on API traffic by default.
-- For a Codex sign-in, training is controlled in your ChatGPT account settings.
+- For a ChatGPT plan sign-in, training is controlled in your ChatGPT account settings.
 
 **Your rights.** Under Malaysia's Personal Data Protection Act 2010, you can ask what we hold about you and ask us to delete it. Email hello@reakbytes.com. Rooxcode Gateway logs are deleted within 30 days anyway.
 

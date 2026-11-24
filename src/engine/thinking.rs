@@ -31,7 +31,7 @@ impl ReasoningEffort {
 
 pub(super) enum Policy<'a> {
     Rooxcode(&'a [ReasoningEffort]),
-    /// Efforts Codex lists for the model; empty means low, medium and high.
+    /// Efforts the plan catalog lists for the model; empty means low, medium and high.
     Responses(&'a [ReasoningEffort]),
     Ornith,
     Disabled,
@@ -46,8 +46,8 @@ impl<'a> Policy<'a> {
                 &[]
             })
         } else if model.reasoning && provider.api == Api::Responses {
-            // Only Codex discovery lists efforts; configured models keep low/medium/high.
-            Self::Responses(if provider.authentication == Authentication::Codex {
+            // Only ChatGPT plan discovery lists efforts; configured models keep low/medium/high.
+            Self::Responses(if provider.authentication == Authentication::ChatGptPlan {
                 &model.reasoning_efforts
             } else {
                 &[]

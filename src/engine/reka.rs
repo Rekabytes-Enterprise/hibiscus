@@ -1,4 +1,4 @@
-//! Reka Bytes sign-in for Rooxcode (#185). The browser part is the Codex flow
+//! Reka Bytes sign-in for Rooxcode (#185). The browser part uses the shared OAuth flow
 //! (oauth/protocol.rs): PKCE, `state`, a loopback callback or a pasted URL.
 //! The gateway turns the code into its own device session, kept in
 //! `rooxcode-auth.json` (0600) and shared by the desktop app and the terminal.
@@ -438,7 +438,7 @@ pub(crate) fn save(account: &Account) -> Result<()> {
     store.write_json(account)
 }
 
-/// Reka Bytes sign-in for the desktop app, shaped like `CodexSignIn`: a paste
+/// Reka Bytes sign-in for the desktop app, with a paste
 /// channel, a 10-minute limit and saving.
 pub struct RekaSignIn {
     sign_in: BrowserSignIn,

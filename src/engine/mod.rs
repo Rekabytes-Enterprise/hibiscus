@@ -25,7 +25,6 @@ mod thinking;
 pub(crate) mod tool_output;
 mod tools;
 
-pub use oauth::CodexSignIn;
 pub use reka::RekaSignIn;
 pub(crate) use session::SessionStart;
 
@@ -81,3 +80,22 @@ pub(crate) fn safe_message(message: &str) -> String {
 
 #[cfg(feature = "fuzzing")]
 pub(crate) mod fuzzing;
+
+fn uuid_v4() -> crate::Result<String> {
+    use rand::TryRng;
+    let mut bytes = [0u8; 16];
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .map_err(|_| "Cannot generate a random UUID")?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}

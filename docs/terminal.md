@@ -66,7 +66,7 @@ The cursor stays visible while editing and while the agent works. Hibiscus reque
 
 Login/logout and selection dialogs use the shared docked modal and preserve the composer draft. Native tools execute directly without a permission dialog; tools are not sandboxed.
 
-`/login` offers Browser Login → Codex or API Key → configured provider. Credentials and manual redirect URLs are masked. Codex browser login uses a native loopback callback and supports Ctrl+Y to copy the link; Esc cancels. `/logout` selects a stored credential and requires confirmation. These dialogs require fullscreen input, including when opened temporarily from CLI. Credentials live only in Hibiscus's private stores; environment keys take precedence for API-key providers and survive logout. Saving credentials does not prove model access. External-agent credential stores are not read. See [native authentication](native-runtime.md#authentication).
+`/login` offers Browser Login → Continue with ChatGPT or API Key → configured provider. Credentials and manual redirect URLs are masked. ChatGPT browser login uses a native loopback callback and supports Ctrl+Y to copy the link; Esc cancels. `/logout` selects a stored credential and requires confirmation. These dialogs require fullscreen input, including when opened temporarily from CLI. Credentials live only in Hibiscus's private stores; environment keys take precedence for API-key providers and survive logout. Saving credentials does not prove model access. External-agent credential stores are not read. See [native authentication](native-runtime.md#authentication).
 
 ## Progress, usage and recovery
 

@@ -15,7 +15,6 @@ pub enum Api {
 pub enum Authentication {
     #[default]
     ApiKey,
-    Codex,
     ChatGptPlan,
     Rooxcode,
     Local,
@@ -72,9 +71,6 @@ pub struct Config {
     /// Providers whose models come from their own catalog at runtime.
     #[serde(skip)]
     pub(super) discovered: std::collections::HashSet<String>,
-    /// Codex release sent when listing Codex models; looked up once per engine run.
-    #[serde(skip)]
-    pub(super) codex_version: Option<String>,
 }
 fn default_steps() -> usize {
     64
@@ -122,32 +118,28 @@ fn raw() -> Result<serde_json::Value> {
     }
 }
 
+pub(super) const RETIRED_CODEX_ID: &str = "openai-codex";
+
 pub fn load() -> Result<Config> {
     parse(raw()?)
 }
 
-fn parse(raw: serde_json::Value) -> Result<Config> {
+fn parse(mut raw: serde_json::Value) -> Result<Config> {
     // Older installers wrote codexContextWindow. It no longer applies;
     // ignore it like other unknown fields and use native defaults for
     // missing settings, without rewriting the user's configuration.
+    // Ignore retired provider records on read so an upgrade can open old
+    // configurations without rewriting them or importing their credentials.
+    if let Some(providers) = raw
+        .get_mut("providers")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        providers.retain(|provider| {
+            provider["id"] != RETIRED_CODEX_ID && provider["authentication"] != "codex"
+        });
+    }
     let mut config: Config = serde_json::from_value(raw)?;
     // Subscription tokens must never be routed to a configurable third-party host.
-    if !config.providers.iter().any(|p| p.id == "openai-codex") {
-        config.providers.push(Provider {
-            id: "openai-codex".into(),
-            base_url: super::oauth::RESOURCE.into(),
-            api: Api::Responses,
-            authentication: Authentication::Codex,
-            discover_models: false,
-            api_key_env: None,
-            // Fallback until the plan's own list is fetched (catalog::refresh).
-            models: vec![Model {
-                reasoning: true,
-                ..model("gpt-6.1-sol")
-            }],
-        });
-        config.discovered.insert("openai-codex".into());
-    }
     if !config.providers.iter().any(|p| p.id == super::chatgpt::ID) {
         config.providers.push(Provider {
             id: super::chatgpt::ID.into(),
@@ -168,15 +160,6 @@ fn parse(raw: serde_json::Value) -> Result<Config> {
         super::chatgpt::validate_provider(p)?;
         if p.authentication == Authentication::ChatGptPlan && !p.models.is_empty() {
             return Err("ChatGPT plan models come from the signed-in account catalog.".into());
-        }
-        if (p.authentication == Authentication::Codex || p.id == "openai-codex")
-            && (p.id != "openai-codex"
-                || p.authentication != Authentication::Codex
-                || p.api != Api::Responses
-                || p.base_url != super::oauth::RESOURCE
-                || p.api_key_env.is_some())
-        {
-            return Err("openai-codex requires native Codex authentication and its fixed subscription Responses endpoint".into());
         }
         if p.id.is_empty() || p.id.contains('/') || !ids.insert(&p.id) {
             return Err(
@@ -361,9 +344,6 @@ pub fn unique() -> u128 {
 pub fn key(provider: &Provider) -> Result<String> {
     if provider.authentication == Authentication::Rooxcode {
         return Err("Rooxcode does not use provider credentials".into());
-    }
-    if provider.authentication == Authentication::Codex {
-        return super::oauth::stored_access_token();
     }
     if provider.authentication == Authentication::ChatGptPlan {
         return Err("ChatGPT plan credentials require the dedicated Responses connection.".into());

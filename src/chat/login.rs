@@ -1,6 +1,6 @@
 //! The /login prompts. Credential storage stays in the runtime (auth, oauth).
 use crate::{
-    engine::{auth, chatgpt, oauth, reka},
+    engine::{auth, chatgpt, reka},
     ui::Frontend,
     Result,
 };
@@ -18,18 +18,6 @@ pub(crate) fn sign_in(
     provider: &str,
     auth_type: &str,
 ) -> Result<AuthOutcome> {
-    if auth_type == "oauth" && provider == "openai-codex" {
-        let sign_in = oauth::BrowserSignIn::start()?;
-        let url = sign_in.url().to_owned();
-        return browser(
-            output,
-            events,
-            "Codex",
-            url,
-            move |rx| sign_in.complete(rx),
-            |token| oauth::save(&token),
-        );
-    }
     if auth_type == "oauth" && provider == chatgpt::ID {
         let sign_in = chatgpt::BrowserSignIn::start()?;
         let url = sign_in.url().to_owned();

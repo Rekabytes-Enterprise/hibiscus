@@ -1,5 +1,5 @@
 //! Built-in providers whose models come from their own /models catalog: the
-//! API-key providers below, and Codex, whose list depends on the signed-in plan.
+//! API-key providers below, and ChatGPT, whose list depends on the signed-in plan.
 //! Values are copied from the provider; Hibiscus adds no caps or defaults.
 use super::config::{Api, Authentication, Config, Model, Provider};
 use crate::Result;
@@ -29,12 +29,6 @@ const BUILTINS: [Builtin; 2] = [
         key_page: "opencode.ai/auth",
     },
 ];
-/// Codex lists a model only to clients at least as new as its `minimal_client_version`
-/// and requires the parameter, so Hibiscus sends the current official Codex release:
-/// looked up on npm once per engine run, else the last one seen, else this pin.
-const CODEX_VERSION_PIN: &str = "0.167.0";
-const CODEX_VERSION_URL: &str = "https://registry.npmjs.org/@openai/codex/latest";
-const CODEX_VERSION_FILE: &str = "codex-client-version";
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MODELS: usize = 5000;
 
@@ -90,12 +84,9 @@ pub(super) async fn refresh(config: &mut Config) -> Vec<String> {
         .filter(|p| config.discovered.contains(&p.id))
         .filter_map(|p| {
             let id = p.id.clone();
-            let job = if p.authentication == Authentication::Codex {
-                super::oauth::stored_access_token().ok()?;
-                tokio::spawn(fetch_codex(config.codex_version.clone()))
-            } else if p.authentication == Authentication::ChatGptPlan {
+            let job = if p.authentication == Authentication::ChatGptPlan {
                 super::chatgpt::access().ok()?;
-                tokio::spawn(async { fetch_chatgpt().await.map(|models| (models, None)) })
+                tokio::spawn(fetch_chatgpt())
             } else if p.discover_models {
                 let key = if p.authentication == Authentication::Local {
                     None
@@ -103,15 +94,11 @@ pub(super) async fn refresh(config: &mut Config) -> Vec<String> {
                     Some(super::config::key(p).ok()?)
                 };
                 let base_url = p.base_url.clone();
-                tokio::spawn(async move {
-                    fetch_local(&base_url, key.as_deref())
-                        .await
-                        .map(|models| (models, None))
-                })
+                tokio::spawn(async move { fetch_local(&base_url, key.as_deref()).await })
             } else {
                 let key = super::config::key(p).ok()?;
                 let fetched = fetch(id.clone(), models_url(p), key);
-                tokio::spawn(async move { fetched.await.map(|models| (models, None)) })
+                tokio::spawn(fetched)
             };
             Some((id, job))
         })
@@ -123,12 +110,7 @@ pub(super) async fn refresh(config: &mut Config) -> Vec<String> {
             .unwrap_or_else(|_| Err("model discovery stopped.".into()));
         let provider = config.providers.iter_mut().find(|p| p.id == id).unwrap();
         match result {
-            Ok((models, version)) => {
-                provider.models = models;
-                if version.is_some() {
-                    config.codex_version = version;
-                }
-            }
+            Ok(models) => provider.models = models,
             // Keep the last good list so an outage does not drop the selected model.
             Err(error) => errors.push(format!("{id}: {error}")),
         }
@@ -212,7 +194,7 @@ async fn fetch_chatgpt() -> Result<Vec<Model>> {
     if !response.status().is_success() {
         return Err(super::chatgpt::request_error(response.status(), None).into());
     }
-    parse_codex(
+    parse_chatgpt(
         &body(response, || {
             "Could not read the ChatGPT plan model catalog.".into()
         })
@@ -220,75 +202,8 @@ async fn fetch_chatgpt() -> Result<Vec<Model>> {
     )
 }
 
-/// The models the signed-in Codex plan offers. Only ever sent to the fixed Codex endpoint.
-/// Also returns the Codex release it used, so later refreshes in this run reuse it.
-async fn fetch_codex(known: Option<String>) -> Result<(Vec<Model>, Option<String>)> {
-    let failed = || {
-        "model discovery failed. Check connectivity, or sign in to Codex again with /login."
-            .to_owned()
-    };
-    let token = super::oauth::credential().await?;
-    let version = match known {
-        Some(version) => version,
-        None => {
-            codex_version(
-                &crate::paths::home()?.join(CODEX_VERSION_FILE),
-                CODEX_VERSION_URL,
-            )
-            .await
-        }
-    };
-    let url = format!("{}/models?client_version={version}", super::oauth::RESOURCE);
-    let response = client()?
-        .get(url)
-        .bearer_auth(&token.access)
-        .header("chatgpt-account-id", &token.account_id)
-        .header("originator", "hibiscus")
-        .send()
-        .await
-        .map_err(|_| failed())?;
-    Ok((parse_codex(&body(response, failed).await?)?, Some(version)))
-}
-
-/// A plain release number such as `0.167.0`; anything else is not sent.
-fn release(text: &str) -> Option<String> {
-    let text = text.trim();
-    let parts = text.split('.').collect::<Vec<_>>();
-    (parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.len() <= 6 && p.bytes().all(|b| b.is_ascii_digit())))
-    .then(|| text.to_owned())
-}
-
-/// The current Codex release from `url` (npm), saved to `cache` as the fallback.
-/// Never fails: a failed lookup uses the last release seen, then the pin. No credentials are sent.
-async fn codex_version(cache: &std::path::Path, url: &str) -> String {
-    #[derive(Deserialize)]
-    struct Latest {
-        version: String,
-    }
-    let looked_up = async {
-        let response = client().ok()?.get(url).send().await.ok()?;
-        let bytes = body(response, String::new).await.ok()?;
-        release(&serde_json::from_slice::<Latest>(&bytes).ok()?.version)
-    }
-    .await;
-    match looked_up {
-        Some(version) => {
-            // A file that cannot be written only loses the offline fallback.
-            let _ = std::fs::write(cache, &version);
-            version
-        }
-        None => std::fs::read_to_string(cache)
-            .ok()
-            .and_then(|t| release(&t))
-            .unwrap_or_else(|| CODEX_VERSION_PIN.to_owned()),
-    }
-}
-
-/// Reads Codex's `models[]`, keeping the ones its own app lists (`visibility: "list"`).
-fn parse_codex(bytes: &[u8]) -> Result<Vec<Model>> {
+/// Reads the account catalog and keeps models marked for display.
+fn parse_chatgpt(bytes: &[u8]) -> Result<Vec<Model>> {
     #[derive(Deserialize)]
     struct Catalog {
         models: Vec<Entry>,
@@ -483,8 +398,8 @@ mod tests {
     }
 
     #[test]
-    fn codex_catalog_keeps_listed_models_with_their_limits_and_efforts() {
-        let models = parse_codex(json!({"models":[
+    fn chatgpt_catalog_keeps_listed_models_with_their_limits_and_efforts() {
+        let models = parse_chatgpt(json!({"models":[
             {"slug":"gpt-a","visibility":"list","context_window":272000,"input_modalities":["text","image"],
              "supported_reasoning_levels":[{"effort":"low"},{"effort":"max"},{"effort":"future"}],"base_instructions":"x"},
             {"slug":"hidden","visibility":"hide"},
@@ -504,57 +419,12 @@ mod tests {
             (models[1].id.as_str(), models[1].reasoning, models[1].images),
             ("gpt-b", false, false)
         );
-        assert!(parse_codex(br#"{"models":[{"slug":"h","visibility":"hide"}]}"#).is_err());
-        assert!(parse_codex(
+        assert!(parse_chatgpt(br#"{"models":[{"slug":"h","visibility":"hide"}]}"#).is_err());
+        assert!(parse_chatgpt(
             br#"{"models":[{"slug":"x","visibility":"list"},{"slug":"x","visibility":"list"}]}"#
         )
         .is_err());
-        assert!(parse_codex(b"{}").is_err());
-    }
-
-    #[test]
-    fn codex_version_asks_npm_then_falls_back_to_the_last_seen_then_the_pin() {
-        let dir =
-            std::env::temp_dir().join(format!("hibiscus-codex-version-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cache = dir.join("v");
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let get = |url: &str| runtime.block_on(codex_version(&cache, url));
-        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/latest", server.local_addr().unwrap());
-        std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            for (mut stream, body) in server.incoming().flatten().zip([
-                r#"{"version":"0.200.1"}"#,
-                r#"{"version":"0.201.0"}"#,
-                r#"{"version":"1.0.0-beta"}"#,
-            ]) {
-                let _ = stream.read(&mut [0; 4096]);
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-            }
-        });
-        let offline = "http://127.0.0.1:9/latest";
-        // Nothing seen and nothing reachable: the pin.
-        assert_eq!(get(offline), CODEX_VERSION_PIN);
-        // Each call asks npm and saves the answer.
-        assert_eq!(get(&url), "0.200.1");
-        assert_eq!(get(&url), "0.201.0");
-        assert_eq!(std::fs::read_to_string(&cache).unwrap(), "0.201.0");
-        // Offline, or a malformed answer: the last release seen.
-        assert_eq!(get(offline), "0.201.0");
-        assert_eq!(get(&url), "0.201.0");
-        assert_eq!(release(" 0.167.0\n").as_deref(), Some("0.167.0"));
-        assert!(
-            release("99").is_none() && release("1.0.0-beta").is_none() && release("1..0").is_none()
-        );
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(parse_chatgpt(b"{}").is_err());
     }
 
     #[test]

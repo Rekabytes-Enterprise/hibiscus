@@ -136,13 +136,13 @@ export const removeLocalProvider = (id: string) => invoke<void>("remove_local_pr
 /** Whether OpenRouter requests ask for providers that don't store or train on prompts. */
 export const trainingDenied = () => invoke<boolean>("training_denied");
 export const setTrainingDenied = (deny: boolean) => invoke<void>("set_training_denied", { deny });
-/** Opens the provider sign-in page; returns its link. Watch `onCodexLogin` for the result. */
-export const codexStart = (provider: string) => invoke<string>("codex_start", { provider });
-export const codexPaste = (url: string) => invoke<void>("codex_paste", { url });
-export const codexCancel = () => invoke<void>("codex_cancel");
+/** Opens the provider sign-in page; returns its link. Watch `onChatGptLogin` for the result. */
+export const chatgptStart = () => invoke<string>("chatgpt_start");
+export const chatgptPaste = (url: string) => invoke<void>("chatgpt_paste", { url });
+export const chatgptCancel = () => invoke<void>("chatgpt_cancel");
 /** `null` once signed in, else the error. */
-export const onCodexLogin = (listener: (error: string | null) => void) =>
-  listen<string | null>("codex-login", (e) => listener(e.payload));
+export const onChatGptLogin = (listener: (error: string | null) => void) =>
+  listen<string | null>("chatgpt-login", (e) => listener(e.payload));
 /** The Reka Bytes account for Rooxcode models; its tokens never reach the window. */
 /** `avatar` is the pixel character picked on the Rooxcode account page; `null` is the default. */
 export type RekaAccount = { name: string | null; email: string | null; avatar: string | null };

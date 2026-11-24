@@ -58,7 +58,7 @@ Then start a conversation:
 hibiscus
 ```
 
-Rooxcode models are discovered automatically and can be used without an account, login, API key or configuration. Use `/models` to see its currently available models. For other providers, use `/login` to connect through native Codex browser login or a configured provider API key, then `/models` to choose a model. OpenRouter and OpenCode Go are built in: add their API key with `/login` and their models appear in `/models` automatically. API-key providers use API billing; Codex browser login uses your ChatGPT account and its limits.
+Rooxcode models are discovered automatically and can be used without an account, login, API key or configuration. Use `/models` to see its currently available models. For other providers, use `/login` to connect through Continue with ChatGPT or a configured provider API key, then `/models` to choose a model. OpenRouter and OpenCode Go are built in: add their API key with `/login` and their models appear in `/models` automatically. API-key providers use API billing; Continue with ChatGPT uses eligible ChatGPT plan usage.
 
 The installer verifies release checksums and places Hibiscus in `~/.local/bin`. It creates `~/.hibiscus/` for native configuration, private credentials, sessions, cache and user extensions. An absolute `HIBISCUS_HOME` selects another data directory. Other provider/model IDs and supported context limits use explicit [configuration](docs/native-runtime.md#provider-configuration); existing credentials or sessions from other applications are not imported. The installed agent requires neither Node.js nor Rust. Node.js is needed only to run the npm installer.
 
@@ -137,7 +137,7 @@ Inside a chat:
 | `/models [provider] [search]` | Choose a model by provider tab and search; `/models provider/model` selects directly |
 | `/thinking [level]` | Choose the active model's supported thinking level (Responses or advertised Rooxcode levels) |
 | `/compact [instructions]` | Summarize older context with the configured provider (model call; original history remains archived) |
-| `/login` | Native Codex browser login or an API key for a configured provider, including OpenRouter and OpenCode Go |
+| `/login` | Continue with ChatGPT or an API key for a configured provider, including OpenRouter and OpenCode Go |
 | `/logout` | Choose a provider and remove its stored credential inside Hibiscus |
 | `/restore` | Restore a failed prompt and images for review, without sending |
 | `/reconnect` | Restart the native runtime connection without replaying requests |
@@ -166,7 +166,7 @@ The native system prompt asks for direct, concrete prose. It preserves user-requ
 **A standalone Rust coding agent.** Hibiscus owns its agent loop, direct provider connections, authentication, native tools and session persistence. CLI and TUI share one in-process runtime and session.
 
 - Hibiscus provides native **read, bash, edit, write and goal** tools. Covered write/edit operations create per-request checkpoints with recorded diffs and conflict-checked selective restore. [Undo file changes →](docs/checkpoints.md)
-- Native Codex browser login, provider API keys and logout stay inside Hibiscus. API keys and Codex credentials are stored in private mode-0600 files. Authentication failures show recoverable errors. Logout asks for a provider and confirmation; it removes only that stored credential, not environment keys or provider-side access. [Authentication details →](docs/native-runtime.md#authentication)
+- Continue with ChatGPT, provider API keys and logout stay inside Hibiscus. API keys and ChatGPT credentials are stored in private mode-0600 files. Authentication failures show recoverable errors. Logout asks for a provider and confirmation; it removes only that stored credential, not environment keys or provider-side access. [Authentication details →](docs/native-runtime.md#authentication)
 - `NO_COLOR=1` disables colors. The TUI adapts to small terminals; `TERM=dumb` and piped input use plain input/output. `/cli` and `/tui` switch views while keeping the same runtime and session.
 - Installation creates an empty `~/.hibiscus/extensions/`. Ask Hibi to create your own tools or slash commands, such as `/review`. Extensions can use any installed executable through the versioned JSON protocol. Native update/history/diff/rollback tools retain validated versions. [Extension authoring →](docs/extensions.md)
 
