@@ -1,8 +1,7 @@
-use super::http::authenticated_request;
 use super::*;
 use crate::engine::session::Block;
 #[test]
-fn codex_done_requires_completed_status_before_accepting_tools() {
+fn responses_done_requires_completed_status_before_accepting_tools() {
     for status in ["incomplete", "failed", "in_progress", "completed"] {
         let mut stream = Stream::default();
         let event = json!({"type":"response.done","response":{"status":status,"output":[
@@ -21,46 +20,6 @@ fn codex_done_requires_completed_status_before_accepting_tools() {
             assert!(!stream.done);
         }
     }
-}
-#[test]
-fn codex_credentials_are_pinned_to_subscription_transport() {
-    let client = reqwest::Client::new();
-    let token = super::super::oauth::Token {
-        access: "FAKE-ACCESS".into(),
-        refresh: "FAKE-REFRESH".into(),
-        expires: 1,
-        account_id: "FAKE-ACCOUNT".into(),
-    };
-    let body = json!({"model":"test","store":false,"stream":true,"max_output_tokens":4096,
-        "input":[{"role":"user","content":"hello"}]});
-    for url in [
-        "https://evil.example/responses",
-        "https://api.openai.com/v1/responses",
-        "https://chatgpt.com/backend-api/codex/responses?redirect=evil",
-    ] {
-        assert!(
-            authenticated_request(&client, url, body.clone(), "OTHER-KEY", Some(&token)).is_err()
-        );
-    }
-    let request = authenticated_request(
-        &client,
-        &format!("{}/responses", super::super::oauth::RESOURCE),
-        body,
-        "OTHER-KEY",
-        Some(&token),
-    )
-    .unwrap()
-    .build()
-    .unwrap();
-    assert_eq!(request.headers()["authorization"], "Bearer FAKE-ACCESS");
-    assert_eq!(request.headers()["chatgpt-account-id"], "FAKE-ACCOUNT");
-    assert_eq!(request.headers()["originator"], "hibiscus");
-    assert_eq!(request.headers()["accept"], "text/event-stream");
-    let body: Value = serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
-    assert!(body.get("max_output_tokens").is_none());
-    assert_eq!(body["stream"], true);
-    assert_eq!(body["store"], false);
-    assert!(!body.to_string().contains("FAKE-REFRESH"));
 }
 #[test]
 fn anthropic_context_includes_cached_input_and_final_usage() {

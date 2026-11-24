@@ -57,11 +57,30 @@ fn serve(
 
 #[tokio::test]
 async fn browser_registration_exchanges_issued_client_and_verifies_signed_identity() {
-    let mut flow = BrowserSignIn::prepare("fixture-host", None).unwrap();
+    let host_dir =
+        std::env::temp_dir().join(format!("hibiscus-plan-migrate-{}", random().unwrap()));
+    let host_store = Store::at(host_dir.join("host.json"));
+    let legacy = random().unwrap();
+    let lock = host_store.try_lock().unwrap();
+    host_store.write_json(&legacy).unwrap();
+    drop(lock);
+    let migrated = host_id(&host_store).unwrap();
+    assert_ne!(migrated, legacy);
+    assert_eq!(host_id(&host_store).unwrap(), migrated);
+    assert_eq!(host_store.read_json::<String>().unwrap().unwrap(), migrated);
+    std::fs::remove_dir_all(host_dir).unwrap();
+    let mut flow = BrowserSignIn::prepare(&migrated, None).unwrap();
     let args: std::collections::HashMap<_, _> = flow.url.query_pairs().into_owned().collect();
     assert_eq!(args["client_id"], ENTRYPOINT);
     assert_eq!(args["agent_name_hint"], "Hibiscus");
-    assert_eq!(args["ext_agent_host_id"], "fixture-host");
+    assert_eq!(args["ext_agent_host_id"], migrated);
+    let uuid = args["ext_agent_host_id"].strip_prefix("urn:uuid:").unwrap();
+    assert_eq!(
+        uuid.split('-').map(str::len).collect::<Vec<_>>(),
+        [8, 4, 4, 4, 12]
+    );
+    assert_eq!(uuid.as_bytes()[14], b'4');
+    assert!(b"89ab".contains(&uuid.as_bytes()[19]));
     assert_eq!(args["scope"], SCOPES);
     assert_eq!(args["resource"], RESOURCE);
     assert!(args["redirect_uri"].starts_with("http://127.0.0.1:"));
@@ -126,7 +145,7 @@ async fn browser_registration_exchanges_issued_client_and_verifies_signed_identi
         "fixture-access"
     );
 
-    let returning = BrowserSignIn::prepare("fixture-host", Some(registration)).unwrap();
+    let returning = BrowserSignIn::prepare(&migrated, Some(registration)).unwrap();
     let args: std::collections::HashMap<_, _> = returning.url.query_pairs().into_owned().collect();
     assert_eq!(args["client_id"], client);
     assert!(!args.contains_key("agent_name_hint"));
@@ -201,6 +220,6 @@ fn host_identifier_is_stable_and_separate_from_the_plan_grant() {
     let store = Store::at(dir.join("host.json"));
     let first = host_id(&store).unwrap();
     assert_eq!(host_id(&store).unwrap(), first);
-    assert!(valid(&first, 128));
+    assert!(valid_host_id(&first));
     std::fs::remove_dir_all(dir).unwrap();
 }

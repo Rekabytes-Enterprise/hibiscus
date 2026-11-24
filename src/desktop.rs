@@ -4,7 +4,7 @@ pub use crate::client::embed::{Engine, Start};
 /// The error a Rooxcode prompt gets without a Reka Bytes session.
 pub use crate::engine::reka::SIGN_IN as REKA_SIGN_IN;
 pub use crate::engine::session::SessionKind;
-pub use crate::engine::{CodexSignIn, RekaSignIn};
+pub use crate::engine::RekaSignIn;
 pub use crate::pdf::prepare as prepare_pdf;
 
 /// The agent-browser session the engine's browser tool uses, for the browser pane.
@@ -279,8 +279,7 @@ pub async fn reka_profile() -> Option<RekaAccount> {
     crate::engine::reka::refresh_profile().await.map(reka)
 }
 
-/// Removes the stored credential for `provider`: its API key, the Codex
-/// login, or for `rooxcode` the Reka Bytes session.
+/// Removes the stored API key, ChatGPT plan login, or Reka Bytes session.
 pub fn sign_out(provider: &str) -> Result<()> {
     crate::engine::logout::remove(provider)
 }
@@ -396,10 +395,7 @@ pub fn providers() -> Result<Vec<ProviderInfo>> {
         .map(|p| ProviderInfo {
             id: p.id.clone(),
             api_key: p.authentication == config::Authentication::ApiKey,
-            browser: matches!(
-                p.authentication,
-                config::Authentication::Codex | config::Authentication::ChatGptPlan
-            ),
+            browser: p.authentication == config::Authentication::ChatGptPlan,
             signed_in: config::access(p).is_ok(),
             key_page: key_page(&p.id),
             local: matches!(

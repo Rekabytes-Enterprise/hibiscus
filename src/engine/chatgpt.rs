@@ -6,6 +6,7 @@ use super::oauth::{
     store::Store,
 };
 use crate::Result;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
@@ -98,14 +99,38 @@ fn store() -> Result<Store> {
 fn host_id(store: &Store) -> Result<String> {
     let _lock = store.try_lock()?;
     if let Some(id) = store.read_json::<String>()? {
-        if !valid(&id, 128) {
+        if valid_host_id(&id) {
+            return Ok(id);
+        }
+        // v0.4.11 generated a raw base64url string from 32 random bytes.
+        // OpenAI rejected that format before it could issue a registration.
+        if id.len() != 43
+            || !URL_SAFE_NO_PAD
+                .decode(&id)
+                .is_ok_and(|bytes| bytes.len() == 32)
+        {
             return Err("Invalid saved ChatGPT host identifier.".into());
         }
-        return Ok(id);
     }
-    let id = random()?;
+    let id = format!("urn:uuid:{}", super::uuid_v4()?);
     store.write_json(&id)?;
     Ok(id)
+}
+
+fn valid_host_id(id: &str) -> bool {
+    id.strip_prefix("urn:uuid:").is_some_and(|uuid| {
+        let bytes = uuid.as_bytes();
+        bytes.len() == 36
+            && bytes[14] == b'4'
+            && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
+            && bytes.iter().enumerate().all(|(index, byte)| {
+                if [8, 13, 18, 23].contains(&index) {
+                    *byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            })
+    })
 }
 
 fn registered_client(previous: Option<&str>, returned: Option<&str>) -> Result<String> {

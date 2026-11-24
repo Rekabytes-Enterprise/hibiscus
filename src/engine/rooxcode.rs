@@ -2,7 +2,6 @@
 //! Reka Bytes session (reka.rs). The client headers are metadata, not authentication.
 use super::config::{Api, Authentication, Config, Model, Provider};
 use crate::Result;
-use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashSet, time::Duration};
@@ -21,21 +20,7 @@ const CHAT_IDLE_SECONDS: u64 = 120;
 pub(super) struct SessionId(String);
 impl SessionId {
     pub(super) fn new() -> Result<Self> {
-        let mut bytes = [0u8; 16];
-        rand::rngs::SysRng
-            .try_fill_bytes(&mut bytes)
-            .map_err(|_| "Cannot generate conversation UUID")?;
-        bytes[6] = (bytes[6] & 0x0f) | 0x40;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        Ok(Self(format!(
-            "{}-{}-{}-{}-{}",
-            &hex[..8],
-            &hex[8..12],
-            &hex[12..16],
-            &hex[16..20],
-            &hex[20..]
-        )))
+        Ok(Self(super::uuid_v4()?))
     }
     pub(super) fn as_str(&self) -> &str {
         &self.0

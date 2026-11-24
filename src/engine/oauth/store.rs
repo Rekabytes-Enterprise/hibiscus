@@ -1,6 +1,6 @@
 use crate::sys::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use crate::Result;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs,
     io::Read,
@@ -8,36 +8,11 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Token {
-    pub access: String,
-    pub refresh: String,
-    pub expires: u64,
-    pub account_id: String,
-}
-impl Token {
-    pub(super) fn validate(&self) -> Result<()> {
-        if [&self.access, &self.refresh, &self.account_id]
-            .iter()
-            .any(|s| {
-                s.is_empty() || s.len() > 32768 || !s.is_ascii() || s.chars().any(char::is_control)
-            })
-            || self.expires == 0
-        {
-            return Err("Invalid stored Codex credential. Use /login to sign in again.".into());
-        }
-        Ok(())
-    }
-}
-/// A private, locked credential file in the Hibiscus home. Codex uses
-/// `codex-auth.json`; the Reka Bytes sign-in (engine/reka.rs) its own file.
+/// A private, locked credential file in the Hibiscus home.
 pub(in crate::engine) struct Store {
     path: PathBuf,
 }
 impl Store {
-    pub(super) fn app() -> Result<Self> {
-        Self::named("codex-auth.json")
-    }
     pub(in crate::engine) fn named(file: &str) -> Result<Self> {
         Ok(Self {
             path: crate::paths::home()?.join(file),
@@ -49,13 +24,6 @@ impl Store {
     }
     pub(in crate::engine) fn path(&self) -> &Path {
         &self.path
-    }
-    pub(super) fn read(&self) -> Result<Option<Token>> {
-        let token: Option<Token> = self.read_json()?;
-        if let Some(token) = &token {
-            token.validate()?;
-        }
-        Ok(token)
     }
     pub(in crate::engine) fn read_json<T: DeserializeOwned>(&self) -> Result<Option<T>> {
         let file = match fs::OpenOptions::new()
@@ -89,10 +57,6 @@ impl Store {
         let value = serde_json::from_slice(&bytes)
             .map_err(|_| format!("Invalid {}. Use /login to replace it.", self.path.display()))?;
         Ok(Some(value))
-    }
-    pub(super) fn write(&self, token: &Token) -> Result<()> {
-        token.validate()?;
-        self.write_json(token)
     }
     pub(in crate::engine) fn write_json<T: Serialize>(&self, value: &T) -> Result<()> {
         super::super::config::atomic(&self.path, &serde_json::to_vec(value)?)

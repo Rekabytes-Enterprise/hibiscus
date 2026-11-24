@@ -5,11 +5,11 @@
     addLocalProvider,
     detectLocalModels,
     removeLocalProvider,
-    codexCancel,
-    codexPaste,
-    codexStart,
+    chatgptCancel,
+    chatgptPaste,
+    chatgptStart,
     listProviders,
-    onCodexLogin,
+    onChatGptLogin,
     rekaAccount,
     saveApiKey,
     signOut,
@@ -31,7 +31,7 @@
   let error = $state<string | null>(null);
   let saving = $state(false);
   /** The provider sign-in in progress: its link, and a pasted redirect URL. */
-  let browser = $state<{ provider: string; url: string; pasted: string; sent: boolean } | null>(null);
+  let browser = $state<{ url: string; pasted: string; sent: boolean } | null>(null);
   let copied = $state(false);
 
   const message = (e: unknown) => String(e instanceof Error ? e.message : e);
@@ -48,7 +48,7 @@
 
   let stop: (() => void) | undefined;
   onMount(async () => {
-    stop = await onCodexLogin(async (failure) => {
+    stop = await onChatGptLogin(async (failure) => {
       if (!browser) return;
       browser = null;
       if (failure) error = failure;
@@ -58,7 +58,7 @@
   });
   onDestroy(() => {
     stop?.();
-    if (browser) void codexCancel();
+    if (browser) void chatgptCancel();
   });
 
   /** Engines read credentials when they start, so restart it after any change. */
@@ -83,14 +83,14 @@
     }
   }
 
-  async function startBrowser(provider: string) {
+  async function startBrowser() {
     error = null;
     chosen = null;
     copied = false;
-    browser = { provider, url: "", pasted: "", sent: false };
+    browser = { url: "", pasted: "", sent: false };
     try {
-      const url = await codexStart(provider);
-      if (browser?.provider === provider) browser.url = url;
+      const url = await chatgptStart();
+      if (browser) browser.url = url;
     } catch (e) {
       browser = null;
       error = message(e);
@@ -100,8 +100,8 @@
   async function paste() {
     if (!browser) return;
     try {
-      await codexPaste(browser.pasted.trim());
-      browser.sent = true;
+      await chatgptPaste(browser.pasted.trim());
+      if (browser) browser.sent = true;
     } catch (e) {
       error = message(e);
     }
@@ -109,7 +109,7 @@
 
   async function cancelBrowser() {
     browser = null;
-    await codexCancel().catch(() => {});
+    await chatgptCancel().catch(() => {});
   }
 
   async function copy() {
@@ -231,16 +231,16 @@
           <button onclick={() => { chosen = chosen === p.id ? null : p.id; key = ""; error = null; }}>
             {p.signedIn ? "Replace key" : "Add key"}
           </button>
-        {:else if !p.signedIn && !browser}
-          <button onclick={() => startBrowser(p.id)}>
-            {p.id === "openai-chatgpt" ? "Continue with ChatGPT" : "Sign in"}
+        {:else if p.browser && !p.signedIn && !browser}
+          <button onclick={startBrowser}>
+            Continue with ChatGPT
           </button>
         {/if}
       </div>
       {#if p.id === "openai-chatgpt" && p.signedIn}
         <button class="link small" onclick={() => openUrl("https://chatgpt.com/settings/usage")}>Manage usage</button>
       {/if}
-      {#if browser?.provider === p.id && browser.url}
+      {#if p.browser && browser?.url}
         <form onsubmit={(e) => { e.preventDefault(); paste(); }}>
           <p class="small">{browser.sent ? "Finishing sign-in…" : "Waiting for the browser. Finish signing in there."}</p>
           <input aria-label="Redirect URL" type="password" autocomplete="off" spellcheck="false" placeholder="If the browser can't reach Hibiscus, paste the URL it ended on" bind:value={browser.pasted} disabled={browser.sent} />

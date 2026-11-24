@@ -1,14 +1,11 @@
 //! Stored credentials that /logout can remove. The prompts live in chat/logout.rs.
 use crate::Result;
 
-/// Providers with a stored API key, sorted, then openai-codex and rooxcode
-/// (the Reka Bytes account) when signed in.
+/// Providers with stored API keys, followed by signed-in ChatGPT and Reka Bytes accounts.
 pub(crate) fn stored() -> Result<Vec<String>> {
     let mut providers = super::auth::keys()?.into_keys().collect::<Vec<_>>();
+    providers.retain(|id| id != super::config::RETIRED_CODEX_ID);
     providers.sort();
-    if super::oauth::stored_access_token().is_ok() {
-        providers.push("openai-codex".into());
-    }
     if super::chatgpt::has_registration() {
         providers.push(super::chatgpt::ID.into());
     }
@@ -18,12 +15,8 @@ pub(crate) fn stored() -> Result<Vec<String>> {
     Ok(providers)
 }
 
-/// Removes the stored API key, the Codex login for openai-codex, or the
-/// Reka Bytes session for rooxcode (also revoked on the gateway).
+/// Removes the stored API key, ChatGPT plan login, or Reka Bytes session.
 pub(crate) fn remove(provider: &str) -> Result<()> {
-    if provider == "openai-codex" {
-        return super::oauth::remove();
-    }
     if provider == super::chatgpt::ID {
         return super::chatgpt::remove();
     }

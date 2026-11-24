@@ -1,8 +1,6 @@
-use super::Token;
 use crate::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::TryRng;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, time::Duration};
 use tokio::{
@@ -10,28 +8,6 @@ use tokio::{
     sync::mpsc::Receiver,
 };
 
-// Public Codex OAuth client identifier, not a secret or a Pi client identity.
-const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const REDIRECT: &str = "http://localhost:1455/auth/callback";
-pub(in crate::engine) struct Endpoints {
-    authorize: String,
-    token: String,
-}
-impl Endpoints {
-    pub(super) fn production() -> Self {
-        Self {
-            authorize: "https://auth.openai.com/oauth/authorize".into(),
-            token: "https://auth.openai.com/oauth/token".into(),
-        }
-    }
-    #[cfg(test)]
-    pub(super) fn local(base: &str) -> Self {
-        Self {
-            authorize: format!("{base}/authorize"),
-            token: format!("{base}/token"),
-        }
-    }
-}
 pub(in crate::engine) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -59,11 +35,6 @@ enum Callback {
     Denied,
 }
 impl Pending {
-    pub(super) fn bind() -> Result<Self> {
-        let listener = std::net::TcpListener::bind("127.0.0.1:1455")
-            .map_err(|_| "Codex login needs loopback port 1455. Close other pending Codex sign-ins and retry /login.")?;
-        Self::new(listener, REDIRECT.into(), "Codex")
-    }
     pub(in crate::engine) fn new(
         listener: std::net::TcpListener,
         redirect: String,
@@ -82,27 +53,10 @@ impl Pending {
     pub(super) fn local() -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let redirect = format!("http://{}/auth/callback", listener.local_addr().unwrap());
-        Self::new(listener, redirect, "Codex").unwrap()
+        Self::new(listener, redirect, "ChatGPT").unwrap()
     }
     pub(in crate::engine) fn challenge(&self) -> String {
         URL_SAFE_NO_PAD.encode(Sha256::digest(self.verifier.as_bytes()))
-    }
-    pub(super) fn url(&self, endpoints: &Endpoints) -> Result<reqwest::Url> {
-        let challenge = self.challenge();
-        let mut url = reqwest::Url::parse(&endpoints.authorize)?;
-        url.query_pairs_mut().extend_pairs([
-            ("response_type", "code"),
-            ("client_id", CLIENT_ID),
-            ("redirect_uri", &self.redirect),
-            ("scope", "openid profile email offline_access"),
-            ("code_challenge", &challenge),
-            ("code_challenge_method", "S256"),
-            ("state", &self.state),
-            ("id_token_add_organizations", "true"),
-            ("codex_cli_simplified_flow", "true"),
-            ("originator", "hibiscus"),
-        ]);
-        Ok(url)
     }
     #[cfg(test)]
     fn code(&self, input: &str) -> Result<String> {
@@ -120,14 +74,6 @@ impl Pending {
     }
     fn callback(&self, input: &str) -> Result<Callback> {
         callback(input, &self.redirect, &self.state, self.label)
-    }
-    pub(super) async fn complete(
-        self,
-        manual: Receiver<String>,
-        endpoints: &Endpoints,
-    ) -> Result<Token> {
-        let code = self.wait(manual).await?;
-        exchange(endpoints, &code, &self.verifier, &self.redirect).await
     }
     /// The authorization code from the browser callback or a pasted redirect URL.
     pub(in crate::engine) async fn wait(&self, manual: Receiver<String>) -> Result<String> {
@@ -188,111 +134,6 @@ impl Pending {
     }
 }
 
-#[derive(Deserialize)]
-struct Receipt {
-    access_token: String,
-    refresh_token: String,
-    expires_in: u64,
-}
-async fn tokens(endpoints: &Endpoints, form: &[(&str, &str)]) -> Result<Token> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()?;
-    let mut response = client
-        .post(&endpoints.token)
-        .form(form)
-        .send()
-        .await
-        .map_err(|_| "Codex token request failed. Check connectivity and retry /login.")?;
-    if !response.status().is_success() {
-        return Err(format!("Codex token request returned HTTP {}. Retry /login. Existing credentials were preserved.",response.status().as_u16()).into());
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "Codex token response was interrupted")?
-    {
-        if bytes.len() + chunk.len() > 128 * 1024 {
-            return Err("Codex token response exceeds supported bounds".into());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let receipt: Receipt = serde_json::from_slice(&bytes)
-        .map_err(|_| "Codex token response is missing valid credentials")?;
-    if receipt.expires_in == 0 || receipt.expires_in > 86400 * 30 {
-        return Err("Invalid Codex access-token lifetime".into());
-    }
-    let account_id = account_id(&receipt.access_token)?;
-    let token = Token {
-        access: receipt.access_token,
-        refresh: receipt.refresh_token,
-        expires: now().saturating_add(receipt.expires_in),
-        account_id,
-    };
-    token.validate()?;
-    Ok(token)
-}
-async fn exchange(
-    endpoints: &Endpoints,
-    code: &str,
-    verifier: &str,
-    redirect: &str,
-) -> Result<Token> {
-    tokens(
-        endpoints,
-        &[
-            ("grant_type", "authorization_code"),
-            ("client_id", CLIENT_ID),
-            ("code", code),
-            ("code_verifier", verifier),
-            ("redirect_uri", redirect),
-        ],
-    )
-    .await
-}
-pub(super) async fn refresh(endpoints: &Endpoints, token: &Token) -> Result<Token> {
-    let refreshed = tokens(
-        endpoints,
-        &[
-            ("grant_type", "refresh_token"),
-            ("client_id", CLIENT_ID),
-            ("refresh_token", &token.refresh),
-        ],
-    )
-    .await?;
-    if refreshed.account_id != token.account_id {
-        return Err("Codex refresh changed account identity. Use /login to sign in again.".into());
-    }
-    Ok(refreshed)
-}
-fn account_id(access: &str) -> Result<String> {
-    // Routing metadata from the TLS-protected token endpoint, not a locally
-    // verified identity assertion. This does not authenticate arbitrary JWTs.
-    let mut parts = access.split('.');
-    let _header = parts.next();
-    let payload = parts
-        .next()
-        .ok_or("Codex access token has no account routing metadata")?;
-    if parts.next().is_none() || parts.next().is_some() || payload.len() > 65536 {
-        return Err("Invalid Codex access-token format".into());
-    }
-    let bytes = URL_SAFE_NO_PAD
-        .decode(payload)
-        .map_err(|_| "Invalid Codex access-token encoding")?;
-    let claims: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| "Invalid Codex account routing metadata")?;
-    claims["https://api.openai.com/auth"]["chatgpt_account_id"]
-        .as_str()
-        .filter(|s| {
-            !s.is_empty() && s.len() <= 512 && s.is_ascii() && !s.chars().any(char::is_control)
-        })
-        .map(str::to_owned)
-        .ok_or_else(|| "Codex access token is missing its account ID".into())
-}
-
 #[cfg(test)]
 pub(in crate::engine) mod tests;
 
@@ -337,13 +178,14 @@ fn callback(input: &str, redirect: &str, state: &str, label: &str) -> Result<Cal
 
 #[cfg(feature = "fuzzing")]
 pub(super) fn fuzz_callback(bytes: &[u8]) {
+    const REDIRECT: &str = "http://localhost:1455/auth/callback";
     if let Ok(input) = std::str::from_utf8(bytes) {
-        let _ = callback(input, REDIRECT, "fuzz-state", "Codex");
+        let _ = callback(input, REDIRECT, "fuzz-state", "ChatGPT");
         if matches!(
-            callback(input, REDIRECT, "fuzz-state", "Codex"),
+            callback(input, REDIRECT, "fuzz-state", "ChatGPT"),
             Ok(Callback::Code(..))
         ) {
-            assert!(callback(input, REDIRECT, "different-state", "Codex").is_err());
+            assert!(callback(input, REDIRECT, "different-state", "ChatGPT").is_err());
         }
     }
 }

@@ -37,7 +37,6 @@ pub(super) fn inline_login<R: BufRead>(
     };
     let choices = if method == 0 {
         vec![
-            "Codex · ChatGPT account".into(),
             "Continue with ChatGPT · Hibiscus".into(),
             "Reka Bytes · Rooxcode models".into(),
         ]
@@ -57,7 +56,7 @@ pub(super) fn inline_login<R: BufRead>(
         return Ok(());
     };
     let provider = if method == 0 {
-        ["openai-codex", crate::engine::chatgpt::ID, "rooxcode"][index]
+        [crate::engine::chatgpt::ID, "rooxcode"][index]
     } else {
         choices[index].as_str()
     };

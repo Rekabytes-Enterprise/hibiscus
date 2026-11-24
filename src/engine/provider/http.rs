@@ -19,7 +19,6 @@ pub(super) async fn exchange(
     conversation: &crate::engine::session::Session,
     url: &str,
     body: &Value,
-    codex: Option<&crate::engine::oauth::Token>,
     tools: Option<&[Value]>,
     out: &Sender<Value>,
 ) -> Result<Stream> {
@@ -42,12 +41,8 @@ pub(super) async fn exchange(
         } else if chatgpt_plan {
             chatgpt_request(&client, url, body, &chatgpt::credential().await?)?
         } else {
-            let key = if let Some(token) = codex {
-                token.access.clone()
-            } else {
-                crate::engine::config::key(provider)?
-            };
-            authenticated_request(&client, url, body.clone(), &key, codex)?
+            let key = crate::engine::config::key(provider)?;
+            client.post(url).bearer_auth(key).json(body)
         };
         let req = if provider.api == Api::Anthropic {
             req.header("anthropic-version", "2023-06-01")
@@ -205,35 +200,6 @@ enum Capacity {
     Pending,
     Waiting,
     Started,
-}
-
-pub(super) fn authenticated_request(
-    client: &reqwest::Client,
-    url: &str,
-    mut body: Value,
-    key: &str,
-    codex: Option<&crate::engine::oauth::Token>,
-) -> Result<reqwest::RequestBuilder> {
-    let Some(token) = codex else {
-        return Ok(client.post(url).bearer_auth(key).json(&body));
-    };
-    if url != format!("{}/responses", crate::engine::oauth::RESOURCE) {
-        return Err(
-            "Refusing to send Codex subscription credentials outside the Codex endpoint".into(),
-        );
-    }
-    // Codex's legacy subscription endpoint does not accept this API field.
-    body.as_object_mut()
-        .ok_or("Invalid Responses request body")?
-        .remove("max_output_tokens");
-    Ok(client
-        .post(url)
-        .bearer_auth(&token.access)
-        .json(&body)
-        .header("chatgpt-account-id", &token.account_id)
-        .header("originator", "hibiscus")
-        .header("OpenAI-Beta", "responses=experimental")
-        .header("accept", "text/event-stream"))
 }
 
 pub(super) fn chatgpt_request(

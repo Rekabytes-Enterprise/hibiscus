@@ -4,6 +4,16 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-11-24
+
+### Removed
+
+- Retire the legacy Codex login. Sign in with Continue with ChatGPT and choose a model to resume existing chats.
+
+### Fixed
+
+- Send a stable UUID host ID for Continue with ChatGPT and replace the incompatible ID saved by v0.4.11 on the next sign-in.
+
 ## [0.4.11] - 2026-11-24
 
 ### Added

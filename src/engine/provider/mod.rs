@@ -60,27 +60,13 @@ pub async fn request(
                 .into(),
         );
     }
-    let codex = if provider.authentication == super::config::Authentication::Codex {
-        Some(super::oauth::credential().await?)
-    } else {
-        None
-    };
     let (route, mut body) = request_body(provider, model, conversation, system, thinking, tools);
     super::privacy::apply(&provider.id, super::privacy::training_denied(), &mut body);
     let url = format!("{}/{}", provider.base_url.trim_end_matches('/'), route);
     let mut following_up = false;
     let mut continuation = Continuation::default();
     let mut state = loop {
-        let result = exchange(
-            provider,
-            conversation,
-            &url,
-            &body,
-            codex.as_ref(),
-            tools,
-            out,
-        )
-        .await;
+        let result = exchange(provider, conversation, &url, &body, tools, out).await;
         let mut state = match result {
             // An earlier HTTP exchange may already have streamed text.
             Err(error) if following_up && error.is::<ContextOverflow>() => {

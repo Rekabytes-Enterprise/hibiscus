@@ -3,7 +3,7 @@
 //! Thin glue between the window and `hibiscus::desktop`. The engine runs in
 //! this process on its own thread; the frontend only sees JSON records.
 
-use hibiscus::desktop::{self, ChatGptSignIn, CodexSignIn, Engine, RekaSignIn, Start};
+use hibiscus::desktop::{self, ChatGptSignIn, Engine, RekaSignIn, Start};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -421,9 +421,9 @@ async fn set_training_denied(deny: bool) -> Result<(), String> {
     desktop::set_training_denied(deny).map_err(|e| e.to_string())
 }
 
-/// The pending Codex sign-in: where pasted redirects go, and the task waiting for it.
+/// A pending browser sign-in with a manual redirect channel and a cancellable task.
 #[derive(Default)]
-struct Codex(
+struct PendingBrowserLogin(
     Mutex<
         Option<(
             tauri::async_runtime::Sender<String>,
@@ -432,7 +432,7 @@ struct Codex(
     >,
 );
 
-impl Codex {
+impl PendingBrowserLogin {
     /// Stops the pending sign-in; its port closes and the stored login is untouched.
     fn cancel(&self) {
         if let Some((_, task)) = self.0.lock().unwrap().take() {
@@ -441,51 +441,27 @@ impl Codex {
     }
 }
 
-/// Starts a provider's browser sign-in. The result arrives through the login event.
+/// Starts ChatGPT plan sign-in and returns the link for manual opening.
 #[tauri::command]
-async fn codex_start(
+async fn chatgpt_start(
     app: AppHandle,
-    codex: State<'_, Codex>,
-    provider: String,
+    pending: State<'_, PendingBrowserLogin>,
 ) -> Result<String, String> {
-    codex.cancel();
-    match provider.as_str() {
-        "openai-codex" => {
-            let flow = CodexSignIn::start().map_err(|e| e.to_string())?;
-            start_browser_login(&app, &codex, flow.url().into(), flow.paste(), async move {
-                flow.finish().await.map_err(|e| e.to_string())
-            })
-        }
-        "openai-chatgpt" => {
-            let flow = ChatGptSignIn::start().map_err(|e| e.to_string())?;
-            start_browser_login(&app, &codex, flow.url().into(), flow.paste(), async move {
-                flow.finish().await.map_err(|e| e.to_string())
-            })
-        }
-        _ => Err("Unknown browser sign-in provider.".into()),
-    }
-}
-
-fn start_browser_login(
-    app: &AppHandle,
-    pending: &Codex,
-    url: String,
-    paste: tauri::async_runtime::Sender<String>,
-    finish: impl std::future::Future<Output = Result<(), String>> + Send + 'static,
-) -> Result<String, String> {
-    // Keep the URL available for manual opening if the system browser fails.
+    pending.cancel();
+    let flow = ChatGptSignIn::start().map_err(|e| e.to_string())?;
+    let url = flow.url().to_owned();
+    let paste = flow.paste();
     let _ = tauri_plugin_opener::open_url(&url, None::<&str>);
-    let app = app.clone();
     let task = tauri::async_runtime::spawn(async move {
-        let _ = app.emit("codex-login", finish.await.err());
+        let _ = app.emit("chatgpt-login", flow.finish().await.err().map(|e| e.to_string()));
     });
     *pending.0.lock().unwrap() = Some((paste, task));
     Ok(url)
 }
 
 #[tauri::command]
-async fn codex_paste(codex: State<'_, Codex>, url: String) -> Result<(), String> {
-    let paste = codex
+async fn chatgpt_paste(pending: State<'_, PendingBrowserLogin>, url: String) -> Result<(), String> {
+    let paste = pending
         .0
         .lock()
         .unwrap()
@@ -498,18 +474,18 @@ async fn codex_paste(codex: State<'_, Codex>, url: String) -> Result<(), String>
 }
 
 #[tauri::command]
-async fn codex_cancel(codex: State<'_, Codex>) -> Result<(), String> {
-    codex.cancel();
+async fn chatgpt_cancel(pending: State<'_, PendingBrowserLogin>) -> Result<(), String> {
+    pending.cancel();
     Ok(())
 }
 
-/// The pending Reka Bytes sign-in, kept like the Codex one.
+/// The pending Reka Bytes sign-in.
 #[derive(Default)]
-struct Reka(Codex);
+struct Reka(PendingBrowserLogin);
 
-/// The pending "Sign in with ElevenLabs", held like the Codex one.
+/// The pending ElevenLabs sign-in.
 #[derive(Default)]
-struct ElevenLabsLogin(Codex);
+struct ElevenLabsLogin(PendingBrowserLogin);
 
 #[derive(Serialize)]
 struct RekaAccount {
@@ -1288,7 +1264,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_websocket::init())
         .manage(App::default())
-        .manage(Codex::default())
+        .manage(PendingBrowserLogin::default())
         .manage(Reka::default())
         .manage(ElevenLabsLogin::default())
         .on_window_event(|window, event| {
@@ -1354,9 +1330,9 @@ fn main() {
             sign_out,
             training_denied,
             set_training_denied,
-            codex_start,
-            codex_paste,
-            codex_cancel,
+            chatgpt_start,
+            chatgpt_paste,
+            chatgpt_cancel,
             reka_account,
             reka_profile,
             reka_usage,

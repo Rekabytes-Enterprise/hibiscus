@@ -16,7 +16,7 @@ Hibiscus is a standalone Rust coding agent. It owns provider connections, tool e
 | `src/client/bridge/` | In-process worker lifecycle and the terminal adapter: `Client` (`mod.rs`), one turn (`turn.rs`), transcript rendering (`display.rs`), keys during a run (`live_input.rs`) and JSONL records (`wire.rs`) |
 | `src/client/transport.rs` | Bounded local event ingress and controlled writes |
 | `src/client/error.rs`, `run.rs`, `diagnostics.rs` | User-facing error categories and recovery hints, run settlement state, diagnostic capture |
-| `src/engine/auth.rs`, `logout.rs`, `oauth/` | API-key storage, Codex browser sign-in steps and locked token refresh, credential removal. No terminal UI |
+| `src/engine/auth.rs`, `logout.rs`, `oauth/` | API-key storage, ChatGPT browser sign-in steps and locked token refresh, credential removal. No terminal UI |
 | `src/extensions/` | Agent creation/inspection/reload tools, shared catalog snapshots, manifest validation and executable protocol |
 | `src/process.rs` | Bounded stdin/stdout/stderr, deadlines and process-group cancellation shared by shell tools and extensions |
 | `src/chat/` | Slash-command workflows, the `/login` and `/logout` prompts, saved-session selection, and the native command catalog (`commands.rs`) shared by routing, completion and extension collision checks |
