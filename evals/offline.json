@@ -5,7 +5,6 @@
   "suite": "suite.json",
   "repetitions": 2,
   "limits": {
-    "maxSteps": 8,
     "timeoutSeconds": 20,
     "checkTimeoutSeconds": 5
   },

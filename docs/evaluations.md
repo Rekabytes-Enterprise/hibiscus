@@ -41,7 +41,7 @@ These small public cases are an initial harness, not a representative benchmark 
 
 ## Baseline and candidate controls
 
-`evals/offline.json` owns common model/API settings, native `maxSteps`, wall/check timeouts and repetition count. Version 1 starts fresh sessions with thinking `off`; it exposes no sampling/seed override that the native runtime cannot enforce. Add an optional `initial` variant using the same variant shape when comparing a historical configuration. The first variant must remain `baseline`.
+`evals/offline.json` owns common model/API settings, wall/check timeouts and repetition count. Version 1 starts fresh sessions with thinking `off`; it exposes no sampling/seed override that the native runtime cannot enforce. Add an optional `initial` variant using the same variant shape when comparing a historical configuration. The first variant must remain `baseline`.
 
 Each variant supplies an instruction file and zero or more extension source directories, relative to the plan directory using normal paths without `..`. Put extension snapshots beneath the plan directory, for example `variants/candidate_extensions/review`. Each directory needs its original `extension.json` and implementation files. Copy source only, not `.versions` stores or credential files. Prefer `{extensionDir}` in manifest arguments and bundle implementation files rather than referencing mutable programs elsewhere.
 
@@ -72,7 +72,7 @@ python3 -m tools.evaluation --plan evals/live.local.json \
   --binary target/debug/hibiscus --live --output /tmp/hibiscus-live-selection.json
 ```
 
-The runner refuses a live plan without `--live`, and refuses `--live` for an offline plan. Native structural preflight still uses the local synthetic provider; task execution uses the explicitly configured endpoint. The key is supplied to the agent environment only, not the grader or report. Native tools/extensions inherit that environment as in normal Hibiscus use. Evaluations can make billable requests. `maxSteps`, per-response `maxTokens` and wall time are limits, not a total token or spend cap. Provider-internal retries, model updates and sampling may vary; repetitions expose variation rather than guaranteeing reproducibility.
+The runner refuses a live plan without `--live`, and refuses `--live` for an offline plan. Native structural preflight still uses the local synthetic provider; task execution uses the explicitly configured endpoint. The key is supplied to the agent environment only, not the grader or report. Native tools/extensions inherit that environment as in normal Hibiscus use. Evaluations can make billable requests. Per-response `maxTokens` and wall time bound output and duration. Neither sets a total token or spend cap. Provider-internal retries, model updates and sampling may vary; repetitions expose variation rather than guaranteeing reproducibility.
 
 The included live plan is a configuration example. Offline test success does not establish real-account acceptance, provider availability or comparative coding performance.
 

@@ -259,6 +259,48 @@ fn calls(calls: Vec<(&str, Value)>) -> (u16, String) {
         ),
     )
 }
+#[test]
+fn agent_completes_after_more_than_the_previous_step_limit() {
+    let mut replies = (0..65)
+        .map(|round| {
+            (
+                200,
+                sse(json!({"type":"response.completed","response":{
+                    "status":"completed",
+                    "output":[{"type":"function_call","call_id":format!("round-{round}"),
+                        "name":"read","arguments":json!({"path":"input.txt"}).to_string()}]
+                }})),
+            )
+        })
+        .collect::<Vec<_>>();
+    replies.push(response("ALL_ROUNDS_COMPLETE"));
+    let f = Fixture::new("responses", replies);
+    fs::write(f.root.join("input.txt"), "tool result").unwrap();
+    let config_path = f.root.join("app/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["maxSteps"] = json!(1);
+    let original = serde_json::to_vec(&config).unwrap();
+    fs::write(&config_path, &original).unwrap();
+
+    let output = f.run("", &["Read the file and finish when ready."]);
+    good(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ALL_ROUNDS_COMPLETE"));
+    let requests = f.captured();
+    assert_eq!(requests.len(), 66);
+    assert!(requests.last().unwrap()["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            item["type"] == "function_call_output"
+                && item["call_id"] == "round-64"
+                && item["output"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("tool result"))
+        }));
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
 fn good(output: &std::process::Output) {
     assert!(
         output.status.success(),

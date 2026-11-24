@@ -17,7 +17,7 @@ from .spec import InvalidSpec, digest, load_plan, load_suite, read_file
 def config(plan, base_url, preflight=False):
     provider = plan.provider
     return {"model": f"{provider['id']}/{provider['model']['id']}",
-            "maxSteps": plan.limits["maxSteps"], "providers": [{
+            "providers": [{
                 "id": provider["id"], "baseUrl": base_url,
                 "api": "responses" if preflight else provider["api"],
                 "apiKeyEnv": AGENT_CREDENTIAL_ENV, "models": [provider["model"]]}]}
@@ -167,7 +167,7 @@ def evaluate(plan_path, binary, split="selection", live=False):
             "limitations": ["Offline fixtures measure harness execution, not model quality.",
                             "Held-out graders are withheld during execution, not sandboxed or secret.",
                             "Fresh workspaces and homes are isolation, not a filesystem/network sandbox.",
-                            "Cost is unknown. Native maxSteps/output limits and wall time are not a total token or spend cap.",
+                            "Cost is unknown. Per-response output limits and wall time are not a total token or spend cap.",
                             "Repetitions use independent sessions; remote provider versions and sampling are not pinned.",
                             "Reports omit transcripts; agent or extension code may still access inherited OS permissions."]}
 

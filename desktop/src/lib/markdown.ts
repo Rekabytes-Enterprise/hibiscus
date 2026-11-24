@@ -90,3 +90,55 @@ export function cachedMarkdown(text: string): string {
   }
   return html;
 }
+
+type Reply = { text: string; streaming: boolean };
+
+/** Mount sanitized reply markup once and update it in place as the text streams. */
+export function renderReply(node: HTMLElement, reply: Reply) {
+  const template = node.ownerDocument.createElement("template");
+  const parse = ({ text, streaming }: Reply) => {
+    template.innerHTML = streaming ? markdown(text) : cachedMarkdown(text);
+    return template.content;
+  };
+  node.replaceChildren(parse(reply));
+  return {
+    update(reply: Reply) {
+      updateChildren(node, parse(reply));
+    },
+  };
+}
+
+function sameElement(current: Node, next: Node): current is Element {
+  return current instanceof Element && next instanceof Element
+    && current.localName === next.localName && current.namespaceURI === next.namespaceURI
+    && current.attributes.length === next.attributes.length
+    && Array.from(current.attributes).every(({ namespaceURI, localName, value }) =>
+      next.getAttributeNS(namespaceURI, localName) === value);
+}
+
+function updateChildren(parent: Node, next: Node) {
+  let current = parent.firstChild;
+  for (const child of Array.from(next.childNodes)) {
+    if (!current) {
+      parent.appendChild(child);
+      continue;
+    }
+    const sibling = current.nextSibling;
+    if (!current.isEqualNode(child)) {
+      if (sameElement(current, child)) {
+        // Preserve the element itself, including focus and scroll position.
+        updateChildren(current, child);
+      } else if (current.nodeType === Node.TEXT_NODE && child.nodeType === Node.TEXT_NODE) {
+        current.nodeValue = child.nodeValue;
+      } else {
+        parent.replaceChild(child, current);
+      }
+    }
+    current = sibling;
+  }
+  while (current) {
+    const sibling = current.nextSibling;
+    parent.removeChild(current);
+    current = sibling;
+  }
+}

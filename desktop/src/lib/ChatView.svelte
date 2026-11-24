@@ -5,7 +5,7 @@
   import Icon from "./Icon.svelte";
   import ChatQuestions from "./ChatQuestions.svelte";
   import ToolCall from "./ToolCall.svelte";
-  import { cachedMarkdown, markdown } from "./markdown";
+  import { renderReply } from "./markdown";
 
   let {
     chat,
@@ -103,7 +103,7 @@
     {#if item.kind === "user"}
       <div class="user">{item.text}{#if item.images}<span class="muted small"> · {item.images} image{item.images > 1 ? "s" : ""}</span>{/if}</div>
     {:else if item.kind === "assistant"}
-      <div class="assistant md" class:streaming={item.streaming}>{@html item.streaming ? markdown(item.text) : cachedMarkdown(item.text)}</div>
+      <div class="assistant md" class:streaming={item.streaming} use:renderReply={item}></div>
     {:else if item.kind === "tool"}
       <ToolCall tool={item} {folder} />
     {:else if item.kind === "tools"}

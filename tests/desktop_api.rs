@@ -255,6 +255,49 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     resumed.shutdown();
     second.shutdown();
 
+    // Sidebar switches can open chats whose provider or model was removed.
+    let mut recovering = Engine::start(Start::New, &a).unwrap();
+    for (name, selection) in [
+        ("renamed-provider", ["MyProvider", "old-model"]),
+        ("removed-model", ["test", "old-model"]),
+    ] {
+        let saved = home.join("sessions").join(format!("{name}.jsonl"));
+        let header = json!({"type":"session","format":"hibiscus","version":1,
+            "kind":"chat","id":name,"cwd":a,"model":selection});
+        let message = json!({"type":"message","message":{"role":"user","content":[
+            {"type":"text","text":"History from the old provider"}
+        ]}});
+        let original = format!("{header}\n{message}\n");
+        fs::write(&saved, &original).unwrap();
+
+        ask(
+            &mut recovering,
+            json!({"type":"switch_session","sessionPath":saved}),
+        );
+        let state = ask(&mut recovering, json!({"type":"get_state"}));
+        assert!(state["model"].is_null());
+        assert_eq!(state["modelSelectionUnavailable"], true);
+        let messages = ask(&mut recovering, json!({"type":"get_messages"}));
+        assert_eq!(
+            messages["messages"][0]["content"][0]["text"],
+            "History from the old provider"
+        );
+        assert_eq!(fs::read_to_string(&saved).unwrap(), original);
+
+        let state = ask(
+            &mut recovering,
+            json!({"type":"set_model","provider":"test","modelId":"model"}),
+        );
+        assert_eq!(state["model"]["provider"], "test");
+        assert_eq!(state["modelSelectionUnavailable"], false);
+        assert!(prompt(&mut recovering, "Continue this chat.").contains("DESKTOP_REPLY"));
+        let persisted = fs::read_to_string(saved).unwrap();
+        let header: Value = serde_json::from_str(persisted.lines().next().unwrap()).unwrap();
+        assert_eq!(header["model"], json!(["test", "model"]));
+        assert!(persisted.contains("History from the old provider"));
+    }
+    recovering.shutdown();
+
     let mut kinds = Engine::start(Start::Canvas, &a).unwrap();
     let state = ask(&mut kinds, json!({"type":"get_state"}));
     assert_eq!(state["sessionKind"], "canvas");
