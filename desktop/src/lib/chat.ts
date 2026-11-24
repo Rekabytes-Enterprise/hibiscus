@@ -16,6 +16,7 @@ export type Item =
       output: string;
       /** Unified diff of an edit, from the engine's result details. */
       diff: string;
+      editedPaths?: string[];
       /** Image the tool returned, such as a browser screenshot, as a data URL. */
       image: string;
       /** A page of a saved session cut the output or diff; `get_tool_result` has it all (#171). */
@@ -160,6 +161,7 @@ export function apply(chat: Chat, event: Record): Chat {
                 error: !!event.isError,
                 output: text(event.result?.content),
                 diff: event.result?.details?.diff ?? "",
+                editedPaths: batchPaths(event.result?.details?.editedPaths),
                 image: image(event.result?.content),
                 ms: event.durationMs ?? null,
               }
@@ -201,10 +203,15 @@ export function apply(chat: Chat, event: Record): Chat {
 }
 
 /** A stored tool result (`toolResult` message, or `get_tool_result`) as a tool row's fields. */
+function batchPaths(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((path): path is string => typeof path === "string" && path.length > 0) : undefined;
+}
+
 export const result = (m: any) => ({
   output: text(m.content),
   error: !!m.isError,
   diff: m.details?.diff ?? "",
+  editedPaths: batchPaths(m.details?.editedPaths),
   image: image(m.content),
   trimmed: !!m.trimmed,
   pendingImage: (m.omittedImages ?? 0) > 0,
@@ -271,9 +278,13 @@ export function pendingQuestions(items: Chat["items"]) {
 export function outputs(chat: Chat): string[] {
   const paths: string[] = [];
   for (const item of chat.items) {
-    if (item.kind !== "tool" || item.error || !["write", "edit"].includes(item.name)) continue;
-    const path = item.args?.path ?? item.args?.filePath;
-    if (typeof path === "string" && path) paths.unshift(path);
+    if (item.kind !== "tool") continue;
+    if (item.name === "batch_edit") {
+      paths.unshift(...(item.editedPaths ?? []));
+    } else if (!item.error && ["write", "edit"].includes(item.name)) {
+      const path = item.args?.path ?? item.args?.filePath;
+      if (typeof path === "string" && path) paths.unshift(path);
+    }
   }
   // Pages of a long session hold only some of its edits; the engine lists them all.
   return [...new Set([...paths, ...chat.edited])];
@@ -309,6 +320,7 @@ const VERBS: { [tool: string]: [string, string, string] } = {
   read: ["Reading", "Read", "file-text"],
   write: ["Writing", "Wrote", "edit"],
   edit: ["Editing", "Edited", "edit"],
+  batch_edit: ["Editing", "Edited", "edit"],
   bash: ["Running", "Ran", "terminal"],
   goal: ["Updating", "Updated", "check"],
   browser: ["Browsing", "Browsed", "globe"],
@@ -334,7 +346,13 @@ export function toolView(tool: Tool, folder: string | null) {
   const a = tool.args ?? {};
   const command = tool.name === "bash" || tool.name === "browser";
   const line = tool.name === "browser" ? (Array.isArray(a.args) ? a.args.join(" ") : "") : String(a.command ?? "").split("\n")[0];
-  const raw = command ? shorten(line, folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
+  const batch = tool.name === "batch_edit";
+  const edits: unknown = a.edits;
+  const paths = tool.editedPaths ?? (batch && Array.isArray(edits)
+    ? [...new Set(edits.flatMap((edit: unknown) => edit && typeof edit === "object" && "path" in edit && typeof edit.path === "string" ? [edit.path] : []))]
+    : []);
+  const batchLabel = paths.length === 1 ? relative(paths[0], folder) : `${paths.length} files`;
+  const raw = batch ? batchLabel : command ? shorten(line, folder) : tool.name === "goal" ? "goals" : a.path ? relative(String(a.path), folder) : toolLabel(tool.name, a);
   const target = raw.length > 120 ? raw.slice(0, 119) + "…" : raw;
   return { verb: tool.running ? running : done, target, icon, command };
 }
@@ -346,7 +364,7 @@ export function summary(tools: Tool[]): string {
   const parts: string[] = [];
   const reads = count(["read"]);
   const writes = count(["write"]);
-  const edits = count(["edit"]);
+  const edits = count(["edit", "batch_edit"]);
   const runs = count(["bash"]);
   const goals = count(["goal"]);
   const other = tools.length - reads - writes - edits - runs - goals;

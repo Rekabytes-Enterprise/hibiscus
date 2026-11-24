@@ -62,7 +62,7 @@ impl Timeline {
             }
             "bash" => Call::Bash,
             _ => {
-                if matches!(name, "edit" | "write") {
+                if matches!(name, "edit" | "batch_edit" | "write") {
                     self.exploration_ended = true;
                 }
                 let index = self.entries.len();
@@ -99,7 +99,7 @@ impl Timeline {
             }
             "bash" => Call::Bash,
             _ => {
-                if matches!(name, "edit" | "write") {
+                if matches!(name, "edit" | "batch_edit" | "write") {
                     self.exploration_ended = true;
                 }
                 let index = self.entries.len();

@@ -199,6 +199,20 @@ pub(crate) fn write(
 ) -> Result<Value> {
     Store::open(context.cwd)?.write(context, path, bytes, expected)
 }
+pub(crate) fn write_protected(
+    context: &mut Context<'_>,
+    path: &Path,
+    bytes: &[u8],
+    expected: &[u8],
+) -> Result<Value> {
+    Store::open(context.cwd)?.write_protected(context, path, bytes, expected)
+}
+
+pub(crate) fn batch_targets(cwd: &Path, paths: &[PathBuf]) -> Result<Vec<(PathBuf, String)>> {
+    let store = Store::open(cwd)?;
+    paths.iter().map(|path| store.batch_target(path)).collect()
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Tool {
     History,

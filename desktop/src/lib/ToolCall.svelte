@@ -1,6 +1,7 @@
 <script lang="ts">
   import { result, toolHunks, toolView, type Tool } from "./chat";
   import { request } from "./engine";
+  import { parseDiff } from "./diff";
   import Hunks from "./Hunks.svelte";
   import Icon from "./Icon.svelte";
 
@@ -33,7 +34,8 @@
   });
 
   const view = $derived(toolView(tool, folder));
-  const hunks = $derived(tool.error ? [] : toolHunks(tool));
+  const batch = $derived(tool.name === "batch_edit" ? parseDiff(tool.diff) : []);
+  const hunks = $derived(tool.error || batch.length ? [] : toolHunks(tool));
   // A read's contents are not worth showing; only its error is.
   const foldable = $derived(tool.name !== "read" || tool.error);
   /** What the copy button copies: the new text for edits and writes, else the output. */
@@ -85,7 +87,15 @@
     <div class="toolbody">
       {#if view.command}<pre class="cmd">$ {tool.args?.command ?? ""}</pre>{/if}
       <div class="toolbox">
-        {#if hunks.length}
+        {#if batch.length}
+          <div class="toolscroll">
+            {#if tool.output}<pre>{tool.output}</pre>{/if}
+            {#each batch as file (file.path)}
+              <div class="muted small">{file.path}</div>
+              <Hunks hunks={file.hunks} />
+            {/each}
+          </div>
+        {:else if hunks.length}
           <div class="toolscroll"><Hunks {hunks} /></div>
         {:else if tool.output || tool.running}
           <pre class="toolscroll">{tool.output || "Running…"}</pre>
