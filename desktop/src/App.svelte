@@ -751,6 +751,16 @@
     }
   }
 
+  async function sendQueuedNow(queueId: string) {
+    if (opening || !chat.running) return;
+    const session = sessionFile;
+    try {
+      await post({ type: "steer_queued_prompt", queueId });
+    } catch (e) {
+      if (sessionFile === session) notice(message(e));
+    }
+  }
+
   async function send(text: string, images: { mimeType: string; data: string }[], steer: boolean) {
     const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text);
     if (compact) {
@@ -1312,6 +1322,7 @@
       onopenfile={(path) => openFile(workdir!, path).catch((e) => notice(message(e)))}
       onshowdiff={() => { side = "diff"; void refresh(); }}
       onshowtasks={() => (side = "tasks")}
+      onsendnow={sendQueuedNow}
       onabort={() => post({ type: "abort" }).catch(() => {})}
     />
   {/if}

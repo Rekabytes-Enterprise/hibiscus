@@ -42,6 +42,7 @@ Every command gets exactly one `response` with the same `id`:
 | `prompt` | `message`, optional `images: [{mimeType, data}]` (base64), optional `streamingBehavior` | While a run is active, needs `streamingBehavior: "steer"` or `"followUp"`; otherwise fails with "Agent is busy". At most 16 queued. |
 | `abort` | | Cancels the active run. The run still ends with `agent_settled`. |
 | `clear_queue` | | Drops queued prompts. |
+| `steer_queued_prompt` | `queueId` | Move a queued prompt into the active turn at the next step. An already delivered or removed prompt is rejected. |
 | `get_state` | | Session state, including `sessionKind` (`chat` or `canvas`) workingDirectory, and extension commands. |
 | `set_working_repository` | `path` (checkout root, or null to use the open folder) | Desktop Chat when idle. A checkout must be inside the open folder. The chat stays listed under its open folder. |
 | `get_messages` | optional `limit`, `before` | Without `limit`, `data.messages` is the whole conversation. With `limit` (at most 1000), it's one page for the desktop chat: up to `limit` messages ending before position `before` (default: the end), moved back so it never starts with a tool result. `data.start` is the page's first position, `data.total` the conversation's length, and `data.edited` the files written or edited without error, newest first. In a page, tool output over 2 KB is cut (`trimmed: true`), edit diffs over 16 KB are left out, tool images are left out (`omittedImages: n`), and prompt images keep only their type. |
@@ -70,7 +71,7 @@ Commands marked "not during a run" fail with "Command unavailable while a run is
 | `thinking_reset` | | Discard any shown thinking text. |
 | `tool_execution_start` | `toolCallId`, `toolName`, `args` | A tool started. |
 | `tool_execution_end` | `toolCallId`, `toolName`, `isError`, `result`, `durationMs` | A tool finished. |
-| `queue_update` | `steering: [text]`, `followUp: [text]` | Queued prompts changed. |
+| `queue_update` | `steering: [text]`, `followUp: [text]`, `prompts: [{id, text, images, steer}]` | Queued prompts changed. |
 | `queue_rejected` | `message`, `images`, `steer`, `error` | A queued prompt was held back after a failure or while waiting for an answer. Show it so the user can review and resend it. |
 | `auto_retry_start` / `auto_retry_end` | `success` | The engine is retrying a provider error. |
 | `compaction_start` / `compaction_end` | `result` or `errorMessage` | Context compaction. |

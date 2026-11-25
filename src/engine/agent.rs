@@ -81,6 +81,10 @@ enum Command {
         name: String,
     },
     ClearQueue,
+    SteerQueuedPrompt {
+        #[serde(rename = "queueId")]
+        queue_id: String,
+    },
     Abort,
     Compact {
         #[serde(default, rename = "customInstructions")]
@@ -108,6 +112,7 @@ struct Image {
     data: String,
 }
 struct Prompt {
+    queue_id: String,
     text: String,
     images: Vec<Image>,
     steer: bool,
@@ -124,8 +129,45 @@ fn failure(id: &str, message: &str) -> Value {
     json!({"type":"response","id":id,"success":false,"error":super::safe_message(message)})
 }
 fn queued(q: &Queue) -> Value {
-    json!({"type":"queue_update","steering":q.items.iter().filter(|p|p.steer).map(|p|&p.text).collect::<Vec<_>>(),"followUp":q.items.iter().filter(|p|!p.steer).map(|p|&p.text).collect::<Vec<_>>()})
+    json!({
+        "type":"queue_update",
+        "steering":q.items.iter().filter(|p|p.steer).map(|p|&p.text).collect::<Vec<_>>(),
+        "followUp":q.items.iter().filter(|p|!p.steer).map(|p|&p.text).collect::<Vec<_>>(),
+        "prompts":q.items.iter().map(|prompt| json!({
+            "id":prompt.queue_id,"text":prompt.text,"images":prompt.images.len(),"steer":prompt.steer
+        })).collect::<Vec<_>>()
+    })
 }
+
+impl Queue {
+    fn push(&mut self, prompt: Prompt) {
+        if prompt.steer {
+            let position = self
+                .items
+                .iter()
+                .position(|item| !item.steer)
+                .unwrap_or(self.items.len());
+            self.items.insert(position, prompt);
+        } else {
+            self.items.push_back(prompt);
+        }
+    }
+
+    fn steer(&mut self, id: &str) -> Result<()> {
+        let position = self
+            .items
+            .iter()
+            .position(|prompt| prompt.queue_id == id)
+            .ok_or("That message has already left the queue.")?;
+        if !self.items[position].steer {
+            let mut prompt = self.items.remove(position).unwrap();
+            prompt.steer = true;
+            self.push(prompt);
+        }
+        Ok(())
+    }
+}
+
 fn select_working_repository(session: &mut Session, args: &Value) -> Result<Value> {
     let requested = working_repository_path(args)?;
     if let Some(repo) = &session.working_repository {
@@ -262,6 +304,19 @@ async fn serve_async(
                 emit(&out, response(&id, json!({}))).await?;
                 emit(&out, update).await?;
             }
+            Command::SteerQueuedPrompt { queue_id } => {
+                let update = {
+                    let mut q = queue.lock().unwrap();
+                    q.steer(&queue_id).map(|()| queued(&q))
+                };
+                match update {
+                    Ok(update) => {
+                        emit(&out, update).await?;
+                        emit(&out, response(&id, json!({}))).await?;
+                    }
+                    Err(error) => emit(&out, failure(&id, &error.to_string())).await?,
+                }
+            }
             Command::Prompt {
                 message,
                 images,
@@ -329,21 +384,12 @@ async fn serve_async(
                     }
                     let update = {
                         let mut q = queue.lock().unwrap();
-                        let prompt = Prompt {
+                        q.push(Prompt {
+                            queue_id: format!("{:x}", config::unique()),
                             text: message,
                             images,
                             steer: streaming_behavior.as_deref() == Some("steer"),
-                        };
-                        if prompt.steer {
-                            let pos = q
-                                .items
-                                .iter()
-                                .position(|p| !p.steer)
-                                .unwrap_or(q.items.len());
-                            q.items.insert(pos, prompt);
-                        } else {
-                            q.items.push_back(prompt);
-                        }
+                        });
                         queued(&q)
                     };
                     emit(&out, response(&id, json!({}))).await?;
@@ -367,6 +413,7 @@ async fn serve_async(
                 active = Some(tokio::spawn(async move {
                     let result = run_turns(
                         Prompt {
+                            queue_id: String::new(),
                             text: message,
                             images,
                             steer: false,
@@ -398,11 +445,7 @@ async fn serve_async(
                         queue.running = false;
                         queue.items.clear();
                     }
-                    let _ = emit(
-                        &o,
-                        json!({"type":"queue_update","steering":[],"followUp":[]}),
-                    )
-                    .await;
+                    let _ = emit(&o, queued(&Queue::default())).await;
                     let _ = emit(&o, Event::Settled.wire()).await;
                 }));
             }

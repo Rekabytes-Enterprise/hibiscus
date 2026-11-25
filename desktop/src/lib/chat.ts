@@ -27,11 +27,22 @@ export type Item =
     }
   | { kind: "notice"; text: string; error: boolean };
 
+type QueuedPrompt = { id: string; text: string; images: number; steer: boolean };
+
+function isQueuedPrompt(value: unknown): value is QueuedPrompt {
+  return value !== null && typeof value === "object"
+    && "id" in value && typeof value.id === "string"
+    && "text" in value && typeof value.text === "string"
+    && "images" in value && typeof value.images === "number"
+    && "steer" in value && typeof value.steer === "boolean";
+}
+
 export type Chat = {
   items: Item[];
   running: boolean;
   steering: string[];
   followUp: string[];
+  queuedPrompts: QueuedPrompt[];
   /** Shown while the Rooxcode Gateway queues the request. */
   waiting: boolean;
   rooxcodeAccountLimit: { retryAfter: number | null } | null;
@@ -48,6 +59,7 @@ export const empty = (): Chat => ({
   running: false,
   steering: [],
   followUp: [],
+  queuedPrompts: [],
   waiting: false,
   rooxcodeAccountLimit: null,
   rejected: [],
@@ -169,7 +181,12 @@ export function apply(chat: Chat, event: Record): Chat {
         ),
       };
     case "queue_update":
-      return { ...chat, steering: event.steering ?? [], followUp: event.followUp ?? [] };
+      return {
+        ...chat,
+        steering: event.steering ?? [],
+        followUp: event.followUp ?? [],
+        queuedPrompts: Array.isArray(event.prompts) ? event.prompts.filter(isQueuedPrompt) : [],
+      };
     case "queue_rejected":
       return {
         ...chat,

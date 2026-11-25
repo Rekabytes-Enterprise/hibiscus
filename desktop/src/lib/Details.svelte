@@ -20,6 +20,7 @@
     onopenfile,
     onshowdiff,
     onshowtasks,
+    onsendnow,
     onabort,
   }: {
     folder: string;
@@ -35,11 +36,22 @@
     onshowdiff: () => void;
     /** Opens the Background tasks pane: every command and background job. */
     onshowtasks: () => void;
+    onsendnow: (id: string) => Promise<void>;
     onabort: () => void;
   } = $props();
 
   let contextOpen = $state(false);
   let showAll = $state(false);
+  let sending = $state<string | null>(null);
+
+  async function sendNow(id: string) {
+    sending = id;
+    try {
+      await onsendnow(id);
+    } finally {
+      sending = null;
+    }
+  }
 
   const files = $derived(outputs(chat));
   const tools = $derived(chat.items.filter((i) => i.kind === "tool"));
@@ -93,6 +105,23 @@
     {/if}
   </section>
 
+  {#if chat.running && chat.queuedPrompts.length}
+    <section>
+      <h3>Queued messages</h3>
+      {#each chat.queuedPrompts as prompt (prompt.id)}
+        <div class="queued">
+          <div class="ellipsis" title={prompt.text}>{prompt.text || (prompt.images === 1 ? "Image attachment" : `${prompt.images} image attachments`)}</div>
+          <div class="queued-actions">
+            <span class="muted small">{prompt.steer ? "Sending next" : "Waiting"}</span>
+            {#if !prompt.steer}
+              <button class="small" type="button" disabled={sending !== null} onclick={() => sendNow(prompt.id)} title="Send at the next step in the current run">Send now</button>
+            {/if}
+          </div>
+        </div>
+      {/each}
+    </section>
+  {/if}
+
   {#if extensions.length}
     <section>
       <h3>Extensions</h3>
@@ -143,3 +172,10 @@
     </section>
   {/if}
 </aside>
+
+
+<style>
+  .queued { padding: 6px 0; min-width: 0; }
+  .queued-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+  .queued-actions button { flex-shrink: 0; }
+</style>
