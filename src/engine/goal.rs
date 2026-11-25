@@ -85,7 +85,8 @@ fn verify(evidence: Evidence, history: &[Message]) -> Result<Value> {
             } if matches!(
                 tool_name.as_str(),
                 "write" | "edit" | "batch_edit" | "checkpoint_restore"
-            ) || (tool_name == "goal" && details["phaseBoundary"] == true) =>
+            ) || (tool_name == "goal" && details["phaseBoundary"] == true)
+                || (tool_name == "working_repository" && details["repositoryChanged"] == true) =>
             {
                 break
             }

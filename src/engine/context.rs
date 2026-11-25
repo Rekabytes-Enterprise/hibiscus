@@ -308,6 +308,7 @@ mod tests {
             rooxcode_session: super::super::rooxcode::SessionId::new().unwrap(),
             path: "unused".into(),
             cwd: "unused".into(),
+            working_repository: None,
             model: None,
             thinking: "off".into(),
             messages: vec![user("small".into())],

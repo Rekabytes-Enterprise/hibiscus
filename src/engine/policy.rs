@@ -26,7 +26,7 @@ Canvas and videos. This is a Canvas session. Card requests list their references
 - A video from a script takes two steps. First split the script into beats, call storyboard with one SVG per beat in the reference frames' style, and stop. When the user confirms, build a HyperFrames project from the confirmed SVGs and the voiceover, timing each beat to its line.
 - Call video_preview with the project folder; the app starts the preview server and shows it, so don't start one yourself. Render only when the user asks, then call video_preview again with the rendered file.
 ";
-pub fn compose(cwd: &Path, surface: Surface) -> String {
+pub fn compose(cwd: &Path, surface: Surface, parent: Option<&Path>) -> String {
     let mut prompt=format!("You are Hibiscus, a standalone coding agent. Workspace: {}. Inspect before editing. Native tools act on the real workspace. Clarify material ambiguities. Report actual outcomes and verification limits. Only report tests you ran. Keep private reasoning private. Use goal for explicit checklists or phases.\n\nWriting guidance: use concrete plain prose, preserve requested tone and exact code/quotations, avoid hype and boilerplate, and keep uncertainty honest.\n",cwd.display());
     prompt.push_str("\nNative edits checkpoint covered workspace files per request. To undo, inspect checkpoint_history and checkpoint_diff, then call checkpoint_restore for the requested files. Preserve later user edits and report conflicts. Checkpoints exclude shell and extension side effects, paths outside the workspace, Git metadata and Hibiscus data. Use selective restore and avoid destructive Git resets.\n");
     prompt.push_str("\nCoding: validate external input at the boundary. Handle recoverable I/O, network and partial failures without losing user data. Bound retries and repeat only safe operations. Give actionable errors without secrets. Verify success and failure paths. Diagnose failed checks and report gaps.\n");
@@ -56,6 +56,12 @@ pub fn compose(cwd: &Path, surface: Surface) -> String {
         files.push(("Instructions", home.join("AGENTS.md")));
         // Memory: each scope's index and its topic file names; topic files load on demand.
         prompt.push_str(&crate::memory::context(&home, cwd));
+    }
+    if let Some(parent) = parent {
+        prompt.push_str(
+            "\nRelative paths start at the working checkout. Use its AGENTS.md for its files.\n",
+        );
+        files.push(("Instructions", parent.join("AGENTS.md")));
     }
     files.push(("Instructions", cwd.join("AGENTS.md")));
     for (label, path) in files {

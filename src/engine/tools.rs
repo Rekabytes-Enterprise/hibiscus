@@ -59,6 +59,13 @@ pub fn definitions(cwd: Option<&Path>, surface: Surface, verification_pending: b
     if crate::video::ffmpeg().is_some() {
         definitions.push(json!({"name":"analyze_video","description":"See a video: returns `frames` stills spread across it (default 12, at most 24) as images with their times, plus its length. Use it before describing, analysing or remaking a video file.","parameters":{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":4096},"frames":{"type":"integer","minimum":1,"maximum":24}},"required":["path"],"additionalProperties":false}}));
     }
+    if surface == Surface::Chat {
+        definitions.push(json!({
+            "name":"working_repository",
+            "description":"When the user clearly names a child checkout, bind it by exact path before reads or edits. Call alone. Use its AGENTS.md for that repo; don't search siblings. Ask if unclear.",
+            "parameters":{"type":"object","properties":{"path":{"type":"string","maxLength":4096}},"required":["path"],"additionalProperties":false}
+        }));
+    }
     if surface != Surface::Terminal {
         definitions.push(json!({"name":"ask_user","description":"Ask the user when you need an answer before you can go on. Give each question 2 to 5 short suggested `options`. The user can also type an answer. Then end your turn. The answers arrive as the user's next message.","parameters":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":500},"options":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"string","minLength":1,"maxLength":200}}},"required":["question","options"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}}));
     }
@@ -408,6 +415,9 @@ pub fn validate(name: &str, args: &Value, surface: Surface) -> Result<()> {
         }
         "goal" => {
             super::goal::validate(args)?;
+        }
+        "working_repository" if surface == Surface::Chat => {
+            super::agent::working_repository_path(args)?;
         }
         "job" => {
             let a: Job = serde_json::from_value(args.clone())?;

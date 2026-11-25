@@ -35,6 +35,9 @@ enum Command {
         streaming_behavior: Option<String>,
     },
     GetState,
+    SetWorkingRepository {
+        path: Option<std::path::PathBuf>,
+    },
     #[serde(rename = "extension_command")]
     RunExtension {
         name: String,
@@ -84,6 +87,20 @@ enum Command {
         custom_instructions: Option<String>,
     },
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepositoryPath {
+    path: String,
+}
+
+pub(super) fn working_repository_path(args: &Value) -> Result<std::path::PathBuf> {
+    let RepositoryPath { path } = serde_json::from_value(args.clone())?;
+    if path.trim().is_empty() || path.len() > 4096 || path.chars().any(char::is_control) {
+        return Err("Provide the exact checkout path.".into());
+    }
+    Ok(path.into())
+}
+
 #[derive(Clone, serde::Serialize, Deserialize)]
 struct Image {
     #[serde(rename = "mimeType")]
@@ -109,6 +126,34 @@ fn failure(id: &str, message: &str) -> Value {
 fn queued(q: &Queue) -> Value {
     json!({"type":"queue_update","steering":q.items.iter().filter(|p|p.steer).map(|p|&p.text).collect::<Vec<_>>(),"followUp":q.items.iter().filter(|p|!p.steer).map(|p|&p.text).collect::<Vec<_>>()})
 }
+fn select_working_repository(session: &mut Session, args: &Value) -> Result<Value> {
+    let requested = working_repository_path(args)?;
+    if let Some(repo) = &session.working_repository {
+        if session.cwd.join(&requested).canonicalize().as_ref().ok() != Some(repo) {
+            return Err("A working repository is already selected. Ask the user to switch it in the composer.".into());
+        }
+        return Ok(tools::result(
+            format!("Already working in {}.", repo.display()),
+            json!({}),
+        ));
+    }
+    if session.messages.iter().rev().take_while(|message| !matches!(message, Message::User { .. })).any(|message| matches!(
+        message,
+        Message::ToolResult { tool_name, .. }
+            if matches!(tool_name.as_str(), "edit" | "write" | "batch_edit" | "checkpoint_restore")
+    )) {
+        return Err("Work has already changed files in this turn. Ask the user to choose the working repository in the composer.".into());
+    }
+    session.set_working_repository(Some(&requested))?;
+    Ok(tools::result(
+        format!(
+            "Working repository is {}. Relative paths now start there.",
+            session.working_dir().display()
+        ),
+        json!({"workingDirectory":session.working_dir(),"repositoryChanged":true}),
+    ))
+}
+
 pub fn serve(
     socket: crate::client::socket::Socket,
     config: Config,
@@ -371,15 +416,20 @@ async fn serve_async(
                 let snapshot = session.lock().unwrap().clone();
                 let (o, q, mut stop) = (out.clone(), queue.clone(), cancel.subscribe());
                 active = Some(tokio::spawn(async move {
-                    let result = registry
-                        .execute_command(
-                            &id,
-                            &name,
-                            &input,
-                            (&snapshot.cwd, &snapshot.id),
-                            &mut stop,
-                        )
-                        .await;
+                    let result = match snapshot.check_working_dir() {
+                        Err(error) => Err(error),
+                        Ok(()) => {
+                            registry
+                                .execute_command(
+                                    &id,
+                                    &name,
+                                    &input,
+                                    (snapshot.working_dir(), &snapshot.id),
+                                    &mut stop,
+                                )
+                                .await
+                        }
+                    };
                     q.lock().unwrap().running = false;
                     let result = match result {
                         Ok(data) => {
@@ -531,6 +581,12 @@ async fn serve_async(
                                 serde_json::to_value(extensions.snapshot().commands())?;
                             Ok(state)
                         }
+                        Command::SetWorkingRepository { path }
+                            if desktop && !busy && s.kind == SessionKind::Chat =>
+                        {
+                            s.set_working_repository(path.as_deref())?;
+                            Ok(json!({"workingDirectory":s.working_dir()}))
+                        }
                         Command::GetMessages { limit: None, .. } => {
                             Ok(json!({"messages":s.messages}))
                         }
@@ -644,7 +700,7 @@ async fn run_turns(
         maybe_compact(&session, &config, out, cancel).await?;
         {
             let mut s = session.lock().unwrap();
-            let text = crate::wsl::agent_text(&s.cwd, prompt.text);
+            let text = crate::wsl::agent_text(s.working_dir(), prompt.text);
             let mut blocks = vec![Block::Text { text }];
             blocks.extend(prompt.images.into_iter().map(|i| Block::Image {
                 mime_type: i.mime_type,
@@ -672,7 +728,7 @@ async fn run_turns(
             };
             if let Some(steering) = steering {
                 checkpoint_request = crate::checkpoints::Request::new(&session.lock().unwrap().id);
-                let cwd = session.lock().unwrap().cwd.clone();
+                let cwd = session.lock().unwrap().working_dir().to_owned();
                 let mut content = vec![Block::Text {
                     text: crate::wsl::agent_text(&cwd, steering.text),
                 }];
@@ -697,7 +753,13 @@ async fn run_turns(
                 (true, SessionKind::Chat) => tools::Surface::Chat,
                 (true, SessionKind::Canvas) => tools::Surface::Canvas,
             };
-            let mut instructions = super::policy::compose(&snapshot.cwd, surface);
+            snapshot.check_working_dir()?;
+            let working_dir = snapshot.working_dir();
+            let parent = snapshot
+                .working_repository
+                .as_ref()
+                .map(|_| snapshot.cwd.as_path());
+            let mut instructions = super::policy::compose(working_dir, surface, parent);
             let pending_phase = super::goal::pending(&snapshot.steps);
             if let Some((scope, phase)) = pending_phase {
                 instructions.push_str(&format!(
@@ -707,7 +769,7 @@ async fn run_turns(
             }
             let registry = extensions.snapshot();
             let mut definitions =
-                tools::definitions(Some(&snapshot.cwd), surface, pending_phase.is_some());
+                tools::definitions(Some(working_dir), surface, pending_phase.is_some());
             definitions.extend(registry.definitions().cloned());
             let rooxcode = p.authentication == config::Authentication::Rooxcode;
             let exceeds = if rooxcode {
@@ -812,6 +874,11 @@ async fn run_turns(
             }
             let mut output_budget = super::context::tool_output_budget(p, m);
             let total_calls = calls.len();
+            let mixed_repository_call = surface == tools::Surface::Chat
+                && total_calls > 1
+                && calls
+                    .iter()
+                    .any(|(_, name, _)| name == "working_repository");
             for (index, (id, name, args)) in calls.into_iter().enumerate() {
                 let output_limit = output_budget.map(|remaining| remaining / (total_calls - index));
                 emit(
@@ -825,10 +892,15 @@ async fn run_turns(
                 )
                 .await?;
                 let mut steps = session.lock().unwrap().steps.clone();
-                let cwd = snapshot.cwd.clone();
+                let cwd = snapshot.working_dir().to_owned();
                 let started = std::time::Instant::now();
                 let result = if *cancel.borrow() {
                     Err("Tool cancelled before execution".into())
+                } else if mixed_repository_call {
+                    Err("No calls ran. Call working_repository on its own so the next request can load that repository's instructions.".into())
+                } else if name == "working_repository" && surface == tools::Surface::Chat {
+                    let mut s = session.lock().unwrap();
+                    select_working_repository(&mut s, &args)
                 } else if registry.has_tool(&name) {
                     registry
                         .execute_tool(&id, &name, &args, (&cwd, &snapshot.id), cancel)
@@ -940,6 +1012,13 @@ async fn run_turns(
                     .wire(),
                 )
                 .await?;
+                if name == "working_repository"
+                    && !is_error
+                    && result["details"]["repositoryChanged"] == true
+                {
+                    checkpoint_request = crate::checkpoints::Request::new(&snapshot.id);
+                    emit(out, json!({"type":"working_repository_changed","workingDirectory":result["details"]["workingDirectory"]})).await?;
+                }
                 awaiting_answer |= !is_error && name == "ask_user";
                 if !is_error && matches!(name.as_str(), "write" | "edit") {
                     if let Ok(scope) = serde_json::from_value(

@@ -93,6 +93,60 @@ fn serve(listener: TcpListener, stop: Arc<AtomicBool>, catalog: PathBuf) {
             let request: Value = serde_json::from_slice(&body).unwrap();
             if let Some(input) = request["input"].as_array() {
                 let latest = input.last().unwrap().to_string();
+                if latest.contains("MIXED_CHECKOUT_CALL") {
+                    let reply = sse(json!({
+                        "type":"response.completed",
+                        "response":{"status":"completed","output":[
+                            {"type":"function_call","call_id":"mixed-bind","name":"working_repository","arguments":json!({"path":"project"}).to_string()},
+                            {"type":"function_call","call_id":"premature-write","name":"write","arguments":json!({"path":"premature.txt","content":"do not write"}).to_string()}
+                        ]}
+                    }));
+                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).unwrap();
+                    return;
+                }
+                if latest.contains("TARGET_CHECKOUT") {
+                    let tools = request["tools"].as_array().unwrap();
+                    assert!(tools
+                        .iter()
+                        .any(|tool| tool["name"] == "working_repository"));
+                    tool_reply(
+                        &mut socket,
+                        "bind",
+                        "working_repository",
+                        json!({"path":"project"}),
+                    );
+                    return;
+                }
+                if input.last().is_some_and(|last| last["call_id"] == "bind") {
+                    assert!(latest.contains("Working repository is"), "{latest}");
+                    assert_project_instructions(&request);
+                    tool_reply(
+                        &mut socket,
+                        "edit-project",
+                        "edit",
+                        json!({"path":"file.txt","oldText":"original","newText":"scoped edit"}),
+                    );
+                    return;
+                }
+                if latest.contains("READ_PROJECT_INSTRUCTIONS") {
+                    assert_project_instructions(&request);
+                    tool_reply(
+                        &mut socket,
+                        "read-project",
+                        "read",
+                        json!({"path":"AGENTS.md"}),
+                    );
+                    return;
+                }
+                if latest.contains("TRY_SWITCH_CHECKOUT") {
+                    tool_reply(
+                        &mut socket,
+                        "switch",
+                        "working_repository",
+                        json!({"path":"sibling"}),
+                    );
+                    return;
+                }
                 let canvas = latest.contains("ASK_IN_CANVAS");
                 if canvas || latest.contains("ASK_IN_CHAT") {
                     let tools = request["tools"].as_array().unwrap();
@@ -136,6 +190,23 @@ fn serve(listener: TcpListener, stop: Arc<AtomicBool>, catalog: PathBuf) {
             let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len());
         });
     }
+}
+
+fn assert_project_instructions(request: &Value) {
+    let instructions = request["instructions"].as_str().unwrap();
+    assert!(instructions.contains("OPEN_FOLDER_RULE"));
+    assert!(instructions.contains("ACTIVE_PROJECT_RULE"));
+    assert!(!instructions.contains("SIBLING_PROJECT_RULE"));
+}
+
+fn tool_reply(out: &mut impl Write, id: &str, name: &str, args: Value) {
+    let reply = sse(json!({
+        "type":"response.completed",
+        "response":{"status":"completed","output":[
+            {"type":"function_call","call_id":id,"name":name,"arguments":args.to_string()}
+        ]}
+    }));
+    write!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).unwrap();
 }
 
 /// Events until `agent_settled`, as one string.
@@ -382,6 +453,80 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     assert_eq!(state["sessionKind"], "canvas");
     assert_ne!(state["sessionFile"], canvas.to_str().unwrap());
     kinds.shutdown();
+
+    // The parent owns the conversation while the selected checkout owns its instructions and files.
+    fs::write(a.join("AGENTS.md"), "OPEN_FOLDER_RULE").unwrap();
+    let project = a.join("project");
+    let sibling = a.join("sibling");
+    for (repo, rule) in [
+        (&project, "ACTIVE_PROJECT_RULE"),
+        (&sibling, "SIBLING_PROJECT_RULE"),
+    ] {
+        fs::create_dir(repo).unwrap();
+        assert!(std::process::Command::new("git")
+            .current_dir(repo)
+            .args(["init", "--quiet"])
+            .status()
+            .unwrap()
+            .success());
+        fs::write(repo.join("AGENTS.md"), rule).unwrap();
+        fs::write(repo.join("file.txt"), "original").unwrap();
+    }
+    let mut scoped = Engine::start(Start::New, &a).unwrap();
+    let events = prompt(&mut scoped, "MIXED_CHECKOUT_CALL");
+    assert!(events.contains("No calls ran"), "{events}");
+    assert!(!a.join("premature.txt").exists());
+    assert!(!project.join("premature.txt").exists());
+    assert_eq!(
+        ask(&mut scoped, json!({"type":"get_state"}))["workingDirectory"],
+        json!(a)
+    );
+    let events = prompt(&mut scoped, "TARGET_CHECKOUT project. Make the edit there.");
+    assert!(events.contains("working_repository_changed"), "{events}");
+    assert!(events.contains("checkpoint"), "{events}");
+    assert_eq!(
+        fs::read_to_string(project.join("file.txt")).unwrap(),
+        "scoped edit"
+    );
+    assert_eq!(
+        fs::read_to_string(sibling.join("file.txt")).unwrap(),
+        "original"
+    );
+    assert!(!a.join("file.txt").exists());
+    let state = ask(&mut scoped, json!({"type":"get_state"}));
+    assert_eq!(state["workingDirectory"], json!(project));
+    let saved = PathBuf::from(state["sessionFile"].as_str().unwrap());
+    let header: Value =
+        serde_json::from_str(fs::read_to_string(&saved).unwrap().lines().next().unwrap()).unwrap();
+    assert_eq!(header["cwd"], json!(a));
+    assert_eq!(header["workingRepository"], json!(project));
+    scoped.shutdown();
+
+    let mut scoped = Engine::start(Start::Selected(saved), &a).unwrap();
+    let events = prompt(&mut scoped, "READ_PROJECT_INSTRUCTIONS read the AGENTS.md");
+    assert!(events.contains("ACTIVE_PROJECT_RULE"), "{events}");
+    assert!(!events.contains("SIBLING_PROJECT_RULE"), "{events}");
+    let events = prompt(&mut scoped, "TRY_SWITCH_CHECKOUT");
+    assert!(events.contains("Ask the user to switch"), "{events}");
+    assert_eq!(
+        ask(&mut scoped, json!({"type":"get_state"}))["workingDirectory"],
+        json!(project)
+    );
+    assert_eq!(
+        ask(
+            &mut scoped,
+            json!({"type":"set_working_repository","path":sibling})
+        )["workingDirectory"],
+        json!(sibling)
+    );
+    fs::rename(&sibling, a.join("moved-sibling")).unwrap();
+    let events = prompt(&mut scoped, "Read files after the checkout moved.");
+    assert!(
+        events.contains("working repository moved or is unavailable"),
+        "{events}"
+    );
+    assert!(!events.contains("DESKTOP_REPLY"), "{events}");
+    scoped.shutdown();
 
     // API keys: validated, stored privately, unknown providers refused.
     assert!(desktop::save_api_key("test", "").is_err());

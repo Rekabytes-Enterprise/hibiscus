@@ -101,6 +101,7 @@ pub struct Session {
     pub(super) rooxcode_session: super::rooxcode::SessionId,
     pub path: PathBuf,
     pub cwd: PathBuf,
+    pub(super) working_repository: Option<PathBuf>,
     pub model: Option<(String, String)>,
     pub thinking: String,
     pub messages: Vec<Message>,
@@ -229,6 +230,7 @@ impl Session {
             rooxcode_session: super::rooxcode::SessionId::new()?,
             path,
             cwd,
+            working_repository: None,
             model: None,
             thinking: "off".into(),
             messages: vec![],
@@ -255,6 +257,7 @@ impl Session {
         // Keep the saved selection so no other provider is picked implicitly.
         let kind = kind_from_header(&head, &path)?;
         let mut session = Self::empty(cwd, kind)?;
+        session.working_repository = serde_json::from_value(head["workingRepository"].clone())?;
         session.path = path;
         session.id = head["id"].as_str().ok_or("Invalid session ID")?.into();
         if let Some(value) = head.get("rooxcodeSession") {
@@ -296,8 +299,57 @@ impl Session {
         }
         Ok(session)
     }
+    pub(super) fn working_dir(&self) -> &Path {
+        self.working_repository.as_deref().unwrap_or(&self.cwd)
+    }
+
+    pub(super) fn check_working_dir(&self) -> Result<()> {
+        if self.working_repository.as_ref().is_some_and(|repo| {
+            !repo.starts_with(&self.cwd)
+                || repo == &self.cwd
+                || repo.canonicalize().as_ref().ok() != Some(repo)
+                || !repo.join(".git").exists()
+        }) {
+            return Err("The saved working repository moved or is unavailable. Choose a working repository in the composer.".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn set_working_repository(&mut self, path: Option<&Path>) -> Result<()> {
+        let repo = path
+            .map(|path| -> Result<PathBuf> {
+                let path = self.cwd.join(path).canonicalize()?;
+                if path == self.cwd || !path.starts_with(&self.cwd) || !path.join(".git").exists() {
+                    return Err("Choose the root of a Git checkout inside the open folder.".into());
+                }
+                let mut git = std::process::Command::new("git");
+                crate::sys::own_group(&mut git);
+                let output = git
+                    .current_dir(&path)
+                    .env_remove("GIT_DIR")
+                    .env_remove("GIT_WORK_TREE")
+                    .args(["rev-parse", "--show-prefix"])
+                    .output()?;
+                if !output.status.success() || !output.stdout.iter().all(u8::is_ascii_whitespace) {
+                    return Err("Choose the root of a Git checkout inside the open folder.".into());
+                }
+                crate::memory::Layout::new(&crate::paths::home()?, &path).prepare(&path)?;
+                Ok(path)
+            })
+            .transpose()?;
+        let previous = std::mem::replace(&mut self.working_repository, repo);
+        if let Err(error) = self.save() {
+            self.working_repository = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub fn save(&self) -> Result<()> {
         let mut head = json!({"type":"session","format":"hibiscus","version":1,"kind":self.kind,"id":self.id,"rooxcodeSession":self.rooxcode_session,"cwd":self.cwd,"model":self.model,"thinking":self.thinking,"steps":self.steps,"usage":self.usage,"context":self.context});
+        if let Some(repo) = &self.working_repository {
+            head["workingRepository"] = json!(repo);
+        }
         if let Some(name) = &self.name {
             head["name"] = name.as_str().into();
         }
@@ -367,7 +419,7 @@ impl Session {
         } else {
             &self.thinking
         };
-        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"sessionKind":self.kind,"model":model,"modelSelectionUnavailable":model_selection_unavailable,"thinkingLevel":thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
+        json!({"sessionFile":if self.path.exists(){Some(&self.path)}else{None},"sessionId":self.id,"sessionKind":self.kind,"workingDirectory":self.working_dir(),"model":model,"modelSelectionUnavailable":model_selection_unavailable,"thinkingLevel":thinking,"hasCredentials":has_credentials,"hasAccess":has_access})
     }
     /// Call only after authoritative discovery or an explicit model change.
     pub fn reconcile_rooxcode_thinking(&mut self, config: &Config) -> bool {

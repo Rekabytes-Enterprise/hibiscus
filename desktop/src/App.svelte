@@ -46,6 +46,9 @@
   /** The Settings page to open on. */
   let settingsStart = $state<"account" | "providers" | "connectors">("providers");
   let folder = $state<string | null>(null);
+  let workingDirectory = $state<string | null>(null);
+  const workdir = $derived(workingDirectory ?? folder);
+  let changesRequest = 0;
 
   // WSL 2 on Windows (#201): the distros found at startup, and the distro each
   // folder is connected to. Connecting is always the user's choice.
@@ -271,6 +274,11 @@
   function shown(event: any) {
     chat = apply(chat, event);
     if (event.type === "agent_settled" && !opening) void refresh();
+    if (event.type === "working_repository_changed" && typeof event.workingDirectory === "string") {
+      workingDirectory = event.workingDirectory;
+      changes = null;
+      void refreshChanges();
+    }
     // A session revoked or expired on the gateway mid-run.
     if (event.type === "message_end" && needsSignIn(event.message?.errorMessage)) showSignIn();
     if (event.type === "agent_start") browserShown = false;
@@ -511,24 +519,51 @@
   // The branch the diff pane compares with, per folder; unset means the nearest base.
   const baseKey = (f: string) => `hibiscus.diffBase:${f}`;
   const pickedBase = (f: string) => localStorage.getItem(baseKey(f));
-  async function pickBase(base: string) {
-    if (!folder) return;
-    localStorage.setItem(baseKey(folder), base);
-    changes = await gitChanges(folder, base).catch(() => null);
+  async function refreshChanges() {
+    const path = workdir;
+    const id = ++changesRequest;
+    const next = path ? await gitChanges(path, pickedBase(path)).catch(() => null) : null;
+    if (id === changesRequest && workdir === path) changes = next;
   }
 
-  /**
-   * Reloads the session details and stats, and with `folderData` the folder's
-   * changes and session list, all at once. Switching sessions within a folder
-   * changes neither of those, so it skips them.
-   */
+  async function pickBase(base: string) {
+    if (!workdir) return;
+    localStorage.setItem(baseKey(workdir), base);
+    await refreshChanges();
+  }
+
+  async function chooseWorkingRepository() {
+    if (!folder || opening || chat.running) return;
+    const current = sessionFile;
+    const parent = folder;
+    const path = await pickFolder({ directory: true, multiple: false, defaultPath: workdir ?? parent });
+    if (typeof path !== "string" || path === workdir || sessionFile !== current || folder !== parent || opening || chat.running) return;
+    if (workingDirectory && workingDirectory !== parent &&
+      !await ask(`Continue this chat in ${name(path)}?`, { title: "Switch working repository?", okLabel: "Switch repository" })) return;
+    if (sessionFile !== current || folder !== parent || opening || chat.running) return;
+    try {
+      const previous = workdir;
+      await post({ type: "set_working_repository", path: path === parent ? null : path });
+      if (previous) stopServer(previous);
+      await refresh(false);
+    } catch (e) {
+      notice(message(e));
+    }
+  }
+
+  /** Reloads the working repository's details and optionally the sidebar list. */
   async function refresh(folderData = true) {
     if (!folder) return;
     const path = folder;
     const t = timer("refresh");
-    // None of these depends on another; each fills in its part when it arrives.
+    // The Git view depends on the working directory returned by the engine.
     await Promise.all([
       request({ type: "get_state" }).then(async (state) => {
+        if (folder !== path) return;
+        const next: string = typeof state.workingDirectory === "string" ? state.workingDirectory : path;
+        if (workdir !== next) changes = null;
+        workingDirectory = next;
+        void refreshChanges();
         model = state.model;
         if (!model && !state.modelSelectionUnavailable) void pickModel(state.sessionFile);
         hasAccess = state.hasAccess;
@@ -543,7 +578,6 @@
       // Both fail while no model is selected; that is not an error to show.
       request({ type: "get_available_thinking_levels" }).then((r) => r.levels ?? [], () => []).then((l) => { levels = l; t("thinking levels"); }),
       request({ type: "get_session_stats" }).then((r) => r, () => null).then((r) => { stats = r; t("session stats"); }),
-      folderData && gitChanges(path, pickedBase(path)).catch(() => null).then((c) => { changes = c; t("git changes"); }),
       folderData && loadSessions(path).then(() => t("session list")),
     ]);
   }
@@ -614,6 +648,10 @@
         t("engine start");
       }
       if (from && path !== from && !bg.runningIn(from)) stopServer(from);
+      if (folder !== path) {
+        workingDirectory = null;
+        changes = null;
+      }
       folder = path;
       saveRecent(opened(recent, path));
       localStorage.setItem(LAST_FOLDER, path);
@@ -1188,7 +1226,7 @@
       {#if !hasAccess}
         <div class="banner">No provider is signed in. <button class="link" onclick={() => (page = "settings")}>Add a provider in Settings</button></div>
       {/if}
-      {#key sessionFile}<ChatView {chat} {folder} onanswer={sessionKind === "chat" ? answerChat : undefined} answerDisabled={opening} onolder={older} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} fallback={fallback && `${fallback.provider}/${fallback.id}`} onswitch={switchModel} />{/key}
+      {#key sessionFile}<ChatView {chat} folder={workdir} onanswer={sessionKind === "chat" ? answerChat : undefined} answerDisabled={opening} onolder={older} onresend={(text) => { chat = { ...chat, rejected: chat.rejected.filter((t) => t !== text) }; send(text, [], false); }} fallback={fallback && `${fallback.provider}/${fallback.id}`} onswitch={switchModel} />{/key}
     {/if}
     {#if folder}
       <div class="dock">
@@ -1204,13 +1242,13 @@
         <div class="status">
           <Menu
             label="Working folder"
-            title={`Working folder: ${folder}`}
+            title={`Working folder: ${workdir}`}
             value={folder}
             disabled={opening}
-            options={[...[folder, ...recent.filter((p) => p !== folder)].map((p) => ({ value: p, label: name(p), hint: p })), { value: "", label: "Choose folder…" }]}
-            onpick={(p) => (p === "" ? choose() : p !== folder && open(p))}
+            options={[...[folder, ...recent.filter((p) => p !== folder)].map((p) => ({ value: p, label: name(p), hint: p })), { value: "", label: "Choose folder…" }, ...(!chat.running ? [{ value: "working-repository", label: "Choose working repository…" }] : [])]}
+            onpick={(p) => p === "working-repository" ? chooseWorkingRepository() : p === "" ? choose() : p !== folder && open(p)}
           >
-            {#snippet trigger()}<Icon name="folder" size={14} /><span>{name(folder ?? "")}</span>{/snippet}
+            {#snippet trigger()}<Icon name="folder" size={14} /><span>{name(workdir ?? "")}</span>{/snippet}
           </Menu>
           <span class="grow"></span>
           {#if context != null}<span class="muted">{Math.round(context)}% context</span>{/if}
@@ -1246,14 +1284,14 @@
       files={diff}
       truncated={changes?.truncated ?? false}
       {wide}
-      onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
+      onopenfile={(path) => openFile(workdir!, path).catch((e) => notice(message(e)))}
       onbase={pickBase}
       onwide={() => (wide = !wide)}
       onclose={() => { side = "details"; wide = false; }}
     />
   {:else if active && panelOpen && side === "tasks"}
     <TasksPane
-      folder={folder!}
+      folder={workdir!}
       {chat}
       {wide}
       onwide={() => (wide = !wide)}
@@ -1262,7 +1300,7 @@
     />
   {:else if active && panelOpen}
     <Details
-      folder={folder!}
+      folder={workdir!}
       {home}
       {model}
       {thinking}
@@ -1271,7 +1309,7 @@
       {diff}
       {extensions}
       {chat}
-      onopenfile={(path) => openFile(folder!, path).catch((e) => notice(message(e)))}
+      onopenfile={(path) => openFile(workdir!, path).catch((e) => notice(message(e)))}
       onshowdiff={() => { side = "diff"; void refresh(); }}
       onshowtasks={() => (side = "tasks")}
       onabort={() => post({ type: "abort" }).catch(() => {})}
@@ -1279,7 +1317,7 @@
   {/if}
   {#if showBrowser}
     <BrowserPane
-      folder={folder!}
+      folder={workdir!}
       {pointer}
       {poke}
       wide={browserWide}
