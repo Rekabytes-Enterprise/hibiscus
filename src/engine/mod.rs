@@ -8,6 +8,7 @@ pub(crate) mod catalog;
 pub(crate) mod chatgpt;
 pub(crate) mod config;
 mod context;
+mod edit_match;
 pub(crate) mod elevenlabs_auth;
 mod event;
 mod goal;
@@ -22,7 +23,9 @@ mod rooxcode;
 mod search;
 pub(crate) mod session;
 mod session_search;
+mod stall;
 mod thinking;
+mod tool_call;
 pub(crate) mod tool_output;
 mod tools;
 

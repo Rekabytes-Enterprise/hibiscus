@@ -645,12 +645,10 @@ pub async fn execute(
             let a: Edit = serde_json::from_value(args.clone())?;
             let target = path(cwd, &a.path)?;
             let old = read_file(&target)?;
-            if old.matches(&a.old_text).count() != 1 {
-                return Err(
-                    "Edit requires exactly one occurrence of oldText; file unchanged".into(),
-                );
+            let (next, normalized) = super::edit_match::replace(&old, &a.old_text, &a.new_text)?;
+            if next == old {
+                return Err("Edit would leave the file unchanged. Use different replacement text if a change is needed.".into());
             }
-            let next = old.replacen(&a.old_text, &a.new_text, 1);
             if next.len() > 16 * 1024 * 1024 {
                 return Err("Edited file would exceed 16 MiB; file unchanged".into());
             }
@@ -658,7 +656,12 @@ pub async fn execute(
                 crate::checkpoints::write(context, &target, next.as_bytes(), Some(old.as_bytes()))?;
             let (diff, added, removed) = edit_diff(&old, &next);
             Ok(result(
-                format!("Edited {}{}", a.path, checkpoint_notice(&checkpoint)),
+                format!(
+                    "Edited {}{}{}",
+                    a.path,
+                    checkpoint_notice(&checkpoint),
+                    if normalized { "\nNote: matched a unique block using whitespace normalization." } else { "" }
+                ),
                 json!({"diff":diff,"addedLines":added,"removedLines":removed,"checkpoint":checkpoint}),
             ))
         }

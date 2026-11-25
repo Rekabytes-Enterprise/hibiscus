@@ -32,6 +32,7 @@ impl std::error::Error for ContextOverflow {}
 
 pub struct Reply {
     pub message: Message,
+    pub(super) tool_diagnostics: std::collections::BTreeMap<String, super::tool_call::Diagnostic>,
     pub input: Option<u64>,
     pub output: Option<u64>,
     pub cache: Option<u64>,

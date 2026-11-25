@@ -714,6 +714,7 @@ async fn run_turns(
         let user = session.lock().unwrap().messages.last().cloned().unwrap();
         emit(out, Event::MessageStarted(&user).wire()).await?;
         let mut awaiting_answer = false;
+        let mut stall = super::stall::Monitor::default();
         'steps: loop {
             if *cancel.borrow() {
                 break;
@@ -727,6 +728,7 @@ async fn run_turns(
                 }
             };
             if let Some(steering) = steering {
+                stall.reset();
                 checkpoint_request = crate::checkpoints::Request::new(&session.lock().unwrap().id);
                 let cwd = session.lock().unwrap().working_dir().to_owned();
                 let mut content = vec![Block::Text {
@@ -874,6 +876,7 @@ async fn run_turns(
             }
             let mut output_budget = super::context::tool_output_budget(p, m);
             let total_calls = calls.len();
+            let mut halted = None;
             let mixed_repository_call = surface == tools::Surface::Chat
                 && total_calls > 1
                 && calls
@@ -894,10 +897,27 @@ async fn run_turns(
                 let mut steps = session.lock().unwrap().steps.clone();
                 let cwd = snapshot.working_dir().to_owned();
                 let started = std::time::Instant::now();
+                let diagnostic = reply.tool_diagnostics.remove(&id).unwrap_or_default();
+                let signature =
+                    super::stall::signature(&name, &args, diagnostic.malformed.as_ref());
+                let decision = if *cancel.borrow() || halted.is_some() || mixed_repository_call {
+                    super::stall::Decision::Run
+                } else {
+                    stall.before(signature)
+                };
                 let result = if *cancel.borrow() {
                     Err("Tool cancelled before execution".into())
                 } else if mixed_repository_call {
                     Err("No calls ran. Call working_repository on its own so the next request can load that repository's instructions.".into())
+                } else if halted.is_some() {
+                    Err("Tool did not run because the turn stalled.".into())
+                } else if decision == super::stall::Decision::Suppress {
+                    Err("Skipped a repeated tool call with no progress. Use a different approach or change the relevant state before retrying.".into())
+                } else if decision == super::stall::Decision::Stop {
+                    halted = Some(format!("Hibiscus stopped this turn because {name} kept repeating without progress."));
+                    Err("Repeated tool call did not run.".into())
+                } else if let Some(error) = diagnostic.error {
+                    Err(error.into())
                 } else if name == "working_repository" && surface == tools::Surface::Chat {
                     let mut s = session.lock().unwrap();
                     select_working_repository(&mut s, &args)
@@ -937,12 +957,40 @@ async fn run_turns(
                                 None => json!({}),
                             },
                         };
-                        (
-                            true,
-                            json!({"content":[{"type":"text","text":e.to_string()}],"details":details}),
-                        )
+                        let mut message = e.to_string();
+                        if message == "Unknown tool" {
+                            let names = definitions
+                                .iter()
+                                .filter_map(|tool| tool["name"].as_str())
+                                .take(48)
+                                .collect::<Vec<_>>();
+                            message = format!(
+                                "Unknown tool. Use an advertised tool: {}.",
+                                names.join(", ")
+                            );
+                        }
+                        (true, tools::result(message, details))
                     }
                 };
+                let warned = decision == super::stall::Decision::Run
+                    && halted.is_none()
+                    && !mixed_repository_call
+                    && !*cancel.borrow()
+                    && stall.observe(signature, &name, is_error, &result);
+                if warned || !diagnostic.notes.is_empty() {
+                    let text = result["content"][0]["text"].as_str().unwrap_or("");
+                    let mut with_notes = text.to_owned();
+                    if !diagnostic.notes.is_empty() {
+                        with_notes.push_str(&format!(
+                            "\nTool argument repair: {}.",
+                            diagnostic.notes.join(", ")
+                        ));
+                    }
+                    if warned {
+                        with_notes.push_str("\nThis call produced the same outcome again. Try a different approach before repeating it.");
+                    }
+                    result["content"][0]["text"] = json!(with_notes);
+                }
                 if !is_error
                     && name == "bash"
                     && super::goal::pending(&steps).is_some()
@@ -1027,6 +1075,9 @@ async fn run_turns(
                         emit(out, Event::MemorySaved(scope).wire()).await?;
                     }
                 }
+            }
+            if let Some(error) = halted {
+                return Err(error.into());
             }
             if awaiting_answer {
                 break 'steps;
