@@ -3,6 +3,7 @@ use super::Reply;
 use crate::engine::{
     config::Api,
     session::{Block, Message},
+    tool_call::{self, Diagnostic},
 };
 use crate::Result;
 use serde_json::{json, Value};
@@ -172,17 +173,31 @@ impl Stream {
     }
     pub(super) fn reply(mut self, api: &Api) -> Result<Reply> {
         let mut blocks = vec![];
+        let mut diagnostics = BTreeMap::new();
         let raw = match api {
             Api::Responses => {
-                for item in &self.raw {
+                for item in &mut self.raw {
                     match item["type"].as_str() {
-                        Some("function_call") => blocks.push(Block::ToolCall {
-                            id: item["call_id"].as_str().ok_or("Missing tool ID")?.into(),
-                            name: item["name"].as_str().ok_or("Missing tool name")?.into(),
-                            arguments: serde_json::from_str(
-                                item["arguments"].as_str().ok_or("Missing tool arguments")?,
-                            )?,
-                        }),
+                        Some("function_call") => {
+                            let id = item["call_id"]
+                                .as_str()
+                                .ok_or("Missing tool ID")?
+                                .to_owned();
+                            let mut name =
+                                item["name"].as_str().ok_or("Missing tool name")?.to_owned();
+                            let raw = item["arguments"].as_str().unwrap_or_default();
+                            let (arguments, diagnostic) = tool_call::decode(&mut name, raw);
+                            if !diagnostic.notes.is_empty() || diagnostic.error.is_some() {
+                                item["name"] = json!(&name);
+                                item["arguments"] = json!(arguments.to_string());
+                                diagnostics.insert(id.clone(), diagnostic);
+                            }
+                            blocks.push(Block::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            });
+                        }
                         Some("message") => {
                             for b in item["content"].as_array().ok_or("Invalid output content")? {
                                 if b["type"] == "output_text" {
@@ -203,15 +218,21 @@ impl Stream {
             Api::Anthropic => {
                 for (i, (id, name, args)) in &self.calls {
                     let block = self.blocks.get_mut(i).ok_or("Missing tool block")?;
+                    let mut name = name.clone();
+                    let mut diagnostic = Diagnostic::default();
                     let arguments = if args.is_empty() {
-                        block["input"].clone()
+                        tool_call::normalize(&mut name, block["input"].clone(), &mut diagnostic)
                     } else {
-                        serde_json::from_str(args)?
+                        let (arguments, observed) = tool_call::decode(&mut name, args);
+                        diagnostic = observed;
+                        arguments
                     };
                     block["input"] = arguments.clone();
+                    block["name"] = json!(&name);
+                    diagnostics.insert(id.clone(), diagnostic);
                     blocks.push(Block::ToolCall {
                         id: id.clone(),
-                        name: name.clone(),
+                        name,
                         arguments,
                     });
                 }
@@ -240,8 +261,14 @@ impl Stream {
                     });
                 }
                 let mut calls = vec![];
-                for (_, (id, name, args)) in self.calls {
-                    let arguments: Value = serde_json::from_str(&args)?;
+                for (_, (id, mut name, args)) in self.calls {
+                    let (arguments, diagnostic) = tool_call::decode(&mut name, &args);
+                    let args = if diagnostic.notes.is_empty() && diagnostic.error.is_none() {
+                        args
+                    } else {
+                        arguments.to_string()
+                    };
+                    diagnostics.insert(id.clone(), diagnostic);
                     calls.push(json!({"id":id,"type":"function","function":{"name":name,"arguments":args}}));
                     blocks.push(Block::ToolCall {
                         id,
@@ -270,6 +297,7 @@ impl Stream {
             }
         }
         Ok(Reply {
+            tool_diagnostics: diagnostics,
             message: Message::Assistant {
                 content: blocks,
                 stop_reason: "stop".into(),

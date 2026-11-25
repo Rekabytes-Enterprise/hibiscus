@@ -268,21 +268,23 @@ fn agent_completes_after_more_than_the_previous_step_limit() {
                 sse(json!({"type":"response.completed","response":{
                     "status":"completed",
                     "output":[{"type":"function_call","call_id":format!("round-{round}"),
-                        "name":"read","arguments":json!({"path":"input.txt"}).to_string()}]
+                        "name":"read","arguments":json!({"path":format!("input-{round}.txt")}).to_string()}]
                 }})),
             )
         })
         .collect::<Vec<_>>();
     replies.push(response("ALL_ROUNDS_COMPLETE"));
     let f = Fixture::new("responses", replies);
-    fs::write(f.root.join("input.txt"), "tool result").unwrap();
+    for round in 0..65 {
+        fs::write(f.root.join(format!("input-{round}.txt")), "tool result").unwrap();
+    }
     let config_path = f.root.join("app/config.json");
     let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
     config["maxSteps"] = json!(1);
     let original = serde_json::to_vec(&config).unwrap();
     fs::write(&config_path, &original).unwrap();
 
-    let output = f.run("", &["Read the file and finish when ready."]);
+    let output = f.run("", &["Read the files and finish when ready."]);
     good(&output);
     assert!(String::from_utf8_lossy(&output.stdout).contains("ALL_ROUNDS_COMPLETE"));
     let requests = f.captured();
@@ -1239,15 +1241,313 @@ fn native_memory_writes_keep_revisions_and_reload_only_active_facts() {
 mod config;
 #[path = "native_runtime/memory.rs"]
 mod memory;
+fn responses_call(id: &str, name: &str, arguments: &str) -> (u16, String) {
+    (
+        200,
+        sse(
+            json!({"type":"response.completed","response":{"status":"completed","output":[
+                {"type":"function_call","call_id":id,"name":name,"arguments":arguments}
+            ]}}),
+        ),
+    )
+}
+
 #[test]
-fn malformed_tool_arguments_fail_before_any_execution() {
-    let bad = sse(
-        json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"bad","name":"write","arguments":"{\"path\":\"no-write\","}],"usage":{"input_tokens":2,"output_tokens":2}}}),
+fn malformed_call_gets_a_correlated_error_without_execution() {
+    let f = Fixture::new(
+        "responses",
+        vec![
+            responses_call("bad", "write", r#"{"path":"no-write","#),
+            responses_call("good", "write", r#"{"path":"safe.txt","content":"fixed"}"#),
+            response("RECOVERED"),
+        ],
     );
-    let f = Fixture::new("responses", vec![(200, bad)]);
-    let o = f.run("", &["hello"]);
-    assert!(!o.status.success());
+    let output = f.run("", &["Write the example."]);
+    good(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("RECOVERED"));
     assert!(!f.root.join("no-write").exists());
+    assert_eq!(
+        fs::read_to_string(f.root.join("safe.txt")).unwrap(),
+        "fixed"
+    );
+    let captured = f.captured();
+    let input = captured[1]["input"].as_array().unwrap();
+    assert!(input
+        .iter()
+        .any(|item| item["call_id"] == "bad" && item["arguments"] == "{}"));
+    assert!(input.iter().any(|item| item["call_id"] == "bad"
+        && item["output"]
+            .as_str()
+            .is_some_and(|text| text.contains("Invalid tool argument JSON"))));
+}
+
+#[test]
+fn chat_tool_arguments_repair_aliases_and_preserve_string_contents() {
+    let arguments = "```json\n{\"file_path\":\"note.txt\",\"content\":\"a,} and b,]\",}\n```";
+    let call = (
+        200,
+        sse(json!({"choices":[{"delta":{"tool_calls":[
+        {"index":0,"id":"aliased","function":{"name":"write_file","arguments":arguments}}
+    ]},"finish_reason":"tool_calls"}]}))
+            + "data: [DONE]\n\n",
+    );
+    let done = (
+        200,
+        sse(json!({"choices":[{"delta":{"content":"REPAIRED"},"finish_reason":"stop"}]}))
+            + "data: [DONE]\n\n",
+    );
+    let f = Fixture::new("chat_completions", vec![call, done]);
+    let output = f.run("", &["Write the note."]);
+    good(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("REPAIRED"));
+    assert_eq!(
+        fs::read_to_string(f.root.join("note.txt")).unwrap(),
+        "a,} and b,]"
+    );
+    let requests = f.captured();
+    let messages = requests[1]["messages"].as_array().unwrap();
+    let tool = messages
+        .iter()
+        .find(|item| item["tool_call_id"] == "aliased")
+        .unwrap();
+    assert!(tool["content"]
+        .as_str()
+        .unwrap()
+        .contains("file_path was read as path"));
+    let call = messages
+        .iter()
+        .find_map(|item| item["tool_calls"].as_array())
+        .unwrap();
+    assert_eq!(call[0]["function"]["name"], "write");
+    assert_eq!(
+        serde_json::from_str::<Value>(call[0]["function"]["arguments"].as_str().unwrap()).unwrap(),
+        json!({"path":"note.txt","content":"a,} and b,]"})
+    );
+}
+
+#[test]
+fn failing_shell_is_suppressed_and_stops_without_rerunning() {
+    let arguments =
+        json!({"command":"printf x >> invocations; wc -c < invocations; exit 7"}).to_string();
+    let f = Fixture::new(
+        "responses",
+        (0..4)
+            .map(|n| responses_call(&format!("attempt-{n}"), "bash", &arguments))
+            .collect(),
+    );
+    let output = f.run("", &["Run the command."]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("kept repeating without progress"));
+    assert_eq!(
+        fs::read_to_string(f.root.join("invocations")).unwrap(),
+        "xx"
+    );
+    let requests = f.captured();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[2]["input"]
+        .to_string()
+        .contains("same outcome again"));
+    assert!(requests[3]["input"]
+        .to_string()
+        .contains("Skipped a repeated tool call"));
+}
+
+#[test]
+fn repeated_successful_loopback_probes_stop_and_a_file_edit_allows_rechecking() {
+    use std::sync::atomic::AtomicUsize;
+    for intervening_edit in [false, true] {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let finished = Arc::new(AtomicBool::new(false));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let worker = thread::spawn({
+            let (finished, hits) = (finished.clone(), hits.clone());
+            move || {
+                while !finished.load(Ordering::Relaxed) {
+                    let Ok((mut stream, _)) = server.accept() else {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = String::new();
+                    BufReader::new(&stream).read_line(&mut request).unwrap();
+                    assert!(
+                        request.starts_with("GET /ready ") || request.starts_with("GET /health ")
+                    );
+                    hits.fetch_add(1, Ordering::Relaxed);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                }
+            }
+        });
+        let args = json!({"command":format!(
+            r#"curl -q -fsS -o /dev/null -w 'ready: %{{http_code}}\n' http://{address}/ready && curl -q -fsS -o /dev/null -w 'health: %{{http_code}}\n' http://{address}/health"#
+        )})
+        .to_string();
+        let check = |id| responses_call(id, "bash", &args);
+        let mut replies = vec![check("first"), check("second")];
+        if intervening_edit {
+            replies.push(responses_call(
+                "edit",
+                "edit",
+                r#"{"path":"file.txt","oldText":"before","newText":"after"}"#,
+            ));
+            replies.extend([check("recheck"), response("PROBE_FINISHED")]);
+        } else {
+            replies.extend([check("skipped"), check("stopped")]);
+        }
+        let f = Fixture::new("responses", replies);
+        fs::write(f.root.join("file.txt"), "before").unwrap();
+        let output = f.run("", &["Check both development-server endpoints."]);
+        finished.store(true, Ordering::Relaxed);
+        worker.join().unwrap();
+        let requests = f.captured();
+        assert_eq!(requests.len(), if intervening_edit { 5 } else { 4 });
+        assert!(requests[2]["input"]
+            .to_string()
+            .contains("same outcome again"));
+        if intervening_edit {
+            good(&output);
+            assert_eq!(hits.load(Ordering::Relaxed), 6);
+            assert!(String::from_utf8_lossy(&output.stdout).contains("PROBE_FINISHED"));
+        } else {
+            assert!(!output.status.success());
+            assert_eq!(hits.load(Ordering::Relaxed), 4);
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("kept repeating without progress")
+            );
+            assert!(requests[3]["input"]
+                .to_string()
+                .contains("Skipped a repeated tool call"));
+        }
+    }
+}
+
+#[test]
+fn verified_file_edit_allows_a_previously_failing_shell_to_run_again() {
+    let arguments = json!({"command":"test \"$(cat check.txt)\" = ready"}).to_string();
+    let f = Fixture::new(
+        "responses",
+        vec![
+            responses_call("fail-1", "bash", &arguments),
+            responses_call("fail-2", "bash", &arguments),
+            responses_call(
+                "fix",
+                "edit",
+                r#"{"path":"check.txt","oldText":"waiting","newText":"ready"}"#,
+            ),
+            responses_call("pass", "bash", &arguments),
+            response("TEST_PASSED"),
+        ],
+    );
+    fs::write(f.root.join("check.txt"), "waiting").unwrap();
+    let output = f.run("", &["Fix then run the check again."]);
+    good(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("TEST_PASSED"));
+    let requests = f.captured();
+    let result = requests[4]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call_output" && item["call_id"] == "pass")
+        .unwrap();
+    assert_eq!(result["output"], "");
+}
+
+#[test]
+fn edit_recovers_a_unique_indented_block_and_leaves_ambiguous_file_unchanged() {
+    let replacement = json!({"path":"code.txt","oldText":"if ready:\n    before()","newText":"if ready:\n    after()"}).to_string();
+    for ambiguous in [false, true] {
+        let f = Fixture::new(
+            "responses",
+            vec![
+                responses_call("first", "edit", &replacement),
+                response("FINISHED"),
+            ],
+        );
+        let block = "    if ready:  \r\n        before()\r\n";
+        let original = if ambiguous {
+            block.repeat(2)
+        } else {
+            block.to_owned()
+        };
+        fs::write(f.root.join("code.txt"), &original).unwrap();
+        good(&f.run("", &["Edit the block."]));
+        let expected = if ambiguous {
+            original
+        } else {
+            "    if ready:\r\n        after()\r\n".into()
+        };
+        assert_eq!(
+            fs::read_to_string(f.root.join("code.txt")).unwrap(),
+            expected
+        );
+        let input = f.captured()[1]["input"].to_string();
+        assert!(input.contains(if ambiguous {
+            "more than once"
+        } else {
+            "using whitespace normalization"
+        }));
+    }
+}
+
+#[test]
+fn identical_edit_reports_no_change_and_does_not_reset_stall_evidence() {
+    let arguments = json!({"command":"exit 7"}).to_string();
+    let f = Fixture::new(
+        "responses",
+        vec![
+            responses_call("fail-1", "bash", &arguments),
+            responses_call("fail-2", "bash", &arguments),
+            responses_call(
+                "noop",
+                "edit",
+                r#"{"path":"file.txt","oldText":"same","newText":"same"}"#,
+            ),
+            responses_call("skip", "bash", &arguments),
+            response("FINISHED"),
+        ],
+    );
+    fs::write(f.root.join("file.txt"), "same").unwrap();
+    good(&f.run("", &["Run the check."]));
+    let requests = f.captured();
+    assert!(requests[3]["input"]
+        .to_string()
+        .contains("leave the file unchanged"));
+    assert!(requests[4]["input"]
+        .to_string()
+        .contains("Skipped a repeated tool call"));
+}
+
+#[test]
+fn edit_suggests_a_nearby_line_without_changing_it() {
+    let f = Fixture::new(
+        "responses",
+        vec![
+            responses_call(
+                "near",
+                "edit",
+                r#"{"path":"code.txt","oldText":"return disabled();","newText":"return fixed();"}"#,
+            ),
+            response("FINISHED"),
+        ],
+    );
+    fs::write(f.root.join("code.txt"), "begin\nreturn enabled();\nend\n").unwrap();
+    good(&f.run("", &["Edit the return statement."]));
+    assert_eq!(
+        fs::read_to_string(f.root.join("code.txt")).unwrap(),
+        "begin\nreturn enabled();\nend\n"
+    );
+    let requests = f.captured();
+    assert!(requests[1]["input"]
+        .to_string()
+        .contains("2: return enabled();"));
 }
 
 #[test]
@@ -1263,3 +1563,110 @@ fn authoritative_completion_does_not_wait_for_http_socket_close() {
 
 #[path = "native_runtime/rooxcode.rs"]
 mod rooxcode;
+
+#[test]
+fn implementation_phase_requires_verified_running_code() {
+    fn call(id: &str, name: &str, args: Value) -> (u16, String) {
+        (
+            200,
+            sse(
+                json!({"type":"response.completed","response":{"status":"completed","output":[
+                    {"type":"function_call","call_id":id,"name":name,"arguments":args.to_string()}
+                ]}}),
+            ),
+        )
+    }
+    let plan = || {
+        call(
+            "plan",
+            "goal",
+            json!({
+                "action":"set","scope":"Welcome screen only","steps":["Wire the welcome gate"]
+            }),
+        )
+    };
+    let unit = || {
+        call(
+            "unit",
+            "bash",
+            json!({"command":"test \"$(sh helper.sh allow)\" = ready"}),
+        )
+    };
+    let entry = || {
+        call(
+            "entry",
+            "bash",
+            json!({"command":"test \"$(sh welcome.sh allow)\" = ready"}),
+        )
+    };
+    let failure = || {
+        call(
+            "failure",
+            "bash",
+            json!({"command":"test \"$(sh welcome.sh deny)\" = blocked"}),
+        )
+    };
+    let complete = || {
+        call(
+            "verify",
+            "goal",
+            json!({
+                "action":"complete","id":1, "evidence":{"unit":"unit","entryPoint":"entry","failurePath":"failure"}
+            }),
+        )
+    };
+    for wired in [false, true] {
+        let mut replies = vec![plan()];
+        if wired {
+            replies.push(call(
+                "wire",
+                "edit",
+                json!({
+                    "path":"welcome.sh","oldText":"printf old","newText":"sh helper.sh \"$1\""
+                }),
+            ));
+        }
+        replies.extend([
+            unit(),
+            entry(),
+            failure(),
+            complete(),
+            response("Phase report."),
+        ]);
+        let fixture = Fixture::new("responses", replies);
+        fs::write(
+            fixture.root.join("helper.sh"),
+            "if [ \"$1\" = allow ]; then printf ready; else printf blocked; fi\n",
+        )
+        .unwrap();
+        fs::write(fixture.root.join("welcome.sh"), "printf old\n").unwrap();
+
+        let output = fixture.run("", &["Implement the welcome gate phase."]);
+        good(&output);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            stdout.contains("Implementation phase still open"),
+            !wired,
+            "{stdout}"
+        );
+        let requests = fixture.captured();
+        assert!(requests[1..].iter().any(|request| request["instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.contains("Welcome screen only"))));
+        let completion = requests.last().unwrap()["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output" && item["call_id"] == "verify")
+            .and_then(|item| item["output"].as_str())
+            .unwrap();
+        if wired {
+            assert!(completion.contains("1/1 steps completed"));
+        } else {
+            assert!(
+                completion.contains("entryPoint, failurePath"),
+                "{completion}"
+            );
+        }
+    }
+}

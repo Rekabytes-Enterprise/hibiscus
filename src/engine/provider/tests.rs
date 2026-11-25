@@ -290,6 +290,7 @@ fn chatgpt_plan_body_streams_explicit_history_without_a_storage_or_output_limit_
         rooxcode_session: crate::engine::rooxcode::SessionId::new().unwrap(),
         path: Default::default(),
         cwd: Default::default(),
+        working_repository: None,
         model: Some((provider.id.clone(), model.id.clone())),
         thinking: "off".into(),
         messages: vec![Message::User {

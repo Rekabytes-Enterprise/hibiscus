@@ -93,6 +93,75 @@ fn serve(listener: TcpListener, stop: Arc<AtomicBool>, catalog: PathBuf) {
             let request: Value = serde_json::from_slice(&body).unwrap();
             if let Some(input) = request["input"].as_array() {
                 let latest = input.last().unwrap().to_string();
+                if latest.contains("QUEUE_PROMOTION_ACTIVE") {
+                    let ready = catalog.with_file_name("queue-release");
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !ready.exists() {
+                        assert!(Instant::now() < deadline, "queue fixture was not released");
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    tool_reply(
+                        &mut socket,
+                        "queue-read",
+                        "read",
+                        json!({"path":"input.txt"}),
+                    );
+                    return;
+                }
+                if latest.contains("MIXED_CHECKOUT_CALL") {
+                    let reply = sse(json!({
+                        "type":"response.completed",
+                        "response":{"status":"completed","output":[
+                            {"type":"function_call","call_id":"mixed-bind","name":"working_repository","arguments":json!({"path":"project"}).to_string()},
+                            {"type":"function_call","call_id":"premature-write","name":"write","arguments":json!({"path":"premature.txt","content":"do not write"}).to_string()}
+                        ]}
+                    }));
+                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).unwrap();
+                    return;
+                }
+                if latest.contains("TARGET_CHECKOUT") {
+                    let tools = request["tools"].as_array().unwrap();
+                    assert!(tools
+                        .iter()
+                        .any(|tool| tool["name"] == "working_repository"));
+                    tool_reply(
+                        &mut socket,
+                        "bind",
+                        "working_repository",
+                        json!({"path":"project"}),
+                    );
+                    return;
+                }
+                if input.last().is_some_and(|last| last["call_id"] == "bind") {
+                    assert!(latest.contains("Working repository is"), "{latest}");
+                    assert_project_instructions(&request);
+                    tool_reply(
+                        &mut socket,
+                        "edit-project",
+                        "edit",
+                        json!({"path":"file.txt","oldText":"original","newText":"scoped edit"}),
+                    );
+                    return;
+                }
+                if latest.contains("READ_PROJECT_INSTRUCTIONS") {
+                    assert_project_instructions(&request);
+                    tool_reply(
+                        &mut socket,
+                        "read-project",
+                        "read",
+                        json!({"path":"AGENTS.md"}),
+                    );
+                    return;
+                }
+                if latest.contains("TRY_SWITCH_CHECKOUT") {
+                    tool_reply(
+                        &mut socket,
+                        "switch",
+                        "working_repository",
+                        json!({"path":"sibling"}),
+                    );
+                    return;
+                }
                 let canvas = latest.contains("ASK_IN_CANVAS");
                 if canvas || latest.contains("ASK_IN_CHAT") {
                     let tools = request["tools"].as_array().unwrap();
@@ -126,16 +195,49 @@ fn serve(listener: TcpListener, stop: Arc<AtomicBool>, catalog: PathBuf) {
                 }
                 return;
             }
+            let summary = request["instructions"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("Summarize this conversation"));
+            let text = if summary {
+                r#"{"summary":"MODEL_SWITCH_SUMMARY"}"#
+            } else {
+                "DESKTOP_REPLY"
+            };
+            let latest = request["input"].as_array().and_then(|input| input.last());
+            let input_tokens = if latest
+                .is_some_and(|last| last.to_string().contains("MODEL_SWITCH_OLD_RECEIPT"))
+            {
+                500_000
+            } else {
+                20
+            };
             let done = sse(
-                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"DESKTOP_REPLY"}]}],"usage":{"input_tokens":20,"output_tokens":5}}}),
+                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}],"usage":{"input_tokens":input_tokens,"output_tokens":5}}}),
             );
             let reply = format!(
                 "{}{done}",
-                sse(json!({"type":"response.output_text.delta","delta":"DESKTOP_REPLY"}))
+                sse(json!({"type":"response.output_text.delta","delta":text}))
             );
             let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len());
         });
     }
+}
+
+fn assert_project_instructions(request: &Value) {
+    let instructions = request["instructions"].as_str().unwrap();
+    assert!(instructions.contains("OPEN_FOLDER_RULE"));
+    assert!(instructions.contains("ACTIVE_PROJECT_RULE"));
+    assert!(!instructions.contains("SIBLING_PROJECT_RULE"));
+}
+
+fn tool_reply(out: &mut impl Write, id: &str, name: &str, args: Value) {
+    let reply = sse(json!({
+        "type":"response.completed",
+        "response":{"status":"completed","output":[
+            {"type":"function_call","call_id":id,"name":name,"arguments":args.to_string()}
+        ]}
+    }));
+    write!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).unwrap();
 }
 
 /// Events until `agent_settled`, as one string.
@@ -175,6 +277,151 @@ fn ask(engine: &mut Engine, command: Value) -> Value {
     }
 }
 
+fn verify_context_switching(root: &Path, home: &Path) {
+    let folder = root.join("model-switch");
+    fs::create_dir(&folder).unwrap();
+    let mut engine = Engine::start(Start::New, &folder).unwrap();
+    let _ = prompt(
+        &mut engine,
+        &format!(
+            "MODEL_SWITCH_OLD_RECEIPT {}",
+            "retained context ".repeat(2_100)
+        ),
+    );
+    let stats = |engine: &mut Engine| ask(engine, json!({"type":"get_session_stats"}));
+    let select = |engine: &mut Engine, model: &str| {
+        ask(
+            engine,
+            json!({"type":"set_model","provider":"test","modelId":model}),
+        );
+    };
+    let previous = stats(&mut engine);
+    assert_eq!(previous["contextUsage"]["tokens"], 500_005);
+    assert_eq!(previous["contextUsage"]["contextWindow"], 1_000_000);
+    assert_eq!(previous["contextUsage"]["estimated"], false);
+    for (model, window) in [("mid", 400_000), ("small", 256_000)] {
+        select(&mut engine, model);
+        let next = stats(&mut engine);
+        assert_eq!(next["tokens"], previous["tokens"]);
+        assert_eq!(next["contextUsage"]["contextWindow"], window);
+        assert_eq!(next["contextUsage"]["estimated"], true);
+        let estimate = next["contextUsage"]["tokens"].as_u64().unwrap();
+        assert!((8_192..256_000).contains(&estimate), "{next}");
+    }
+    let fit = prompt(&mut engine, "This turn still fits the 256K model.");
+    assert!(!fit.contains("compaction_start"), "{fit}");
+    assert_eq!(stats(&mut engine)["contextUsage"]["estimated"], false);
+    let archives = home.join("archives");
+    let before = fs::read_dir(&archives).map_or(0, |entries| entries.count());
+    select(&mut engine, "tiny");
+    let after_switch = stats(&mut engine);
+    assert_eq!(after_switch["contextUsage"]["contextWindow"], 8_192);
+    assert_eq!(after_switch["contextUsage"]["estimated"], true);
+    assert!(after_switch["contextUsage"]["percent"].as_f64().unwrap() > 100.0);
+    assert_eq!(
+        fs::read_dir(&archives).map_or(0, |entries| entries.count()),
+        before
+    );
+    let overflow = prompt(&mut engine, "Continue with the tiny model.");
+    assert!(overflow.contains("compaction_start"), "{overflow}");
+    assert!(overflow.contains("compaction_end"), "{overflow}");
+    assert!(overflow.contains("DESKTOP_REPLY"), "{overflow}");
+    assert!(ask(&mut engine, json!({"type":"get_messages"}))
+        .to_string()
+        .contains("MODEL_SWITCH_SUMMARY"));
+    assert_eq!(fs::read_dir(&archives).unwrap().count(), before + 1);
+    engine.shutdown();
+}
+
+fn verify_queued_message_promotion(root: &Path) {
+    fn queue_state(engine: &mut Engine, entries: usize, steering: bool) -> Vec<Value> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(event) = engine.next_event(Duration::from_millis(100)).unwrap() {
+                if event["type"] == "queue_update" {
+                    let prompts = event["prompts"].as_array().unwrap();
+                    if prompts.len() == entries && (prompts[0]["steer"] == true) == steering {
+                        return prompts.clone();
+                    }
+                }
+            }
+            assert!(Instant::now() < deadline, "missing queue state");
+        }
+    }
+
+    let folder = root.join("queued-send-now");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("input.txt"), "fixture").unwrap();
+    let mut engine = Engine::start(Start::New, &folder).unwrap();
+    engine
+        .send(json!({"type":"prompt","message":"QUEUE_PROMOTION_ACTIVE"}))
+        .unwrap();
+    engine
+        .send(json!({"type":"prompt","message":"Same words","streamingBehavior":"followUp"}))
+        .unwrap();
+    let first = queue_state(&mut engine, 1, false);
+    engine
+        .send(json!({
+            "type":"prompt","message":"Same words","streamingBehavior":"followUp",
+            "images":[{"mimeType":"image/png","data":"aW1hZ2U="}]
+        }))
+        .unwrap();
+    let waiting = queue_state(&mut engine, 2, false);
+    assert_eq!(waiting[0]["id"], first[0]["id"]);
+    assert_ne!(waiting[0]["id"], waiting[1]["id"]);
+    let selected = &waiting[1]["id"];
+    engine
+        .send(json!({"type":"steer_queued_prompt","queueId":selected}))
+        .unwrap();
+    let promoted = queue_state(&mut engine, 2, true);
+    assert_eq!(promoted[0]["id"], *selected);
+    assert_eq!(promoted[0]["images"], 1);
+    assert_eq!(promoted[1], waiting[0]);
+
+    // Clicking twice while the message waits for the next step is idempotent.
+    ask(
+        &mut engine,
+        json!({"type":"steer_queued_prompt","queueId":selected}),
+    );
+    fs::write(root.join("queue-release"), "").unwrap();
+    let settled = until_settled(&mut engine);
+    assert!(!settled.contains("stopReason\":\"error"), "{settled}");
+    let history = ask(&mut engine, json!({"type":"get_messages"}));
+    let user: Vec<_> = history["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .collect();
+    assert_eq!(user.len(), 3);
+    assert_eq!(user[1]["content"][0]["text"], "Same words");
+    assert_eq!(user[1]["content"][1]["type"], "image");
+    assert_eq!(user[1]["content"][1]["data"], "aW1hZ2U=");
+    assert_eq!(
+        user[2]["content"],
+        json!([{"type":"text","text":"Same words"}])
+    );
+
+    let request = engine
+        .send(json!({"type":"steer_queued_prompt","queueId":selected}))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(event) = engine.next_event(Duration::from_millis(100)).unwrap() {
+            if event["type"] == "response" && event["id"] == request.as_str() {
+                assert_eq!(event["success"], false);
+                assert!(event["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("already left the queue"));
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "missing late promotion response");
+    }
+    engine.shutdown();
+}
+
 #[test]
 fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     let root = unique_temp_dir("hibiscus-desktop");
@@ -188,7 +435,12 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     fs::write(
         home.join("config.json"),
         json!({"model":"test/model","providers":[
-            {"id":"test","baseUrl":base,"api":"responses","apiKeyEnv":"HIBISCUS_TEST_DESKTOP_KEY","models":[{"id":"model","contextWindow":128000,"maxTokens":4096}]},
+            {"id":"test","baseUrl":base,"api":"responses","apiKeyEnv":"HIBISCUS_TEST_DESKTOP_KEY","models":[
+                {"id":"model","contextWindow":1000000,"maxTokens":4096,"images":true},
+                {"id":"mid","contextWindow":400000,"maxTokens":4096},
+                {"id":"small","contextWindow":256000,"maxTokens":4096},
+                {"id":"tiny","contextWindow":8192,"maxTokens":512}
+            ]},
             {"id":"rooxcode","baseUrl":base,"api":"chat_completions","authentication":"rooxcode"}
         ]})
         .to_string(),
@@ -382,6 +634,83 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     assert_eq!(state["sessionKind"], "canvas");
     assert_ne!(state["sessionFile"], canvas.to_str().unwrap());
     kinds.shutdown();
+
+    // The parent owns the conversation while the selected checkout owns its instructions and files.
+    fs::write(a.join("AGENTS.md"), "OPEN_FOLDER_RULE").unwrap();
+    let project = a.join("project");
+    let sibling = a.join("sibling");
+    for (repo, rule) in [
+        (&project, "ACTIVE_PROJECT_RULE"),
+        (&sibling, "SIBLING_PROJECT_RULE"),
+    ] {
+        fs::create_dir(repo).unwrap();
+        assert!(std::process::Command::new("git")
+            .current_dir(repo)
+            .args(["init", "--quiet"])
+            .status()
+            .unwrap()
+            .success());
+        fs::write(repo.join("AGENTS.md"), rule).unwrap();
+        fs::write(repo.join("file.txt"), "original").unwrap();
+    }
+    let mut scoped = Engine::start(Start::New, &a).unwrap();
+    let events = prompt(&mut scoped, "MIXED_CHECKOUT_CALL");
+    assert!(events.contains("No calls ran"), "{events}");
+    assert!(!a.join("premature.txt").exists());
+    assert!(!project.join("premature.txt").exists());
+    assert_eq!(
+        ask(&mut scoped, json!({"type":"get_state"}))["workingDirectory"],
+        json!(a)
+    );
+    let events = prompt(&mut scoped, "TARGET_CHECKOUT project. Make the edit there.");
+    assert!(events.contains("working_repository_changed"), "{events}");
+    assert!(events.contains("checkpoint"), "{events}");
+    assert_eq!(
+        fs::read_to_string(project.join("file.txt")).unwrap(),
+        "scoped edit"
+    );
+    assert_eq!(
+        fs::read_to_string(sibling.join("file.txt")).unwrap(),
+        "original"
+    );
+    assert!(!a.join("file.txt").exists());
+    let state = ask(&mut scoped, json!({"type":"get_state"}));
+    assert_eq!(state["workingDirectory"], json!(project));
+    let saved = PathBuf::from(state["sessionFile"].as_str().unwrap());
+    let header: Value =
+        serde_json::from_str(fs::read_to_string(&saved).unwrap().lines().next().unwrap()).unwrap();
+    assert_eq!(header["cwd"], json!(a));
+    assert_eq!(header["workingRepository"], json!(project));
+    scoped.shutdown();
+
+    let mut scoped = Engine::start(Start::Selected(saved), &a).unwrap();
+    let events = prompt(&mut scoped, "READ_PROJECT_INSTRUCTIONS read the AGENTS.md");
+    assert!(events.contains("ACTIVE_PROJECT_RULE"), "{events}");
+    assert!(!events.contains("SIBLING_PROJECT_RULE"), "{events}");
+    let events = prompt(&mut scoped, "TRY_SWITCH_CHECKOUT");
+    assert!(events.contains("Ask the user to switch"), "{events}");
+    assert_eq!(
+        ask(&mut scoped, json!({"type":"get_state"}))["workingDirectory"],
+        json!(project)
+    );
+    assert_eq!(
+        ask(
+            &mut scoped,
+            json!({"type":"set_working_repository","path":sibling})
+        )["workingDirectory"],
+        json!(sibling)
+    );
+    fs::rename(&sibling, a.join("moved-sibling")).unwrap();
+    let events = prompt(&mut scoped, "Read files after the checkout moved.");
+    assert!(
+        events.contains("working repository moved or is unavailable"),
+        "{events}"
+    );
+    assert!(!events.contains("DESKTOP_REPLY"), "{events}");
+    scoped.shutdown();
+
+    verify_context_switching(&root, &home);
+    verify_queued_message_promotion(&root);
 
     // API keys: validated, stored privately, unknown providers refused.
     assert!(desktop::save_api_key("test", "").is_err());

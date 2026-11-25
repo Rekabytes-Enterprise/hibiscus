@@ -33,7 +33,7 @@ pub(crate) enum Surface {
     Canvas,
 }
 
-pub fn definitions(cwd: Option<&Path>, surface: Surface) -> Vec<Value> {
+pub fn definitions(cwd: Option<&Path>, surface: Surface, verification_pending: bool) -> Vec<Value> {
     let shell = match cwd.and_then(crate::wsl::distro_for) {
         Some(distro) => crate::wsl::description(&distro),
         None => crate::sys::shell_description().to_owned(),
@@ -47,7 +47,7 @@ pub fn definitions(cwd: Option<&Path>, surface: Surface) -> Vec<Value> {
         json!({"name":"edit","description":"Replace exactly one occurrence of oldText with newText. Fails if missing or ambiguous.","parameters":{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}}),
         batch_edit::definition(),
         bash(shell),
-        json!({"name":"goal","description":"Track an explicit checklist. Set the list before work, complete a one-based step only when finished, or clear it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["set","complete","clear"]},"steps":{"type":"array","items":{"type":"string"}},"id":{"type":"integer"}},"required":["action"],"additionalProperties":false}}),
+        super::goal::definition(verification_pending),
     ];
     if agent_browser().is_some() {
         definitions.push(json!({"name":"browser","description":"Drive a headless Chrome that the user watches in the app's browser pane. Pass one agent-browser command as args:\n- [\"open\",\"http://localhost:5173\"]\n- [\"snapshot\",\"-i\"] lists interactive elements with refs like @e1. Snapshot again after the page changes.\n- [\"click\",\"@e1\"], [\"fill\",\"@e2\",\"text\"], [\"press\",\"Enter\"], [\"get\",\"text\",\"body\"]\n- [\"console\"] shows log lines and [\"errors\"] uncaught exceptions.\n- [\"network\",\"requests\",\"--status\",\"400-599\"] lists failed requests (also --filter, --method, --type). [\"network\",\"request\",\"<id>\"] shows one request's body.\n- Logs keep the latest 100 entries. Add --clear to empty them before reproducing a problem.\n- [\"screenshot\"] returns the page as an image you can see. Add \"#app\" for one element or \"--full\" for the whole page. Use it to check layout, overlap, colours and blank areas.\nStart the project's server with dev_server, not bash.","parameters":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":64},"timeout":{"type":"integer","minimum":1,"maximum":600}},"required":["args"],"additionalProperties":false}}));
@@ -58,6 +58,13 @@ pub fn definitions(cwd: Option<&Path>, surface: Surface) -> Vec<Value> {
     }
     if crate::video::ffmpeg().is_some() {
         definitions.push(json!({"name":"analyze_video","description":"See a video: returns `frames` stills spread across it (default 12, at most 24) as images with their times, plus its length. Use it before describing, analysing or remaking a video file.","parameters":{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":4096},"frames":{"type":"integer","minimum":1,"maximum":24}},"required":["path"],"additionalProperties":false}}));
+    }
+    if surface == Surface::Chat {
+        definitions.push(json!({
+            "name":"working_repository",
+            "description":"When the user clearly names a child checkout, bind it by exact path before reads or edits. Call alone. Use its AGENTS.md for that repo; don't search siblings. Ask if unclear.",
+            "parameters":{"type":"object","properties":{"path":{"type":"string","maxLength":4096}},"required":["path"],"additionalProperties":false}
+        }));
     }
     if surface != Surface::Terminal {
         definitions.push(json!({"name":"ask_user","description":"Ask the user when you need an answer before you can go on. Give each question 2 to 5 short suggested `options`. The user can also type an answer. Then end your turn. The answers arrive as the user's next message.","parameters":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":500},"options":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"string","minLength":1,"maxLength":200}}},"required":["question","options"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}}));
@@ -303,13 +310,6 @@ fn browser_command(bin: &Path, args: &[String], cwd: &Path) -> Command {
     command
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Goal {
-    action: String,
-    steps: Option<Vec<String>>,
-    id: Option<usize>,
-}
 pub(super) fn path(cwd: &Path, path: &str) -> Result<PathBuf> {
     if path.is_empty() {
         return Err("Empty file path".into());
@@ -414,7 +414,10 @@ pub fn validate(name: &str, args: &Value, surface: Surface) -> Result<()> {
             }
         }
         "goal" => {
-            let _: Goal = serde_json::from_value(args.clone())?;
+            super::goal::validate(args)?;
+        }
+        "working_repository" if surface == Surface::Chat => {
+            super::agent::working_repository_path(args)?;
         }
         "job" => {
             let a: Job = serde_json::from_value(args.clone())?;
@@ -534,7 +537,6 @@ pub async fn execute(
     name: &str,
     args: &Value,
     context: &mut crate::checkpoints::Context<'_>,
-    steps: &mut Vec<Value>,
     cancel: &mut watch::Receiver<bool>,
     output_limit: Option<usize>,
     surface: Surface,
@@ -643,12 +645,10 @@ pub async fn execute(
             let a: Edit = serde_json::from_value(args.clone())?;
             let target = path(cwd, &a.path)?;
             let old = read_file(&target)?;
-            if old.matches(&a.old_text).count() != 1 {
-                return Err(
-                    "Edit requires exactly one occurrence of oldText; file unchanged".into(),
-                );
+            let (next, normalized) = super::edit_match::replace(&old, &a.old_text, &a.new_text)?;
+            if next == old {
+                return Err("Edit would leave the file unchanged. Use different replacement text if a change is needed.".into());
             }
-            let next = old.replacen(&a.old_text, &a.new_text, 1);
             if next.len() > 16 * 1024 * 1024 {
                 return Err("Edited file would exceed 16 MiB; file unchanged".into());
             }
@@ -656,7 +656,12 @@ pub async fn execute(
                 crate::checkpoints::write(context, &target, next.as_bytes(), Some(old.as_bytes()))?;
             let (diff, added, removed) = edit_diff(&old, &next);
             Ok(result(
-                format!("Edited {}{}", a.path, checkpoint_notice(&checkpoint)),
+                format!(
+                    "Edited {}{}{}",
+                    a.path,
+                    checkpoint_notice(&checkpoint),
+                    if normalized { "\nNote: matched a unique block using whitespace normalization." } else { "" }
+                ),
                 json!({"diff":diff,"addedLines":added,"removedLines":removed,"checkpoint":checkpoint}),
             ))
         }
@@ -710,11 +715,18 @@ pub async fn execute(
             }
             // A script's exit code is its last command's: an earlier step can crash
             // unseen, so a crash in the output is called out.
-            let text = match hidden_failure(&text) {
+            let crash = hidden_failure(&text);
+            let mut details = json!({"exitCode":output.status.code()});
+            if crash.is_some() {
+                details["reportedCrash"] = json!(true);
+            } else if super::local_http_check::is_probe(&a.command) {
+                details["localHttpCheck"] = json!(true);
+            }
+            let text = match crash {
                 Some(line) => format!("{text}\n\nWarning: the exit code is 0, but the output shows a crash ({line}). The exit code only reflects the last command, so an earlier step failed: check what it changed before going on, and join dependent steps with && so a failure stops them."),
                 None => text,
             };
-            Ok(result(text, json!({"exitCode":output.status.code()})))
+            Ok(result(text, details))
         }
         "browser" => {
             let a: Browser = serde_json::from_value(args.clone())?;
@@ -866,7 +878,7 @@ pub async fn execute(
                     "Stopped the dev server.".into()
                 }
             };
-            Ok(result(text, json!({})))
+            Ok(result(text, json!({"serverChanged": matches!(a.action.as_str(), "start" | "stop")})))
         }
 
         "analyze_video" => {
@@ -936,46 +948,6 @@ pub async fn execute(
             "Opened the script on the canvas as a Text to speech card joined to the Video card. The user reviews and edits it there before any audio is made.".into(),
             json!({}),
         )),
-        "goal" => {
-            let a: Goal = serde_json::from_value(args.clone())?;
-            match a.action.as_str() {
-                "set" => {
-                    let labels = a.steps.ok_or("set needs steps")?;
-                    let mut seen = std::collections::HashSet::new();
-                    if labels.is_empty()
-                        || labels.len() > 50
-                        || labels
-                            .iter()
-                            .any(|s| s.trim().is_empty() || s.len() > 200 || !seen.insert(s))
-                    {
-                        return Err(
-                            "Set needs 1–50 distinct named steps, each at most 200 bytes".into(),
-                        );
-                    }
-                    *steps = labels
-                        .into_iter()
-                        .map(|label| json!({"label":label,"done":false}))
-                        .collect();
-                }
-                "complete" => {
-                    let index =
-                        a.id.and_then(|n| n.checked_sub(1))
-                            .filter(|i| *i < steps.len())
-                            .ok_or("Invalid step number")?;
-                    if steps[index]["done"] == true {
-                        return Err("Step already complete".into());
-                    }
-                    steps[index]["done"] = json!(true);
-                }
-                "clear" => steps.clear(),
-                _ => return Err("Unknown goal action".into()),
-            }
-            let completed = steps.iter().filter(|s| s["done"] == true).count();
-            Ok(result(
-                format!("Goal: {completed}/{} steps completed", steps.len()),
-                json!({"hibiscusGoal":{"steps":steps,"completed":completed,"total":steps.len()}}),
-            ))
-        }
         _ => unreachable!("validated tool"),
     }
 }
@@ -1283,7 +1255,7 @@ mod tests {
         assert!(!ok(json!({"script":"  "})));
         assert!(!ok(json!({"video":"No script"})));
         assert!(!ok(json!({"script":"Hi","voice":"x"})));
-        assert!(super::definitions(None, super::Surface::Canvas)
+        assert!(super::definitions(None, super::Surface::Canvas, false)
             .iter()
             .any(|d| d["name"] == "text_to_speech"));
     }

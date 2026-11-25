@@ -8,8 +8,11 @@ pub(crate) mod catalog;
 pub(crate) mod chatgpt;
 pub(crate) mod config;
 mod context;
+mod edit_match;
 pub(crate) mod elevenlabs_auth;
 mod event;
+mod goal;
+mod local_http_check;
 pub(crate) mod logout;
 pub(crate) mod oauth;
 mod paging;
@@ -21,7 +24,9 @@ mod rooxcode;
 mod search;
 pub(crate) mod session;
 mod session_search;
+mod stall;
 mod thinking;
+mod tool_call;
 pub(crate) mod tool_output;
 mod tools;
 
@@ -30,7 +35,7 @@ pub(crate) use session::SessionStart;
 
 /// Quota derives from the actual native catalog, including extension authoring tools.
 pub(crate) fn native_tool_count() -> usize {
-    tools::definitions(None, tools::Surface::Canvas).len()
+    tools::definitions(None, tools::Surface::Canvas, false).len()
 }
 
 pub(crate) use tools::edit_diff;

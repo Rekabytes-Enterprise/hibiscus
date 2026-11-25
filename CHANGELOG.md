@@ -4,6 +4,21 @@ All notable changes to Hibiscus are documented here.
 
 ## [Unreleased]
 
+## [0.4.14] - 2026-11-25
+
+### Added
+
+- Track explicitly phased implementation with a scope and require recorded unit, live entry point, and failure-path checks before marking a phase complete.
+
+### Fixed
+
+- Stop stalled turns that keep repeating the same successful localhost HTTP probe, while allowing rechecks after a workspace or server change.
+- Preserve visible conversation context on model switches by estimating retained input against the selected model's context window until provider usage arrives.
+- Recover from common tool argument aliases and JSON formatting mistakes after a provider finishes the response. Hibiscus reports repairs and returns unrepairable calls to the model as tool errors.
+- Let a single-file edit recover a unique whitespace-only match with consistent indentation. Ambiguous matches leave the file untouched.
+- Warn, skip, and stop repeated tool calls that keep failing or returning unchanged file reads. Productive turns can continue across any number of tool rounds.
+- Desktop chats opened in a parent folder can keep working in a selected Git checkout across turns and resumes. Hibiscus uses the checkout for project instructions, tools, checkpoints, and the Changes panel.
+
 ## [0.4.13] - 2026-11-24
 
 ### Removed

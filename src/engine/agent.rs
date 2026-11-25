@@ -35,6 +35,9 @@ enum Command {
         streaming_behavior: Option<String>,
     },
     GetState,
+    SetWorkingRepository {
+        path: Option<std::path::PathBuf>,
+    },
     #[serde(rename = "extension_command")]
     RunExtension {
         name: String,
@@ -78,12 +81,30 @@ enum Command {
         name: String,
     },
     ClearQueue,
+    SteerQueuedPrompt {
+        #[serde(rename = "queueId")]
+        queue_id: String,
+    },
     Abort,
     Compact {
         #[serde(default, rename = "customInstructions")]
         custom_instructions: Option<String>,
     },
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepositoryPath {
+    path: String,
+}
+
+pub(super) fn working_repository_path(args: &Value) -> Result<std::path::PathBuf> {
+    let RepositoryPath { path } = serde_json::from_value(args.clone())?;
+    if path.trim().is_empty() || path.len() > 4096 || path.chars().any(char::is_control) {
+        return Err("Provide the exact checkout path.".into());
+    }
+    Ok(path.into())
+}
+
 #[derive(Clone, serde::Serialize, Deserialize)]
 struct Image {
     #[serde(rename = "mimeType")]
@@ -91,6 +112,7 @@ struct Image {
     data: String,
 }
 struct Prompt {
+    queue_id: String,
     text: String,
     images: Vec<Image>,
     steer: bool,
@@ -107,8 +129,73 @@ fn failure(id: &str, message: &str) -> Value {
     json!({"type":"response","id":id,"success":false,"error":super::safe_message(message)})
 }
 fn queued(q: &Queue) -> Value {
-    json!({"type":"queue_update","steering":q.items.iter().filter(|p|p.steer).map(|p|&p.text).collect::<Vec<_>>(),"followUp":q.items.iter().filter(|p|!p.steer).map(|p|&p.text).collect::<Vec<_>>()})
+    json!({
+        "type":"queue_update",
+        "steering":q.items.iter().filter(|p|p.steer).map(|p|&p.text).collect::<Vec<_>>(),
+        "followUp":q.items.iter().filter(|p|!p.steer).map(|p|&p.text).collect::<Vec<_>>(),
+        "prompts":q.items.iter().map(|prompt| json!({
+            "id":prompt.queue_id,"text":prompt.text,"images":prompt.images.len(),"steer":prompt.steer
+        })).collect::<Vec<_>>()
+    })
 }
+
+impl Queue {
+    fn push(&mut self, prompt: Prompt) {
+        if prompt.steer {
+            let position = self
+                .items
+                .iter()
+                .position(|item| !item.steer)
+                .unwrap_or(self.items.len());
+            self.items.insert(position, prompt);
+        } else {
+            self.items.push_back(prompt);
+        }
+    }
+
+    fn steer(&mut self, id: &str) -> Result<()> {
+        let position = self
+            .items
+            .iter()
+            .position(|prompt| prompt.queue_id == id)
+            .ok_or("That message has already left the queue.")?;
+        if !self.items[position].steer {
+            let mut prompt = self.items.remove(position).unwrap();
+            prompt.steer = true;
+            self.push(prompt);
+        }
+        Ok(())
+    }
+}
+
+fn select_working_repository(session: &mut Session, args: &Value) -> Result<Value> {
+    let requested = working_repository_path(args)?;
+    if let Some(repo) = &session.working_repository {
+        if session.cwd.join(&requested).canonicalize().as_ref().ok() != Some(repo) {
+            return Err("A working repository is already selected. Ask the user to switch it in the composer.".into());
+        }
+        return Ok(tools::result(
+            format!("Already working in {}.", repo.display()),
+            json!({}),
+        ));
+    }
+    if session.messages.iter().rev().take_while(|message| !matches!(message, Message::User { .. })).any(|message| matches!(
+        message,
+        Message::ToolResult { tool_name, .. }
+            if matches!(tool_name.as_str(), "edit" | "write" | "batch_edit" | "checkpoint_restore")
+    )) {
+        return Err("Work has already changed files in this turn. Ask the user to choose the working repository in the composer.".into());
+    }
+    session.set_working_repository(Some(&requested))?;
+    Ok(tools::result(
+        format!(
+            "Working repository is {}. Relative paths now start there.",
+            session.working_dir().display()
+        ),
+        json!({"workingDirectory":session.working_dir(),"repositoryChanged":true}),
+    ))
+}
+
 pub fn serve(
     socket: crate::client::socket::Socket,
     config: Config,
@@ -217,6 +304,19 @@ async fn serve_async(
                 emit(&out, response(&id, json!({}))).await?;
                 emit(&out, update).await?;
             }
+            Command::SteerQueuedPrompt { queue_id } => {
+                let update = {
+                    let mut q = queue.lock().unwrap();
+                    q.steer(&queue_id).map(|()| queued(&q))
+                };
+                match update {
+                    Ok(update) => {
+                        emit(&out, update).await?;
+                        emit(&out, response(&id, json!({}))).await?;
+                    }
+                    Err(error) => emit(&out, failure(&id, &error.to_string())).await?,
+                }
+            }
             Command::Prompt {
                 message,
                 images,
@@ -284,21 +384,12 @@ async fn serve_async(
                     }
                     let update = {
                         let mut q = queue.lock().unwrap();
-                        let prompt = Prompt {
+                        q.push(Prompt {
+                            queue_id: format!("{:x}", config::unique()),
                             text: message,
                             images,
                             steer: streaming_behavior.as_deref() == Some("steer"),
-                        };
-                        if prompt.steer {
-                            let pos = q
-                                .items
-                                .iter()
-                                .position(|p| !p.steer)
-                                .unwrap_or(q.items.len());
-                            q.items.insert(pos, prompt);
-                        } else {
-                            q.items.push_back(prompt);
-                        }
+                        });
                         queued(&q)
                     };
                     emit(&out, response(&id, json!({}))).await?;
@@ -322,6 +413,7 @@ async fn serve_async(
                 active = Some(tokio::spawn(async move {
                     let result = run_turns(
                         Prompt {
+                            queue_id: String::new(),
                             text: message,
                             images,
                             steer: false,
@@ -353,11 +445,7 @@ async fn serve_async(
                         queue.running = false;
                         queue.items.clear();
                     }
-                    let _ = emit(
-                        &o,
-                        json!({"type":"queue_update","steering":[],"followUp":[]}),
-                    )
-                    .await;
+                    let _ = emit(&o, queued(&Queue::default())).await;
                     let _ = emit(&o, Event::Settled.wire()).await;
                 }));
             }
@@ -371,15 +459,20 @@ async fn serve_async(
                 let snapshot = session.lock().unwrap().clone();
                 let (o, q, mut stop) = (out.clone(), queue.clone(), cancel.subscribe());
                 active = Some(tokio::spawn(async move {
-                    let result = registry
-                        .execute_command(
-                            &id,
-                            &name,
-                            &input,
-                            (&snapshot.cwd, &snapshot.id),
-                            &mut stop,
-                        )
-                        .await;
+                    let result = match snapshot.check_working_dir() {
+                        Err(error) => Err(error),
+                        Ok(()) => {
+                            registry
+                                .execute_command(
+                                    &id,
+                                    &name,
+                                    &input,
+                                    (snapshot.working_dir(), &snapshot.id),
+                                    &mut stop,
+                                )
+                                .await
+                        }
+                    };
                     q.lock().unwrap().running = false;
                     let result = match result {
                         Ok(data) => {
@@ -531,6 +624,12 @@ async fn serve_async(
                                 serde_json::to_value(extensions.snapshot().commands())?;
                             Ok(state)
                         }
+                        Command::SetWorkingRepository { path }
+                            if desktop && !busy && s.kind == SessionKind::Chat =>
+                        {
+                            s.set_working_repository(path.as_deref())?;
+                            Ok(json!({"workingDirectory":s.working_dir()}))
+                        }
                         Command::GetMessages { limit: None, .. } => {
                             Ok(json!({"messages":s.messages}))
                         }
@@ -548,7 +647,28 @@ async fn serve_async(
                         Command::GetToolOutput { index } => {
                             Ok(json!({"output":super::tool_output::get(&s.messages, index)}))
                         }
-                        Command::GetSessionStats => Ok(s.stats(&config)),
+                        Command::GetSessionStats => {
+                            let estimate = if s.context.is_some() {
+                                None
+                            } else if let Ok((provider, model)) = s.selected(&config) {
+                                if s.messages.is_empty() {
+                                    Some(0)
+                                } else {
+                                    let (_, instructions, definitions) =
+                                        request_setup(&s, desktop, &extensions.snapshot());
+                                    Some(super::context::estimated_request_tokens(
+                                        provider,
+                                        model,
+                                        &s,
+                                        &instructions,
+                                        &definitions,
+                                    )?)
+                                }
+                            } else {
+                                None
+                            };
+                            Ok(s.stats(&config, estimate))
+                        }
                         Command::GetAvailableThinkingLevels => {
                             let (p, m) = s.selected(&config)?;
                             Ok(json!({"levels":super::thinking::Policy::for_model(p, m).levels()}))
@@ -570,7 +690,11 @@ async fn serve_async(
                             } else {
                                 s.thinking = "off".into();
                             }
-                            s.context = None;
+                            // Provider-reported tokens belong to the previous model.
+                            // Stats estimate the still-retained history until the new model reports usage.
+                            if s.model != previous.0 {
+                                s.context = None;
+                            }
                             if let Err(error) = s.save() {
                                 (s.model, s.thinking, s.context) = previous;
                                 thinking_reset = false;
@@ -628,6 +752,34 @@ async fn serve_async(
     writing.abort();
     Ok(())
 }
+fn request_setup(
+    snapshot: &Session,
+    desktop: bool,
+    registry: &crate::extensions::Registry,
+) -> (tools::Surface, String, Vec<Value>) {
+    let surface = match (desktop, snapshot.kind) {
+        (false, _) => tools::Surface::Terminal,
+        (true, SessionKind::Chat) => tools::Surface::Chat,
+        (true, SessionKind::Canvas) => tools::Surface::Canvas,
+    };
+    let working_dir = snapshot.working_dir();
+    let parent = snapshot
+        .working_repository
+        .as_ref()
+        .map(|_| snapshot.cwd.as_path());
+    let mut instructions = super::policy::compose(working_dir, surface, parent);
+    let pending_phase = super::goal::pending(&snapshot.steps);
+    if let Some((scope, phase)) = pending_phase {
+        instructions.push_str(&format!(
+            "\nActive implementation plan (task data; follow the latest user scope): {}\n",
+            json!({"scope":scope,"openPhase":phase})
+        ));
+    }
+    let mut definitions = tools::definitions(Some(working_dir), surface, pending_phase.is_some());
+    definitions.extend(registry.definitions().cloned());
+    (surface, instructions, definitions)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_turns(
     mut prompt: Prompt,
@@ -644,7 +796,7 @@ async fn run_turns(
         maybe_compact(&session, &config, out, cancel).await?;
         {
             let mut s = session.lock().unwrap();
-            let text = crate::wsl::agent_text(&s.cwd, prompt.text);
+            let text = crate::wsl::agent_text(s.working_dir(), prompt.text);
             let mut blocks = vec![Block::Text { text }];
             blocks.extend(prompt.images.into_iter().map(|i| Block::Image {
                 mime_type: i.mime_type,
@@ -658,6 +810,7 @@ async fn run_turns(
         let user = session.lock().unwrap().messages.last().cloned().unwrap();
         emit(out, Event::MessageStarted(&user).wire()).await?;
         let mut awaiting_answer = false;
+        let mut stall = super::stall::Monitor::default();
         'steps: loop {
             if *cancel.borrow() {
                 break;
@@ -671,8 +824,9 @@ async fn run_turns(
                 }
             };
             if let Some(steering) = steering {
+                stall.reset();
                 checkpoint_request = crate::checkpoints::Request::new(&session.lock().unwrap().id);
-                let cwd = session.lock().unwrap().cwd.clone();
+                let cwd = session.lock().unwrap().working_dir().to_owned();
                 let mut content = vec![Block::Text {
                     text: crate::wsl::agent_text(&cwd, steering.text),
                 }];
@@ -692,15 +846,9 @@ async fn run_turns(
             }
             let snapshot = session.lock().unwrap().clone();
             let (p, m) = snapshot.selected(&config)?;
-            let surface = match (desktop, snapshot.kind) {
-                (false, _) => tools::Surface::Terminal,
-                (true, SessionKind::Chat) => tools::Surface::Chat,
-                (true, SessionKind::Canvas) => tools::Surface::Canvas,
-            };
-            let instructions = super::policy::compose(&snapshot.cwd, surface);
+            snapshot.check_working_dir()?;
             let registry = extensions.snapshot();
-            let mut definitions = tools::definitions(Some(&snapshot.cwd), surface);
-            definitions.extend(registry.definitions().cloned());
+            let (surface, instructions, definitions) = request_setup(&snapshot, desktop, &registry);
             let rooxcode = p.authentication == config::Authentication::Rooxcode;
             let exceeds = if rooxcode {
                 super::context::pressure(p, m, &snapshot, &instructions, Some(&definitions))?
@@ -726,7 +874,7 @@ async fn run_turns(
             }
             let mut retry = false;
             let mut snapshot = snapshot;
-            let reply = loop {
+            let mut reply = loop {
                 let call = provider::request(
                     p,
                     m,
@@ -772,7 +920,26 @@ async fn run_turns(
             } else {
                 vec![]
             };
-            emit(out, Event::MessageFinished(&reply.message).wire()).await?;
+            let mut phase_notice = None;
+            if calls.is_empty() {
+                let s = session.lock().unwrap();
+                if let (Some((_, phase)), Message::Assistant { content, .. }) =
+                    (super::goal::pending(&s.steps), &mut reply.message)
+                {
+                    let notice = format!(
+                        "\n\nImplementation phase still open: {phase}. Verification is incomplete."
+                    );
+                    content.push(Block::Text {
+                        text: notice.clone(),
+                    });
+                    phase_notice = Some(notice);
+                }
+            }
+            let mut finished = Event::MessageFinished(&reply.message).wire();
+            if let Some(notice) = phase_notice {
+                finished["phaseNotice"] = json!(notice);
+            }
+            emit(out, finished).await?;
             {
                 let mut s = session.lock().unwrap();
                 s.messages.push(reply.message);
@@ -785,6 +952,12 @@ async fn run_turns(
             }
             let mut output_budget = super::context::tool_output_budget(p, m);
             let total_calls = calls.len();
+            let mut halted = None;
+            let mixed_repository_call = surface == tools::Surface::Chat
+                && total_calls > 1
+                && calls
+                    .iter()
+                    .any(|(_, name, _)| name == "working_repository");
             for (index, (id, name, args)) in calls.into_iter().enumerate() {
                 let output_limit = output_budget.map(|remaining| remaining / (total_calls - index));
                 emit(
@@ -798,10 +971,32 @@ async fn run_turns(
                 )
                 .await?;
                 let mut steps = session.lock().unwrap().steps.clone();
-                let cwd = snapshot.cwd.clone();
+                let cwd = snapshot.working_dir().to_owned();
                 let started = std::time::Instant::now();
+                let diagnostic = reply.tool_diagnostics.remove(&id).unwrap_or_default();
+                let signature =
+                    super::stall::signature(&name, &args, diagnostic.malformed.as_ref());
+                let decision = if *cancel.borrow() || halted.is_some() || mixed_repository_call {
+                    super::stall::Decision::Run
+                } else {
+                    stall.before(signature)
+                };
                 let result = if *cancel.borrow() {
                     Err("Tool cancelled before execution".into())
+                } else if mixed_repository_call {
+                    Err("No calls ran. Call working_repository on its own so the next request can load that repository's instructions.".into())
+                } else if halted.is_some() {
+                    Err("Tool did not run because the turn stalled.".into())
+                } else if decision == super::stall::Decision::Suppress {
+                    Err("Skipped a repeated tool call with no progress. Use a different approach or change the relevant state before retrying.".into())
+                } else if decision == super::stall::Decision::Stop {
+                    halted = Some(format!("Hibiscus stopped this turn because {name} kept repeating without progress."));
+                    Err("Repeated tool call did not run.".into())
+                } else if let Some(error) = diagnostic.error {
+                    Err(error.into())
+                } else if name == "working_repository" && surface == tools::Surface::Chat {
+                    let mut s = session.lock().unwrap();
+                    select_working_repository(&mut s, &args)
                 } else if registry.has_tool(&name) {
                     registry
                         .execute_tool(&id, &name, &args, (&cwd, &snapshot.id), cancel)
@@ -810,6 +1005,8 @@ async fn run_turns(
                     extensions
                         .execute(tool, &args, (&cwd, &snapshot.id), cancel)
                         .await
+                } else if name == "goal" {
+                    super::goal::execute(&args, &mut steps, &session.lock().unwrap().messages)
                 } else {
                     tools::execute(
                         &name,
@@ -819,7 +1016,6 @@ async fn run_turns(
                             request: &mut checkpoint_request,
                             call_id: &id,
                         },
-                        &mut steps,
                         cancel,
                         output_limit,
                         surface,
@@ -837,12 +1033,50 @@ async fn run_turns(
                                 None => json!({}),
                             },
                         };
-                        (
-                            true,
-                            json!({"content":[{"type":"text","text":e.to_string()}],"details":details}),
-                        )
+                        let mut message = e.to_string();
+                        if message == "Unknown tool" {
+                            let names = definitions
+                                .iter()
+                                .filter_map(|tool| tool["name"].as_str())
+                                .take(48)
+                                .collect::<Vec<_>>();
+                            message = format!(
+                                "Unknown tool. Use an advertised tool: {}.",
+                                names.join(", ")
+                            );
+                        }
+                        (true, tools::result(message, details))
                     }
                 };
+                let warned = decision == super::stall::Decision::Run
+                    && halted.is_none()
+                    && !mixed_repository_call
+                    && !*cancel.borrow()
+                    && stall.observe(signature, &name, is_error, &result);
+                if warned || !diagnostic.notes.is_empty() {
+                    let text = result["content"][0]["text"].as_str().unwrap_or("");
+                    let mut with_notes = text.to_owned();
+                    if !diagnostic.notes.is_empty() {
+                        with_notes.push_str(&format!(
+                            "\nTool argument repair: {}.",
+                            diagnostic.notes.join(", ")
+                        ));
+                    }
+                    if warned {
+                        with_notes.push_str("\nThis call produced the same outcome again. Try a different approach before repeating it.");
+                    }
+                    result["content"][0]["text"] = json!(with_notes);
+                }
+                if !is_error
+                    && name == "bash"
+                    && super::goal::pending(&steps).is_some()
+                    && result["details"]["exitCode"].as_i64() == Some(0)
+                    && result["details"]["reportedCrash"] != true
+                {
+                    let text = result["content"][0]["text"].as_str().unwrap_or("");
+                    result["content"][0]["text"] =
+                        json!(format!("{text}\nVerification call ID: {id}"));
+                }
                 if let Some(text) = result["content"][0]["text"].as_str() {
                     let capped = match output_limit {
                         Some(limit) if text.len() > limit => {
@@ -902,6 +1136,13 @@ async fn run_turns(
                     .wire(),
                 )
                 .await?;
+                if name == "working_repository"
+                    && !is_error
+                    && result["details"]["repositoryChanged"] == true
+                {
+                    checkpoint_request = crate::checkpoints::Request::new(&snapshot.id);
+                    emit(out, json!({"type":"working_repository_changed","workingDirectory":result["details"]["workingDirectory"]})).await?;
+                }
                 awaiting_answer |= !is_error && name == "ask_user";
                 if !is_error && matches!(name.as_str(), "write" | "edit") {
                     if let Ok(scope) = serde_json::from_value(
@@ -910,6 +1151,9 @@ async fn run_turns(
                         emit(out, Event::MemorySaved(scope).wire()).await?;
                     }
                 }
+            }
+            if let Some(error) = halted {
+                return Err(error.into());
             }
             if awaiting_answer {
                 break 'steps;

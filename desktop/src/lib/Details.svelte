@@ -6,7 +6,7 @@
   import Icon from "./Icon.svelte";
   import { name, where } from "./paths";
 
-  type Stats = { tokens?: { input?: number; output?: number; cacheRead?: number }; contextUsage?: { tokens?: number | null; contextWindow?: number | null; percent?: number | null } };
+  type Stats = { tokens?: { input?: number; output?: number; cacheRead?: number }; contextUsage?: { tokens?: number | null; contextWindow?: number | null; estimated?: boolean; percent?: number | null } };
   let {
     folder,
     home,
@@ -20,6 +20,7 @@
     onopenfile,
     onshowdiff,
     onshowtasks,
+    onsendnow,
     onabort,
   }: {
     folder: string;
@@ -35,11 +36,22 @@
     onshowdiff: () => void;
     /** Opens the Background tasks pane: every command and background job. */
     onshowtasks: () => void;
+    onsendnow: (id: string) => Promise<void>;
     onabort: () => void;
   } = $props();
 
   let contextOpen = $state(false);
   let showAll = $state(false);
+  let sending = $state<string | null>(null);
+
+  async function sendNow(id: string) {
+    sending = id;
+    try {
+      await onsendnow(id);
+    } finally {
+      sending = null;
+    }
+  }
 
   const files = $derived(outputs(chat));
   const tools = $derived(chat.items.filter((i) => i.kind === "tool"));
@@ -47,6 +59,7 @@
   const added = $derived(diff.reduce((n, f) => n + f.added, 0));
   const removed = $derived(diff.reduce((n, f) => n + f.removed, 0));
   const percent = $derived(stats?.contextUsage?.percent ?? null);
+  const estimated = $derived(stats?.contextUsage?.estimated === true);
 
   // Elapsed time for running tools; events carry no start time, so note when each was first seen.
   const seen = new Map<string, number>();
@@ -78,19 +91,36 @@
     <button class="item head" onclick={() => (contextOpen = !contextOpen)} aria-expanded={contextOpen}>
       <span class="grow">Context <Icon name={contextOpen ? "chevron-down" : "chevron-right"} size={12} /></span>
       {#if percent != null}
-        <span class="muted small">{Math.round(percent)}%</span>
+        <span class="muted small" title={estimated ? "Estimated from the retained context" : undefined}>{estimated ? "≈" : ""}{Math.round(percent)}%</span>
         <span class="meter"><span style:width={`${Math.min(100, percent)}%`}></span></span>
       {/if}
     </button>
     {#if contextOpen}
       <dl class="small">
-        <dt>In context</dt><dd>{count(stats?.contextUsage?.tokens)} / {count(stats?.contextUsage?.contextWindow)}</dd>
+        <dt>In context</dt><dd title={estimated ? "Estimated from the retained context" : undefined}>{estimated ? "≈" : ""}{count(stats?.contextUsage?.tokens)} / {count(stats?.contextUsage?.contextWindow)}</dd>
         <dt>Input tokens</dt><dd>{count(stats?.tokens?.input)}</dd>
         <dt>Output tokens</dt><dd>{count(stats?.tokens?.output)}</dd>
         <dt>Cached reads</dt><dd>{count(stats?.tokens?.cacheRead)}</dd>
       </dl>
     {/if}
   </section>
+
+  {#if chat.running && chat.queuedPrompts.length}
+    <section>
+      <h3>Queued messages</h3>
+      {#each chat.queuedPrompts as prompt (prompt.id)}
+        <div class="queued">
+          <div class="ellipsis" title={prompt.text}>{prompt.text || (prompt.images === 1 ? "Image attachment" : `${prompt.images} image attachments`)}</div>
+          <div class="queued-actions">
+            <span class="muted small">{prompt.steer ? "Sending next" : "Waiting"}</span>
+            {#if !prompt.steer}
+              <button class="small" type="button" disabled={sending !== null} onclick={() => sendNow(prompt.id)} title="Send at the next step in the current run">Send now</button>
+            {/if}
+          </div>
+        </div>
+      {/each}
+    </section>
+  {/if}
 
   {#if extensions.length}
     <section>
@@ -142,3 +172,10 @@
     </section>
   {/if}
 </aside>
+
+
+<style>
+  .queued { padding: 6px 0; min-width: 0; }
+  .queued-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+  .queued-actions button { flex-shrink: 0; }
+</style>

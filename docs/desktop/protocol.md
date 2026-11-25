@@ -42,11 +42,13 @@ Every command gets exactly one `response` with the same `id`:
 | `prompt` | `message`, optional `images: [{mimeType, data}]` (base64), optional `streamingBehavior` | While a run is active, needs `streamingBehavior: "steer"` or `"followUp"`; otherwise fails with "Agent is busy". At most 16 queued. |
 | `abort` | | Cancels the active run. The run still ends with `agent_settled`. |
 | `clear_queue` | | Drops queued prompts. |
-| `get_state` | | Session state, including `sessionKind` (`chat` or `canvas`) and extension commands. |
+| `steer_queued_prompt` | `queueId` | Move a queued prompt into the active turn at the next step. An already delivered or removed prompt is rejected. |
+| `get_state` | | Session state, including `sessionKind` (`chat` or `canvas`) workingDirectory, and extension commands. |
+| `set_working_repository` | `path` (checkout root, or null to use the open folder) | Desktop Chat when idle. A checkout must be inside the open folder. The chat stays listed under its open folder. |
 | `get_messages` | optional `limit`, `before` | Without `limit`, `data.messages` is the whole conversation. With `limit` (at most 1000), it's one page for the desktop chat: up to `limit` messages ending before position `before` (default: the end), moved back so it never starts with a tool result. `data.start` is the page's first position, `data.total` the conversation's length, and `data.edited` the files written or edited without error, newest first. In a page, tool output over 2 KB is cut (`trimmed: true`), edit diffs over 16 KB are left out, tool images are left out (`omittedImages: n`), and prompt images keep only their type. |
 | `get_tool_result` | `toolCallId` | `data`: that tool result in full, as stored. For rows a page trimmed. |
 | `get_tool_outputs` / `get_tool_output` | `index` (1-based, optional) | Stored tool output. |
-| `get_session_stats` | | Token usage and context. |
+| `get_session_stats` | | Lifetime usage and retained context. The window is for the selected model. `contextUsage.estimated` indicates a local estimate when provider usage is unavailable. |
 | `get_available_models` | | `data.models: [{provider, id, contextWindow, reasoning, images}]` for providers the user can use; `data.catalogError` if a catalog refresh failed. Refreshes catalogs when idle. |
 | `get_available_thinking_levels` | | Levels for the current model. |
 | `set_model` | `provider`, `modelId` | Not during a run. |
@@ -64,12 +66,12 @@ Commands marked "not during a run" fail with "Command unavailable while a run is
 | `type` | Fields | Meaning |
 |---|---|---|
 | `agent_start` | | A run started. |
-| `message_start` / `message_end` | `message` | A message began / finished. A failed run ends with `message_end` whose message has `stopReason: "error"` and `errorMessage`. |
+| `message_start` / `message_end` | `message` | A message began / finished. A failed run ends with `message_end` whose message has `stopReason: "error"` and `errorMessage`. A final reply with an open phase may carry `phaseNotice` for terminal renderers that already printed the streamed text. |
 | `message_update` | `assistantMessageEvent: {type: "text_delta", delta}` | Streamed reply text. |
 | `thinking_reset` | | Discard any shown thinking text. |
 | `tool_execution_start` | `toolCallId`, `toolName`, `args` | A tool started. |
 | `tool_execution_end` | `toolCallId`, `toolName`, `isError`, `result`, `durationMs` | A tool finished. |
-| `queue_update` | `steering: [text]`, `followUp: [text]` | Queued prompts changed. |
+| `queue_update` | `steering: [text]`, `followUp: [text]`, `prompts: [{id, text, images, steer}]` | Queued prompts changed. |
 | `queue_rejected` | `message`, `images`, `steer`, `error` | A queued prompt was held back after a failure or while waiting for an answer. Show it so the user can review and resend it. |
 | `auto_retry_start` / `auto_retry_end` | `success` | The engine is retrying a provider error. |
 | `compaction_start` / `compaction_end` | `result` or `errorMessage` | Context compaction. |
@@ -77,6 +79,7 @@ Commands marked "not during a run" fail with "Command unavailable while a run is
 | `provider_error` | `error` | A provider or catalog problem, safe to show as is. |
 | `extension_error` | `error` | An extension failed to load. |
 | `extension_command_output` | `text` | Output of `extension_command`. |
+| `working_repository_changed` | `workingDirectory` | The agent bound a child checkout to the Desktop chat. |
 | `agent_settled` | | The run and its queued prompts are finished. Commands marked "not during a run" work again. |
 
 The native engine does not send `extension_ui_request` dialogs today; the TUI bridge still handles them for compatibility. A desktop app does not need them until the engine sends them.
