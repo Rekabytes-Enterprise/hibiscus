@@ -1,4 +1,4 @@
-//! Per-turn observations of repeated failures and unchanged native reads.
+//! Per-turn observations of repeated failures and unchanged native reads or local HTTP checks.
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -92,8 +92,10 @@ impl Monitor {
             }
         } else if details["reportedCrash"] == true {
             "reported-crash".into()
-        } else if matches!(name, "read" | "grep" | "glob") {
-            format!("read:{text}")
+        } else if matches!(name, "read" | "grep" | "glob")
+            || (name == "bash" && details["localHttpCheck"] == true)
+        {
+            format!("unchanged:{text}")
         } else {
             if matches!(
                 name,
@@ -103,7 +105,8 @@ impl Monitor {
                     | "checkpoint_restore"
                     | "bash"
                     | "working_repository"
-            ) {
+            ) || (name == "dev_server" && details["serverChanged"] == true)
+            {
                 self.reset();
             }
             return false;

@@ -438,12 +438,22 @@ impl Session {
             false
         }
     }
-    pub fn stats(&self, config: &Config) -> Value {
+    pub fn stats(&self, config: &Config, estimated: Option<u64>) -> Value {
         let window = self
             .selected(config)
             .ok()
             .and_then(|(_, m)| m.context_window);
-        json!({"tokens":self.usage,"cost":null,"contextUsage":{"tokens":self.context,"contextWindow":window,"percent":self.context.zip(window).map(|(n,w)|100.0*n as f64/w as f64)}})
+        let tokens = self.context.or(estimated);
+        json!({
+            "tokens":self.usage,
+            "cost":null,
+            "contextUsage":{
+                "tokens":tokens,
+                "contextWindow":window,
+                "estimated":self.context.is_none() && estimated.is_some_and(|count| count > 0),
+                "percent":tokens.zip(window).map(|(n,w)|100.0*n as f64/w as f64)
+            }
+        })
     }
 }
 

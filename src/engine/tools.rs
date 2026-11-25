@@ -719,6 +719,8 @@ pub async fn execute(
             let mut details = json!({"exitCode":output.status.code()});
             if crash.is_some() {
                 details["reportedCrash"] = json!(true);
+            } else if super::local_http_check::is_probe(&a.command) {
+                details["localHttpCheck"] = json!(true);
             }
             let text = match crash {
                 Some(line) => format!("{text}\n\nWarning: the exit code is 0, but the output shows a crash ({line}). The exit code only reflects the last command, so an earlier step failed: check what it changed before going on, and join dependent steps with && so a failure stops them."),
@@ -876,7 +878,7 @@ pub async fn execute(
                     "Stopped the dev server.".into()
                 }
             };
-            Ok(result(text, json!({})))
+            Ok(result(text, json!({"serverChanged": matches!(a.action.as_str(), "start" | "stop")})))
         }
 
         "analyze_video" => {

@@ -45,6 +45,18 @@ pub(super) fn pressure(
     let (bytes, count) = measure(p, m, s, instructions, tools)?;
     Ok(bytes >= budget(m) || count as u64 >= m.max_messages.unwrap_or(256).saturating_mul(4) / 5)
 }
+/// The token estimate for the actual retained payload sent to the selected model.
+pub(super) fn estimated_request_tokens(
+    p: &Provider,
+    m: &Model,
+    s: &Session,
+    instructions: &str,
+    tools: &[Value],
+) -> Result<u64> {
+    let (_, mut body) = provider::request_body(p, m, s, instructions, &s.thinking, Some(tools));
+    estimate_tokens(&mut body)
+}
+
 /// Text-byte estimates supplement the last reported token count. Reserve
 /// headroom for the answer and count new messages the receipt did not include.
 pub(super) fn known_context_pressure(
@@ -57,8 +69,7 @@ pub(super) fn known_context_pressure(
     let Some(window) = m.context_window else {
         return Ok(false);
     };
-    let (_, mut body) = provider::request_body(p, m, s, instructions, &s.thinking, Some(tools));
-    let estimated = estimate_tokens(&mut body)?;
+    let estimated = estimated_request_tokens(p, m, s, instructions, tools)?;
     let added = s
         .messages
         .iter()

@@ -604,7 +604,28 @@ async fn serve_async(
                         Command::GetToolOutput { index } => {
                             Ok(json!({"output":super::tool_output::get(&s.messages, index)}))
                         }
-                        Command::GetSessionStats => Ok(s.stats(&config)),
+                        Command::GetSessionStats => {
+                            let estimate = if s.context.is_some() {
+                                None
+                            } else if let Ok((provider, model)) = s.selected(&config) {
+                                if s.messages.is_empty() {
+                                    Some(0)
+                                } else {
+                                    let (_, instructions, definitions) =
+                                        request_setup(&s, desktop, &extensions.snapshot());
+                                    Some(super::context::estimated_request_tokens(
+                                        provider,
+                                        model,
+                                        &s,
+                                        &instructions,
+                                        &definitions,
+                                    )?)
+                                }
+                            } else {
+                                None
+                            };
+                            Ok(s.stats(&config, estimate))
+                        }
                         Command::GetAvailableThinkingLevels => {
                             let (p, m) = s.selected(&config)?;
                             Ok(json!({"levels":super::thinking::Policy::for_model(p, m).levels()}))
@@ -626,7 +647,11 @@ async fn serve_async(
                             } else {
                                 s.thinking = "off".into();
                             }
-                            s.context = None;
+                            // Provider-reported tokens belong to the previous model.
+                            // Stats estimate the still-retained history until the new model reports usage.
+                            if s.model != previous.0 {
+                                s.context = None;
+                            }
                             if let Err(error) = s.save() {
                                 (s.model, s.thinking, s.context) = previous;
                                 thinking_reset = false;
@@ -684,6 +709,34 @@ async fn serve_async(
     writing.abort();
     Ok(())
 }
+fn request_setup(
+    snapshot: &Session,
+    desktop: bool,
+    registry: &crate::extensions::Registry,
+) -> (tools::Surface, String, Vec<Value>) {
+    let surface = match (desktop, snapshot.kind) {
+        (false, _) => tools::Surface::Terminal,
+        (true, SessionKind::Chat) => tools::Surface::Chat,
+        (true, SessionKind::Canvas) => tools::Surface::Canvas,
+    };
+    let working_dir = snapshot.working_dir();
+    let parent = snapshot
+        .working_repository
+        .as_ref()
+        .map(|_| snapshot.cwd.as_path());
+    let mut instructions = super::policy::compose(working_dir, surface, parent);
+    let pending_phase = super::goal::pending(&snapshot.steps);
+    if let Some((scope, phase)) = pending_phase {
+        instructions.push_str(&format!(
+            "\nActive implementation plan (task data; follow the latest user scope): {}\n",
+            json!({"scope":scope,"openPhase":phase})
+        ));
+    }
+    let mut definitions = tools::definitions(Some(working_dir), surface, pending_phase.is_some());
+    definitions.extend(registry.definitions().cloned());
+    (surface, instructions, definitions)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_turns(
     mut prompt: Prompt,
@@ -750,29 +803,9 @@ async fn run_turns(
             }
             let snapshot = session.lock().unwrap().clone();
             let (p, m) = snapshot.selected(&config)?;
-            let surface = match (desktop, snapshot.kind) {
-                (false, _) => tools::Surface::Terminal,
-                (true, SessionKind::Chat) => tools::Surface::Chat,
-                (true, SessionKind::Canvas) => tools::Surface::Canvas,
-            };
             snapshot.check_working_dir()?;
-            let working_dir = snapshot.working_dir();
-            let parent = snapshot
-                .working_repository
-                .as_ref()
-                .map(|_| snapshot.cwd.as_path());
-            let mut instructions = super::policy::compose(working_dir, surface, parent);
-            let pending_phase = super::goal::pending(&snapshot.steps);
-            if let Some((scope, phase)) = pending_phase {
-                instructions.push_str(&format!(
-                    "\nActive implementation plan (task data; follow the latest user scope): {}\n",
-                    json!({"scope":scope,"openPhase":phase})
-                ));
-            }
             let registry = extensions.snapshot();
-            let mut definitions =
-                tools::definitions(Some(working_dir), surface, pending_phase.is_some());
-            definitions.extend(registry.definitions().cloned());
+            let (surface, instructions, definitions) = request_setup(&snapshot, desktop, &registry);
             let rooxcode = p.authentication == config::Authentication::Rooxcode;
             let exceeds = if rooxcode {
                 super::context::pressure(p, m, &snapshot, &instructions, Some(&definitions))?

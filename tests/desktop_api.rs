@@ -180,12 +180,28 @@ fn serve(listener: TcpListener, stop: Arc<AtomicBool>, catalog: PathBuf) {
                 }
                 return;
             }
+            let summary = request["instructions"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("Summarize this conversation"));
+            let text = if summary {
+                r#"{"summary":"MODEL_SWITCH_SUMMARY"}"#
+            } else {
+                "DESKTOP_REPLY"
+            };
+            let latest = request["input"].as_array().and_then(|input| input.last());
+            let input_tokens = if latest
+                .is_some_and(|last| last.to_string().contains("MODEL_SWITCH_OLD_RECEIPT"))
+            {
+                500_000
+            } else {
+                20
+            };
             let done = sse(
-                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"DESKTOP_REPLY"}]}],"usage":{"input_tokens":20,"output_tokens":5}}}),
+                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}],"usage":{"input_tokens":input_tokens,"output_tokens":5}}}),
             );
             let reply = format!(
                 "{}{done}",
-                sse(json!({"type":"response.output_text.delta","delta":"DESKTOP_REPLY"}))
+                sse(json!({"type":"response.output_text.delta","delta":text}))
             );
             let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len());
         });
@@ -246,6 +262,62 @@ fn ask(engine: &mut Engine, command: Value) -> Value {
     }
 }
 
+fn verify_context_switching(root: &Path, home: &Path) {
+    let folder = root.join("model-switch");
+    fs::create_dir(&folder).unwrap();
+    let mut engine = Engine::start(Start::New, &folder).unwrap();
+    let _ = prompt(
+        &mut engine,
+        &format!(
+            "MODEL_SWITCH_OLD_RECEIPT {}",
+            "retained context ".repeat(2_100)
+        ),
+    );
+    let stats = |engine: &mut Engine| ask(engine, json!({"type":"get_session_stats"}));
+    let select = |engine: &mut Engine, model: &str| {
+        ask(
+            engine,
+            json!({"type":"set_model","provider":"test","modelId":model}),
+        );
+    };
+    let previous = stats(&mut engine);
+    assert_eq!(previous["contextUsage"]["tokens"], 500_005);
+    assert_eq!(previous["contextUsage"]["contextWindow"], 1_000_000);
+    assert_eq!(previous["contextUsage"]["estimated"], false);
+    for (model, window) in [("mid", 400_000), ("small", 256_000)] {
+        select(&mut engine, model);
+        let next = stats(&mut engine);
+        assert_eq!(next["tokens"], previous["tokens"]);
+        assert_eq!(next["contextUsage"]["contextWindow"], window);
+        assert_eq!(next["contextUsage"]["estimated"], true);
+        let estimate = next["contextUsage"]["tokens"].as_u64().unwrap();
+        assert!((8_192..256_000).contains(&estimate), "{next}");
+    }
+    let fit = prompt(&mut engine, "This turn still fits the 256K model.");
+    assert!(!fit.contains("compaction_start"), "{fit}");
+    assert_eq!(stats(&mut engine)["contextUsage"]["estimated"], false);
+    let archives = home.join("archives");
+    let before = fs::read_dir(&archives).map_or(0, |entries| entries.count());
+    select(&mut engine, "tiny");
+    let after_switch = stats(&mut engine);
+    assert_eq!(after_switch["contextUsage"]["contextWindow"], 8_192);
+    assert_eq!(after_switch["contextUsage"]["estimated"], true);
+    assert!(after_switch["contextUsage"]["percent"].as_f64().unwrap() > 100.0);
+    assert_eq!(
+        fs::read_dir(&archives).map_or(0, |entries| entries.count()),
+        before
+    );
+    let overflow = prompt(&mut engine, "Continue with the tiny model.");
+    assert!(overflow.contains("compaction_start"), "{overflow}");
+    assert!(overflow.contains("compaction_end"), "{overflow}");
+    assert!(overflow.contains("DESKTOP_REPLY"), "{overflow}");
+    assert!(ask(&mut engine, json!({"type":"get_messages"}))
+        .to_string()
+        .contains("MODEL_SWITCH_SUMMARY"));
+    assert_eq!(fs::read_dir(&archives).unwrap().count(), before + 1);
+    engine.shutdown();
+}
+
 #[test]
 fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     let root = unique_temp_dir("hibiscus-desktop");
@@ -259,7 +331,12 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     fs::write(
         home.join("config.json"),
         json!({"model":"test/model","providers":[
-            {"id":"test","baseUrl":base,"api":"responses","apiKeyEnv":"HIBISCUS_TEST_DESKTOP_KEY","models":[{"id":"model","contextWindow":128000,"maxTokens":4096}]},
+            {"id":"test","baseUrl":base,"api":"responses","apiKeyEnv":"HIBISCUS_TEST_DESKTOP_KEY","models":[
+                {"id":"model","contextWindow":1000000,"maxTokens":4096},
+                {"id":"mid","contextWindow":400000,"maxTokens":4096},
+                {"id":"small","contextWindow":256000,"maxTokens":4096},
+                {"id":"tiny","contextWindow":8192,"maxTokens":512}
+            ]},
             {"id":"rooxcode","baseUrl":base,"api":"chat_completions","authentication":"rooxcode"}
         ]})
         .to_string(),
@@ -527,6 +604,8 @@ fn desktop_api_runs_engines_per_workspace_saves_keys_and_aborts() {
     );
     assert!(!events.contains("DESKTOP_REPLY"), "{events}");
     scoped.shutdown();
+
+    verify_context_switching(&root, &home);
 
     // API keys: validated, stored privately, unknown providers refused.
     assert!(desktop::save_api_key("test", "").is_err());

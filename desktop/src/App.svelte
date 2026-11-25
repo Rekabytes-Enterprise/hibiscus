@@ -1251,7 +1251,7 @@
             {#snippet trigger()}<Icon name="folder" size={14} /><span>{name(workdir ?? "")}</span>{/snippet}
           </Menu>
           <span class="grow"></span>
-          {#if context != null}<span class="muted">{Math.round(context)}% context</span>{/if}
+          {#if context != null}<span class="muted">{stats?.contextUsage?.estimated ? "≈" : ""}{Math.round(context)}% context</span>{/if}
           <button class="plain picker" onclick={() => (dialog = "models")} disabled={chat.running}>
             <Icon name="cpu" size={14} /> {model ? model.id : "Choose a model"}
           </button>

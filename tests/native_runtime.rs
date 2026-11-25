@@ -1353,6 +1353,83 @@ fn failing_shell_is_suppressed_and_stops_without_rerunning() {
 }
 
 #[test]
+fn repeated_successful_loopback_probes_stop_and_a_file_edit_allows_rechecking() {
+    use std::sync::atomic::AtomicUsize;
+    for intervening_edit in [false, true] {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let finished = Arc::new(AtomicBool::new(false));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let worker = thread::spawn({
+            let (finished, hits) = (finished.clone(), hits.clone());
+            move || {
+                while !finished.load(Ordering::Relaxed) {
+                    let Ok((mut stream, _)) = server.accept() else {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = String::new();
+                    BufReader::new(&stream).read_line(&mut request).unwrap();
+                    assert!(
+                        request.starts_with("GET /ready ") || request.starts_with("GET /health ")
+                    );
+                    hits.fetch_add(1, Ordering::Relaxed);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                }
+            }
+        });
+        let args = json!({"command":format!(
+            r#"curl -q -fsS -o /dev/null -w 'ready: %{{http_code}}\n' http://{address}/ready && curl -q -fsS -o /dev/null -w 'health: %{{http_code}}\n' http://{address}/health"#
+        )})
+        .to_string();
+        let check = |id| responses_call(id, "bash", &args);
+        let mut replies = vec![check("first"), check("second")];
+        if intervening_edit {
+            replies.push(responses_call(
+                "edit",
+                "edit",
+                r#"{"path":"file.txt","oldText":"before","newText":"after"}"#,
+            ));
+            replies.extend([check("recheck"), response("PROBE_FINISHED")]);
+        } else {
+            replies.extend([check("skipped"), check("stopped")]);
+        }
+        let f = Fixture::new("responses", replies);
+        fs::write(f.root.join("file.txt"), "before").unwrap();
+        let output = f.run("", &["Check both development-server endpoints."]);
+        finished.store(true, Ordering::Relaxed);
+        worker.join().unwrap();
+        let requests = f.captured();
+        assert_eq!(requests.len(), if intervening_edit { 5 } else { 4 });
+        assert!(requests[2]["input"]
+            .to_string()
+            .contains("same outcome again"));
+        if intervening_edit {
+            good(&output);
+            assert_eq!(hits.load(Ordering::Relaxed), 6);
+            assert!(String::from_utf8_lossy(&output.stdout).contains("PROBE_FINISHED"));
+        } else {
+            assert!(!output.status.success());
+            assert_eq!(hits.load(Ordering::Relaxed), 4);
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("kept repeating without progress")
+            );
+            assert!(requests[3]["input"]
+                .to_string()
+                .contains("Skipped a repeated tool call"));
+        }
+    }
+}
+
+#[test]
 fn verified_file_edit_allows_a_previously_failing_shell_to_run_again() {
     let arguments = json!({"command":"test \"$(cat check.txt)\" = ready"}).to_string();
     let f = Fixture::new(

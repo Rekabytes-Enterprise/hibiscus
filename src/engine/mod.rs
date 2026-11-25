@@ -12,6 +12,7 @@ mod edit_match;
 pub(crate) mod elevenlabs_auth;
 mod event;
 mod goal;
+mod local_http_check;
 pub(crate) mod logout;
 pub(crate) mod oauth;
 mod paging;
