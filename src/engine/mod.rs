@@ -10,6 +10,7 @@ pub(crate) mod config;
 mod context;
 pub(crate) mod elevenlabs_auth;
 mod event;
+mod goal;
 pub(crate) mod logout;
 pub(crate) mod oauth;
 mod paging;
@@ -30,7 +31,7 @@ pub(crate) use session::SessionStart;
 
 /// Quota derives from the actual native catalog, including extension authoring tools.
 pub(crate) fn native_tool_count() -> usize {
-    tools::definitions(None, tools::Surface::Canvas).len()
+    tools::definitions(None, tools::Surface::Canvas, false).len()
 }
 
 pub(crate) use tools::edit_diff;

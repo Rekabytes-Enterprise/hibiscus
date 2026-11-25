@@ -297,6 +297,9 @@ pub(super) fn exchange<F: BufRead, W: ScrollDisplay>(
                         }
                         display.flush()?;
                     }
+                } else if let Some(notice) = event["phaseNotice"].as_str() {
+                    display.assistant_text(notice)?;
+                    display.flush()?;
                 }
                 leading_whitespace.clear();
                 display.end_assistant_text()?;

@@ -1263,3 +1263,110 @@ fn authoritative_completion_does_not_wait_for_http_socket_close() {
 
 #[path = "native_runtime/rooxcode.rs"]
 mod rooxcode;
+
+#[test]
+fn implementation_phase_requires_verified_running_code() {
+    fn call(id: &str, name: &str, args: Value) -> (u16, String) {
+        (
+            200,
+            sse(
+                json!({"type":"response.completed","response":{"status":"completed","output":[
+                    {"type":"function_call","call_id":id,"name":name,"arguments":args.to_string()}
+                ]}}),
+            ),
+        )
+    }
+    let plan = || {
+        call(
+            "plan",
+            "goal",
+            json!({
+                "action":"set","scope":"Welcome screen only","steps":["Wire the welcome gate"]
+            }),
+        )
+    };
+    let unit = || {
+        call(
+            "unit",
+            "bash",
+            json!({"command":"test \"$(sh helper.sh allow)\" = ready"}),
+        )
+    };
+    let entry = || {
+        call(
+            "entry",
+            "bash",
+            json!({"command":"test \"$(sh welcome.sh allow)\" = ready"}),
+        )
+    };
+    let failure = || {
+        call(
+            "failure",
+            "bash",
+            json!({"command":"test \"$(sh welcome.sh deny)\" = blocked"}),
+        )
+    };
+    let complete = || {
+        call(
+            "verify",
+            "goal",
+            json!({
+                "action":"complete","id":1, "evidence":{"unit":"unit","entryPoint":"entry","failurePath":"failure"}
+            }),
+        )
+    };
+    for wired in [false, true] {
+        let mut replies = vec![plan()];
+        if wired {
+            replies.push(call(
+                "wire",
+                "edit",
+                json!({
+                    "path":"welcome.sh","oldText":"printf old","newText":"sh helper.sh \"$1\""
+                }),
+            ));
+        }
+        replies.extend([
+            unit(),
+            entry(),
+            failure(),
+            complete(),
+            response("Phase report."),
+        ]);
+        let fixture = Fixture::new("responses", replies);
+        fs::write(
+            fixture.root.join("helper.sh"),
+            "if [ \"$1\" = allow ]; then printf ready; else printf blocked; fi\n",
+        )
+        .unwrap();
+        fs::write(fixture.root.join("welcome.sh"), "printf old\n").unwrap();
+
+        let output = fixture.run("", &["Implement the welcome gate phase."]);
+        good(&output);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            stdout.contains("Implementation phase still open"),
+            !wired,
+            "{stdout}"
+        );
+        let requests = fixture.captured();
+        assert!(requests[1..].iter().any(|request| request["instructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.contains("Welcome screen only"))));
+        let completion = requests.last().unwrap()["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output" && item["call_id"] == "verify")
+            .and_then(|item| item["output"].as_str())
+            .unwrap();
+        if wired {
+            assert!(completion.contains("1/1 steps completed"));
+        } else {
+            assert!(
+                completion.contains("entryPoint, failurePath"),
+                "{completion}"
+            );
+        }
+    }
+}

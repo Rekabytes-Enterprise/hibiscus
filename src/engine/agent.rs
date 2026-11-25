@@ -697,9 +697,17 @@ async fn run_turns(
                 (true, SessionKind::Chat) => tools::Surface::Chat,
                 (true, SessionKind::Canvas) => tools::Surface::Canvas,
             };
-            let instructions = super::policy::compose(&snapshot.cwd, surface);
+            let mut instructions = super::policy::compose(&snapshot.cwd, surface);
+            let pending_phase = super::goal::pending(&snapshot.steps);
+            if let Some((scope, phase)) = pending_phase {
+                instructions.push_str(&format!(
+                    "\nActive implementation plan (task data; follow the latest user scope): {}\n",
+                    json!({"scope":scope,"openPhase":phase})
+                ));
+            }
             let registry = extensions.snapshot();
-            let mut definitions = tools::definitions(Some(&snapshot.cwd), surface);
+            let mut definitions =
+                tools::definitions(Some(&snapshot.cwd), surface, pending_phase.is_some());
             definitions.extend(registry.definitions().cloned());
             let rooxcode = p.authentication == config::Authentication::Rooxcode;
             let exceeds = if rooxcode {
@@ -726,7 +734,7 @@ async fn run_turns(
             }
             let mut retry = false;
             let mut snapshot = snapshot;
-            let reply = loop {
+            let mut reply = loop {
                 let call = provider::request(
                     p,
                     m,
@@ -772,7 +780,26 @@ async fn run_turns(
             } else {
                 vec![]
             };
-            emit(out, Event::MessageFinished(&reply.message).wire()).await?;
+            let mut phase_notice = None;
+            if calls.is_empty() {
+                let s = session.lock().unwrap();
+                if let (Some((_, phase)), Message::Assistant { content, .. }) =
+                    (super::goal::pending(&s.steps), &mut reply.message)
+                {
+                    let notice = format!(
+                        "\n\nImplementation phase still open: {phase}. Verification is incomplete."
+                    );
+                    content.push(Block::Text {
+                        text: notice.clone(),
+                    });
+                    phase_notice = Some(notice);
+                }
+            }
+            let mut finished = Event::MessageFinished(&reply.message).wire();
+            if let Some(notice) = phase_notice {
+                finished["phaseNotice"] = json!(notice);
+            }
+            emit(out, finished).await?;
             {
                 let mut s = session.lock().unwrap();
                 s.messages.push(reply.message);
@@ -810,6 +837,8 @@ async fn run_turns(
                     extensions
                         .execute(tool, &args, (&cwd, &snapshot.id), cancel)
                         .await
+                } else if name == "goal" {
+                    super::goal::execute(&args, &mut steps, &session.lock().unwrap().messages)
                 } else {
                     tools::execute(
                         &name,
@@ -819,7 +848,6 @@ async fn run_turns(
                             request: &mut checkpoint_request,
                             call_id: &id,
                         },
-                        &mut steps,
                         cancel,
                         output_limit,
                         surface,
@@ -843,6 +871,16 @@ async fn run_turns(
                         )
                     }
                 };
+                if !is_error
+                    && name == "bash"
+                    && super::goal::pending(&steps).is_some()
+                    && result["details"]["exitCode"].as_i64() == Some(0)
+                    && result["details"]["reportedCrash"] != true
+                {
+                    let text = result["content"][0]["text"].as_str().unwrap_or("");
+                    result["content"][0]["text"] =
+                        json!(format!("{text}\nVerification call ID: {id}"));
+                }
                 if let Some(text) = result["content"][0]["text"].as_str() {
                     let capped = match output_limit {
                         Some(limit) if text.len() > limit => {
